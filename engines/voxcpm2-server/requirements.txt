@@ -1,0 +1,6 @@
+voxcpm
+fastapi
+uvicorn
+soundfile
+pydantic
+# also requires: ffmpeg on PATH (for /tts_form reference-audio transcoding)

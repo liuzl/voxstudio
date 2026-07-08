@@ -1,0 +1,14 @@
+[Unit]
+Description=VoxCPM2 TTS HTTP service (voxstudio engine)
+After=network-online.target
+
+[Service]
+# Adjust WorkingDirectory / ExecStart paths and VOXCPM2_* env to your host.
+WorkingDirectory=%h/voxstudio/engines/voxcpm2-server
+Environment=VOXCPM2_BASE=%h/tts-eval-voxcpm2
+ExecStart=%h/.local/bin/uvicorn server_voxcpm2:app --host 0.0.0.0 --port 8880
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

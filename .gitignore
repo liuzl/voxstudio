@@ -1,0 +1,22 @@
+# secrets & env
+.env
+.env.*
+!.env.example
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# runtime data / models / audio (never commit)
+data/
+voices/
+outputs/
+*.wav
+*.mp3
+*.gguf
+pretrained_models/
+
+# os / editor
+.DS_Store
