@@ -3,4 +3,5 @@ fastapi
 uvicorn
 soundfile
 pydantic
-# also requires: ffmpeg on PATH (for /tts_form reference-audio transcoding)
+python-multipart
+# also requires: ffmpeg on PATH (for reference-audio transcoding)

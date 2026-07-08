@@ -1,25 +1,34 @@
 """VoxCPM2 TTS HTTP 服务. 端点:
-  GET  /                     简单 Web UI(文本 + 参考音上传)
-  GET  /health
-  POST /tts                  JSON {text, voice, ref_path?, cfg_value?, timesteps?} -> audio/wav
-  POST /tts_form             multipart {text, voice, cfg_value, timesteps, ref_file?} -> audio/wav
-  POST /v1/audio/speech      OpenAI 兼容 {input, voice?, response_format?} -> audio/wav
+  GET    /                     简单 Web UI(文本 + 参考音上传)
+  GET    /health
+  POST   /tts                  JSON {text, voice, ref_path?, cfg_value?, timesteps?} -> audio/wav
+  POST   /tts_form             multipart {text, voice, cfg_value, timesteps, ref_file?} -> audio/wav
+  POST   /v1/audio/speech      OpenAI 兼容 {input, voice?, response_format?} -> audio/wav
+  POST   /v1/voices            具名音色注册 multipart {id, text, audio} -> 元数据(201)
+  GET    /v1/voices            列出全部已注册音色
+  GET    /v1/voices/{id}       查音色元数据
+  DELETE /v1/voices/{id}       删音色
+voice 取值: clone(默认音) / design(零样本,text 前加 (English 描述)) / <已注册 id>.
 单 GPU 模型, threading.Lock 串行化生成.
 """
-import io, os, threading, tempfile, subprocess
+import io, os, re, json, threading, tempfile, subprocess, shutil
+from datetime import datetime, timezone
 import soundfile as sf
-from fastapi import FastAPI, Response, Form, UploadFile, File
+from fastapi import FastAPI, Response, Form, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from voxcpm import VoxCPM
 
 # Runtime layout is configurable via env (no hard-coded absolute paths):
-#   VOXCPM2_BASE   base dir holding the model + default reference voice (default: ~/tts-eval-voxcpm2)
-#   VOXCPM2_MODEL  model dir              (default: $VOXCPM2_BASE/pretrained_models/VoxCPM2)
-#   VOXCPM2_REF    default reference wav  (default: $VOXCPM2_BASE/voice.wav)
+#   VOXCPM2_BASE    base dir holding the model + default reference voice (default: ~/tts-eval-voxcpm2)
+#   VOXCPM2_MODEL   model dir              (default: $VOXCPM2_BASE/pretrained_models/VoxCPM2)
+#   VOXCPM2_REF     default reference wav  (default: $VOXCPM2_BASE/voice.wav)
+#   VOXCPM2_VOICES  named-voice registry   (default: $VOXCPM2_BASE/voices)
 BASE = os.environ.get("VOXCPM2_BASE") or os.path.expanduser("~/tts-eval-voxcpm2")
 MODEL_PATH = os.environ.get("VOXCPM2_MODEL") or os.path.join(BASE, "pretrained_models/VoxCPM2")
 DEFAULT_REF = os.environ.get("VOXCPM2_REF") or os.path.join(BASE, "voice.wav")
+VOICES_DIR = os.environ.get("VOXCPM2_VOICES") or os.path.join(BASE, "voices")
+os.makedirs(VOICES_DIR, exist_ok=True)
 
 print("Loading VoxCPM2 ...", flush=True)
 model = VoxCPM.from_pretrained(MODEL_PATH, load_denoiser=False)
@@ -45,9 +54,81 @@ def _ref_from_upload(up: UploadFile):
         raise RuntimeError("ffmpeg 转码失败: " + r.stderr.decode()[-200:])
     return out
 
+# ---- named-voice registry (mirrors VoxCPM.cpp voxcpm-server /v1/voices) ----
+_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+def _vdir(vid):  return os.path.join(VOICES_DIR, vid)
+def _vref(vid):  return os.path.join(_vdir(vid), "ref.wav")
+def _vmeta(vid): return os.path.join(_vdir(vid), "meta.json")
+
+def _now(): return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+def _check_id(vid):
+    if not _ID_RE.match(vid or ""):
+        raise HTTPException(400, {"error": {"code": "invalid_voice_id",
+            "message": "id must match [A-Za-z0-9._-]{1,64}", "type": "invalid_request_error"}})
+
+def _read_meta(vid):
+    with open(_vmeta(vid), encoding="utf-8") as f:
+        return json.load(f)
+
+def resolve_voice(voice):
+    """voice -> reference wav path (or None for zero-shot 'design'); raises 404 for unknown id."""
+    if voice == "design":
+        return None
+    if voice == "clone":
+        return DEFAULT_REF
+    if os.path.exists(_vref(voice)):
+        return _vref(voice)
+    raise HTTPException(400, {"error": {"code": "voice_not_found",
+        "message": "Unknown voice id.", "type": "invalid_request_error"}})
+
 @app.get("/health")
 def health():
     return {"status": "ok", "sample_rate": SR}
+
+@app.post("/v1/voices", status_code=201)
+def create_voice(id: str = Form(...), text: str = Form(...), audio: UploadFile = File(...)):
+    _check_id(id)
+    ref16k = _ref_from_upload(audio)          # ffmpeg -> 16k mono temp wav
+    try:
+        os.makedirs(_vdir(id), exist_ok=True)
+        shutil.move(ref16k, _vref(id))
+        info = sf.info(_vref(id))
+        existed = os.path.exists(_vmeta(id))
+        created = _read_meta(id)["created_at"] if existed else _now()
+        meta = {"id": id, "prompt_text": text,
+                "prompt_audio_length": round(info.frames / info.samplerate, 3),
+                "sample_rate": info.samplerate, "created_at": created, "updated_at": _now()}
+        with open(_vmeta(id), "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False)
+        return meta
+    finally:
+        if os.path.exists(ref16k):
+            os.unlink(ref16k)
+
+@app.get("/v1/voices")
+def list_voices():
+    out = []
+    for vid in sorted(os.listdir(VOICES_DIR)):
+        if os.path.exists(_vmeta(vid)):
+            out.append(_read_meta(vid))
+    return {"voices": out}
+
+@app.get("/v1/voices/{vid}")
+def get_voice(vid: str):
+    if not os.path.exists(_vmeta(vid)):
+        raise HTTPException(404, {"error": {"code": "voice_not_found",
+            "message": "Unknown voice id.", "type": "invalid_request_error"}})
+    return _read_meta(vid)
+
+@app.delete("/v1/voices/{vid}")
+def delete_voice(vid: str):
+    if not os.path.isdir(_vdir(vid)):
+        raise HTTPException(404, {"error": {"code": "voice_not_found",
+            "message": "Unknown voice id.", "type": "invalid_request_error"}})
+    shutil.rmtree(_vdir(vid))
+    return {"id": vid, "deleted": True}
 
 class TTSReq(BaseModel):
     text: str
@@ -58,7 +139,8 @@ class TTSReq(BaseModel):
 
 @app.post("/tts")
 def tts(r: TTSReq):
-    ref = (r.ref_path or DEFAULT_REF) if r.voice == "clone" else None
+    # explicit ref_path wins; otherwise resolve clone/design/<registered id>
+    ref = r.ref_path if r.ref_path else resolve_voice(r.voice)
     return Response(_generate(r.text, ref, r.cfg_value, r.timesteps), media_type="audio/wav")
 
 @app.post("/tts_form")
@@ -67,11 +149,10 @@ def tts_form(text: str = Form(...), voice: str = Form("clone"),
              ref_file: UploadFile = File(None)):
     tmp = None
     try:
-        if voice == "clone":
-            ref = _ref_from_upload(ref_file) if (ref_file and ref_file.filename) else DEFAULT_REF
-            tmp = ref if ref != DEFAULT_REF else None
+        if voice == "clone" and ref_file and ref_file.filename:
+            ref = _ref_from_upload(ref_file); tmp = ref     # per-call upload overrides default
         else:
-            ref = None
+            ref = resolve_voice(voice)                       # clone/design/<registered id>
         return Response(_generate(text, ref, cfg_value, timesteps), media_type="audio/wav")
     finally:
         if tmp and os.path.exists(tmp):
@@ -85,7 +166,7 @@ class OAIReq(BaseModel):
 
 @app.post("/v1/audio/speech")
 def oai_speech(r: OAIReq):
-    ref = DEFAULT_REF if r.voice != "design" else None
+    ref = resolve_voice(r.voice)   # clone(默认音) / design(零样本) / <已注册 id>
     return Response(_generate(r.input, ref, 2.0, 10), media_type="audio/wav")
 
 @app.get("/", response_class=HTMLResponse)

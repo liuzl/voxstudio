@@ -11,8 +11,20 @@ FastAPI HTTP wrapper over **OpenBMB VoxCPM2** (48kHz high-fidelity Chinese TTS).
 | POST | `/tts` | JSON `{text, voice, ref_path?, cfg_value?, timesteps?}` |
 | POST | `/tts_form` | multipart, upload `ref_file` to clone from an arbitrary reference voice |
 | GET | `/` | minimal Web UI |
+| POST | `/v1/voices` | register a reusable voice — multipart `{id, text, audio}` → metadata (201) |
+| GET | `/v1/voices` | list registered voices |
+| GET | `/v1/voices/{id}` | voice metadata |
+| DELETE | `/v1/voices/{id}` | remove a voice |
 
-> **Named voices (`/v1/voices` CRUD)** — planned. Mirrors the [VoxCPM.cpp `voxcpm-server`](https://github.com/liuzl/VoxCPM.cpp) contract so the core can register a voice once and reference it by id, instead of managing reference-audio files itself.
+### Named voices
+
+`voice` accepts `clone` (default reference), `design` (zero-shot — prefix `input` with an `(English description)`), or **a registered voice id**. Register once with `POST /v1/voices` (uploads a reference sample, transcoded to 16k mono), then synthesize with `voice="<id>"` — the caller no longer manages reference-audio files. Mirrors the [VoxCPM.cpp `voxcpm-server`](https://github.com/liuzl/VoxCPM.cpp) contract so the two TTS backends are drop-in interchangeable. Registry dir is `VOXCPM2_VOICES` (default `$VOXCPM2_BASE/voices`), one `<id>/{ref.wav,meta.json}` per voice.
+
+```bash
+curl -F id=alice -F 'text=参考音的逐字稿' -F audio=@sample.wav http://<host>:8880/v1/voices
+curl http://<host>:8880/v1/audio/speech -H 'Content-Type: application/json' \
+     -d '{"input":"你好","voice":"alice","response_format":"wav"}' -o out.wav
+```
 
 ## Config (env, no hard-coded paths)
 
