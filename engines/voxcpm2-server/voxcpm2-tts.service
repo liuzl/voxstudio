@@ -3,10 +3,13 @@ Description=VoxCPM2 TTS HTTP service (voxstudio engine)
 After=network-online.target
 
 [Service]
-# Adjust WorkingDirectory / ExecStart paths and VOXCPM2_* env to your host.
+# Adjust WorkingDirectory and VOXCPM2_* env to your host.
 WorkingDirectory=%h/voxstudio/engines/voxcpm2-server
 Environment=VOXCPM2_BASE=%h/tts-eval-voxcpm2
-ExecStart=%h/.local/bin/uvicorn server_voxcpm2:app --host 0.0.0.0 --port 8880
+# Reuse an existing environment instead of the in-repo .venv (optional):
+Environment=UV_PROJECT_ENVIRONMENT=%h/tts-eval-voxcpm2/.venv
+# --no-sync: never mutate the environment at boot. Drop it to let uv sync on start.
+ExecStart=/usr/bin/env uv run --no-sync uvicorn server_voxcpm2:app --host 0.0.0.0 --port 8880
 Restart=on-failure
 RestartSec=5
 

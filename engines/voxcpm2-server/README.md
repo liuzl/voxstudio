@@ -36,10 +36,19 @@ curl http://<host>:8880/v1/audio/speech -H 'Content-Type: application/json' \
 
 ## Run
 
+Dependencies live in `pyproject.toml`; [uv](https://docs.astral.sh/uv/) manages the environment. `ffmpeg` must be on `PATH` (reference-audio transcoding) — install it with your system package manager.
+
 ```bash
-pip install -r requirements.txt          # voxcpm, fastapi, uvicorn, soundfile, pydantic (+ ffmpeg on PATH)
-uvicorn server_voxcpm2:app --host 0.0.0.0 --port 8880
+uv run uvicorn server_voxcpm2:app --host 0.0.0.0 --port 8880
 ```
+
+`uv run` creates `.venv/` and installs on first use, so there is no separate install step. To reuse an environment that already holds a multi-GB torch build, point uv at it and skip the sync:
+
+```bash
+UV_PROJECT_ENVIRONMENT=~/tts-eval-voxcpm2/.venv uv run --no-sync uvicorn server_voxcpm2:app --port 8880
+```
+
+Pin the resolution with `uv lock` if you want byte-identical installs across hosts; without a lockfile `uv` resolves fresh each sync.
 
 ## Deploy (systemd --user)
 

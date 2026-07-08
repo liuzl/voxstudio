@@ -1,0 +1,21 @@
+[project]
+name = "voxcpm2-server"
+version = "0.1.0"
+description = "OpenAI-compatible HTTP server for VoxCPM2 (PyTorch, 48kHz)"
+requires-python = ">=3.10"
+dependencies = [
+    "voxcpm>=2.0.3",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "soundfile>=0.12",
+    "pydantic>=2",
+    "python-multipart>=0.0.9",
+]
+
+# ffmpeg must be on PATH (reference-audio transcoding); it is not a Python package.
+# torch/torchaudio come in via voxcpm. On Linux the default PyPI wheels are CUDA
+# builds; for a specific CUDA/CPU variant add a [[tool.uv.index]] + [tool.uv.sources]
+# pointing at download.pytorch.org.
+
+[tool.uv]
+package = false

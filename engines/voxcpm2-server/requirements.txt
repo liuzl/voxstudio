@@ -1,7 +1,0 @@
-voxcpm
-fastapi
-uvicorn
-soundfile
-pydantic
-python-multipart
-# also requires: ffmpeg on PATH (for reference-audio transcoding)
