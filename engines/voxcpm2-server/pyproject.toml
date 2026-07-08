@@ -10,12 +10,15 @@ dependencies = [
     "soundfile>=0.12",
     "pydantic>=2",
     "python-multipart>=0.0.9",
+    # torch arrives via voxcpm, but pin it: it is the ABI-critical, multi-GB
+    # dependency, and this is the version the service is validated against.
+    # The default PyPI linux wheel is already a CUDA 13 build (nvidia-cudnn-cu13),
+    # which is what sz-ws runs -- no download.pytorch.org index needed.
+    "torch==2.12.0",
+    "torchaudio==2.11.0",
 ]
 
 # ffmpeg must be on PATH (reference-audio transcoding); it is not a Python package.
-# torch/torchaudio come in via voxcpm. On Linux the default PyPI wheels are CUDA
-# builds; for a specific CUDA/CPU variant add a [[tool.uv.index]] + [tool.uv.sources]
-# pointing at download.pytorch.org.
 
 [tool.uv]
 package = false
