@@ -2,7 +2,7 @@
 name = "voxcpm2-server"
 version = "0.1.0"
 description = "OpenAI-compatible HTTP server for VoxCPM2 (PyTorch, 48kHz)"
-requires-python = ">=3.10"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "voxcpm>=2.0.3",
     "fastapi>=0.115",
