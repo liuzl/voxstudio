@@ -22,3 +22,14 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+# This engine only ever runs on an x86_64 Linux CUDA host. Resolving for other
+# platforms too would drag the whole solution down to their lowest common
+# denominator (numba, for one, ships no recent x86_64 macOS wheel).
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+
+# uv resolves every package to its newest compatible release, and it would rather
+# walk librosa back to 0.6.2 than hold numpy down. Old numba releases declare no
+# numpy upper bound, so an unconstrained resolve pairs numba 0.53 with numpy 2.5 --
+# a combination that does not work. Cap numpy where numba still supports it.
+constraint-dependencies = ["numpy>=2.4,<2.5", "numba>=0.65.1"]
