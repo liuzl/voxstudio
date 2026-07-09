@@ -95,6 +95,11 @@ def _env_overrides(cfg: Config) -> Config:
         if patch:
             engines[name] = replace(engine, **patch)
 
+    for old, new in _RENAMED.items():
+        if f"VOXSTUDIO_CHUNK_{old.upper()}" in os.environ:
+            raise _stale_budget_key(f"VOXSTUDIO_CHUNK_{old.upper()}",
+                                    f"VOXSTUDIO_CHUNK_{new.upper()}")
+
     chunk_patch = {}
     for f, cast in (("max_seconds", float), ("first_max_seconds", float), ("growth", float),
                     ("join_pause_ms", int), ("trim_floor_db", float), ("edge_pad_ms", int),
@@ -110,19 +115,26 @@ def _env_overrides(cfg: Config) -> Config:
 _RENAMED = {"max_chars": "max_seconds", "first_max_chars": "first_max_seconds"}
 
 
-def _migrate_chunking(raw: dict) -> dict:
+def _stale_budget_key(old: str, new: str) -> SystemExit:
     """Refuse a character budget rather than silently reading it as seconds.
 
-    `max_chars: 160` and `max_seconds: 160` differ by a factor of five, and the second
-    one produces two minutes of audio in a single generation.
+    Both spellings of the budget have to refuse it. Dropping a stale *file* key would
+    fall back to a 30s default that is at least sane; dropping a stale *env* override
+    would do the same, but on the host where someone had deliberately tuned it away
+    from the default -- and say nothing.
     """
+    return SystemExit(
+        f"config: `{old}` was replaced by `{new}`. The budget is now estimated speech "
+        f"duration, not characters: ~160 Chinese characters or ~540 English ones fit "
+        f"in 30 seconds."
+    )
+
+
+def _migrate_chunking(raw: dict) -> dict:
+    """`max_chars: 160` read as `max_seconds: 160` is two minutes in one generation."""
     for old, new in _RENAMED.items():
         if old in raw:
-            raise SystemExit(
-                f"config: `chunking.{old}` was replaced by `chunking.{new}`. "
-                f"The budget is now estimated speech duration, not characters: "
-                f"~160 Chinese characters or ~540 English ones fit in 30 seconds."
-            )
+            raise _stale_budget_key(f"chunking.{old}", f"chunking.{new}")
     return raw
 
 

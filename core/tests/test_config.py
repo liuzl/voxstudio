@@ -57,5 +57,17 @@ def test_a_character_budget_is_refused_rather_than_read_as_seconds(tmp_path):
     # to prevent, and it would do it silently.
     import pytest
     stale = "chunking:\n  max_chars: 160\n"
-    with pytest.raises(SystemExit, match="max_seconds"):
+    with pytest.raises(SystemExit, match="chunking.max_seconds"):
         load_config(write(tmp_path, stale))
+
+
+def test_a_stale_env_budget_is_refused_too(tmp_path, monkeypatch):
+    # A host that had tuned VOXSTUDIO_CHUNK_MAX_CHARS away from the default would
+    # otherwise boot on the default and say nothing.
+    import pytest
+    for old, new in (("MAX_CHARS", "MAX_SECONDS"),
+                     ("FIRST_MAX_CHARS", "FIRST_MAX_SECONDS")):
+        monkeypatch.setenv(f"VOXSTUDIO_CHUNK_{old}", "160")
+        with pytest.raises(SystemExit, match=f"VOXSTUDIO_CHUNK_{new}"):
+            load_config(write(tmp_path))
+        monkeypatch.delenv(f"VOXSTUDIO_CHUNK_{old}")
