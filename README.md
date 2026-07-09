@@ -65,8 +65,10 @@ raw concatenation produces seams of wildly uneven length. See `docs/chunking.md`
 ## Status
 
 The engine backend, the core layer, and the CLI surface are all verified end-to-end
-against live engines. Web / MCP / desktop surfaces are not built yet, and neither is
-streaming, persona rewriting, or a duplex conversation loop.
+against live engines. Long-text synthesis streams: chunks are played and written as
+they finish, so `vox say` starts speaking on the first one. Web / MCP / desktop
+surfaces are not built yet, and neither is persona rewriting or a duplex
+conversation loop.
 
 ## Related
 
