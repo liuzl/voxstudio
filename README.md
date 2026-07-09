@@ -28,9 +28,31 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | Path | What |
 |---|---|
 | `engines/voxcpm2-server/` | Our TTS engine wrapper — FastAPI over OpenBMB VoxCPM2 |
-| `core/` | Core orchestration layer *(planned)* |
-| `surfaces/` | Thin clients — `cli/` first, then web / MCP *(planned)* |
+| `core/` | `voxcore` — engine clients, chunking, long-text synthesis, voice profiles |
+| `surfaces/cli/` | `voxcli` — the `vox` command line |
 | `docs/` | Product design docs |
+
+`core/` and `surfaces/cli/` form a uv workspace and share one light, cross-platform lock.
+`engines/` is excluded from it: the TTS engine pins a CUDA torch build and resolves for
+x86_64 Linux only, and a shared lock would have to satisfy that and a laptop at once.
+
+## Quick start
+
+```bash
+cp config.example.yaml voxstudio.yaml    # point it at your engines
+uv sync
+uv run vox health                        # probe all three engines
+
+uv run vox say -f article.txt --voice laok -o out.wav
+uv run vox transcribe recording.wav
+uv run vox chat "用三句话介绍一下你自己" --speak -o reply.wav
+uv run vox voices add alice --audio sample.wav --text "参考音的逐字稿"
+```
+
+Long text is chunked at ~160 Chinese characters (≈30s) and the pieces are joined by
+trimming each one's edge silence and inserting a single fixed pause. Both numbers are
+empirical: a single TTS generation drifts away from the reference voice as it runs, and
+raw concatenation produces seams of wildly uneven length. See `docs/chunking.md`.
 
 ## Model stack
 
@@ -42,7 +64,9 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 
 ## Status
 
-Early. The engine backend (ASR→LLM→TTS) is verified end-to-end; the core layer and surfaces are not built yet.
+The engine backend, the core layer, and the CLI surface are all verified end-to-end
+against live engines. Web / MCP / desktop surfaces are not built yet, and neither is
+streaming, persona rewriting, or a duplex conversation loop.
 
 ## Related
 
