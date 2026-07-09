@@ -36,19 +36,18 @@ curl http://<host>:8880/v1/audio/speech -H 'Content-Type: application/json' \
 
 ## Run
 
-Dependencies live in `pyproject.toml`; [uv](https://docs.astral.sh/uv/) manages the environment. `ffmpeg` must be on `PATH` (reference-audio transcoding) — install it with your system package manager.
+Dependencies live in `pyproject.toml` and are pinned in `uv.lock`; [uv](https://docs.astral.sh/uv/) manages the environment. `ffmpeg` must be on `PATH` (reference-audio transcoding) — install it with your system package manager.
 
 ```bash
-uv run uvicorn server_voxcpm2:app --host 0.0.0.0 --port 8880
+uv sync --frozen                                          # exact, hash-verified install
+uv run --no-sync uvicorn server_voxcpm2:app --host 0.0.0.0 --port 8880
 ```
 
-`uv run` creates `.venv/` and installs on first use, so there is no separate install step. To reuse an environment that already holds a multi-GB torch build, point uv at it and skip the sync:
+`--frozen` installs precisely what `uv.lock` records and never re-resolves, so every host gets the same environment. `--no-sync` on `uv run` keeps a service restart from touching a multi-GB install. To place the environment somewhere other than `./.venv`, set `UV_PROJECT_ENVIRONMENT`.
 
-```bash
-UV_PROJECT_ENVIRONMENT=~/tts-eval-voxcpm2/.venv uv run --no-sync uvicorn server_voxcpm2:app --port 8880
-```
+The lock resolves for **x86_64 Linux only** — this engine runs on CUDA hosts, and resolving for macOS too would drag the solution down to that platform's lowest common denominator. `torch`/`torchaudio` are pinned to the validated versions; the default PyPI linux wheel is already a CUDA 13 build, so no `download.pytorch.org` index is needed. `numpy` is capped below 2.5 because old `numba` releases declare no numpy upper bound and an unconstrained resolve pairs them disastrously.
 
-Pin the resolution with `uv lock` if you want byte-identical installs across hosts; without a lockfile `uv` resolves fresh each sync.
+Changing a dependency means editing `pyproject.toml`, running `uv lock`, and committing the new `uv.lock`.
 
 ## Deploy (systemd --user)
 
