@@ -163,11 +163,13 @@ class OAIReq(BaseModel):
     voice: str = "clone"
     response_format: str = "wav"
     model: str | None = None
+    cfg_value: float = 2.0
+    timesteps: int = 10
 
 @app.post("/v1/audio/speech")
 def oai_speech(r: OAIReq):
     ref = resolve_voice(r.voice)   # clone(默认音) / design(零样本) / <已注册 id>
-    return Response(_generate(r.input, ref, 2.0, 10), media_type="audio/wav")
+    return Response(_generate(r.input, ref, r.cfg_value, r.timesteps), media_type="audio/wav")
 
 @app.get("/", response_class=HTMLResponse)
 def index():

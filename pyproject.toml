@@ -1,0 +1,9 @@
+[tool.uv.workspace]
+members = ["core", "surfaces/cli"]
+# engines/ stay out of the workspace on purpose. voxcpm2-server pins a CUDA torch
+# build and resolves for x86_64 linux only; a shared lock would have to satisfy
+# that and a laptop at once, collapsing both to the lowest common denominator.
+exclude = ["engines/*"]
+
+[tool.uv.sources]
+voxcore = { workspace = true }

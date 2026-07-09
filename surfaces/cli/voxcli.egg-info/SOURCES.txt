@@ -1,0 +1,16 @@
+pyproject.toml
+voxcli/__init__.py
+voxcli/__main__.py
+voxcli/_io.py
+voxcli.egg-info/PKG-INFO
+voxcli.egg-info/SOURCES.txt
+voxcli.egg-info/dependency_links.txt
+voxcli.egg-info/entry_points.txt
+voxcli.egg-info/requires.txt
+voxcli.egg-info/top_level.txt
+voxcli/commands/__init__.py
+voxcli/commands/chat.py
+voxcli/commands/health.py
+voxcli/commands/say.py
+voxcli/commands/transcribe.py
+voxcli/commands/voices.py

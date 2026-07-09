@@ -1,0 +1,34 @@
+# Copy to voxstudio.yaml (gitignored) or ~/.config/voxstudio/config.yaml.
+# ${VAR} is expanded from the environment; an unset var resolves to empty.
+# Every key can also be overridden by env: VOXSTUDIO_<ENGINE>_<KEY>, VOXSTUDIO_CHUNK_<KEY>.
+
+engines:
+  tts:
+    base_url: http://127.0.0.1:8880
+    model: voxcpm2
+    api_key: ${VOXSTUDIO_TTS_API_KEY}
+    health_path: /health          # the C++ voxcpm-server serves /healthz instead
+
+  asr:
+    base_url: http://127.0.0.1:18086
+    model: nemotron-asr           # required for Mandarin; parakeet-tdt has no Chinese
+    api_key: ${VOXSTUDIO_ASR_API_KEY}
+
+  llm:
+    base_url: http://127.0.0.1:8080
+    model: gemma
+    api_key: ${VOXSTUDIO_LLM_API_KEY}
+    max_tokens: 4096              # keep this generous: a budget small enough to
+                                  # truncate the model's reasoning leaves content empty
+
+tts_defaults:
+  voice: clone                    # clone | design | <registered voice id>
+  cfg_value: 2.0
+  timesteps: 10
+  response_format: wav
+
+chunking:
+  max_chars: 160                  # ~30s of Mandarin; timbre drifts within a longer generation
+  sentence_enders: "。！？；!?;"
+  join_pause_ms: 290              # the model's own median inter-sentence pause
+  trim_silence_db: -45.0
