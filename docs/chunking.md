@@ -37,29 +37,72 @@ Send the chunks **serially**. The engine's peak VRAM grows with the length of a 
 generation and torch's caching allocator does not release it, so overlapping requests can
 walk a shared GPU into an out-of-memory 500.
 
-## Join with a trimmed edge and one fixed pause
+## Join with a trimmed edge, matched loudness, and one fixed pause
 
 Seams carry no click. Every chunk begins and ends in silence, so the waveform is already
 continuous across a join — measured sample discontinuity stays under 0.0008 of full scale.
-The entire artifact is **pause length**.
+Three things go wrong instead, and all three are audible.
 
-Each chunk arrives with its own edge silence: 100–300ms at the head, 40–320ms at the tail,
-and it varies chunk to chunk. Three ways to join five chunks of the same passage:
+**Pause length.** Each chunk arrives with its own edge silence, and raw concatenation sums
+two of them into every seam:
 
 | method | resulting seams | verdict |
 |---|---|---|
-| raw concatenation | 640 / 170 / 570 / 490 ms | sums two edges; wildly uneven, the narration's rhythm twitches |
+| raw concatenation | 640 / 170 / 570 / 490 ms | wildly uneven; the narration's rhythm twitches |
 | 40ms equal-power crossfade | 40 / 50 / 50 / 50 ms | sentences collide, no breath — crossfade is for music, not sentence boundaries |
-| **trim + fixed 290ms pause** | 290 / 290 / 310 / 290 ms | indistinguishable from a sentence break inside a chunk |
+| **trim + fixed pause** | 210 / 210 / 210 / 210 ms | matches a sentence break inside a chunk |
 
-Uneven is worse than uniformly long. A 640ms gap exceeds the model's own longest natural
-pause (470ms), and the 170ms one is too short — the listener hears the rhythm stumble
-rather than a consistent style.
+Uneven is worse than uniformly long. Measure the gap the way a listener perceives it —
+audio below 25dB under the *speech* level, not below the *peak* — and the model's own
+median inter-sentence pause is **210ms**. (An earlier revision used 290ms here. That number
+came from a peak-relative gate, and applying it to a perceptually-gated position made every
+seam about 80ms too long. Two different rulers.)
 
-290ms is the **median of the model's own inter-sentence pauses** (IQR 240–377ms), measured
-inside a single-pass generation. It depends on the reference voice and its speaking rate,
-so `chunking.join_pause_ms` is configurable. If you swap the reference voice, re-measure
-rather than inheriting this number.
+**Trailing decay.** A chunk often trails off into a quiet fade that sits well above a
+peak-relative gate. Gate against the speech level instead, or the audible gap runs far
+longer than the pause you inserted: one seam measured 580ms of perceived silence where
+290ms was intended.
+
+**Loudness.** Chunks are generated independently and their speech levels land up to 4dB
+apart. Across a silent seam that step reads as the narrator leaning toward the microphone.
+Level every chunk to the first one.
+
+### Do not trim to the first loud frame
+
+Unvoiced consonants — the aspiration in `ch`, `sh`, `t`, `k` — carry almost no energy and
+decide which syllable a listener hears. Cutting to the first frame that clears an energy
+gate shaves them off, and the chunk opens on a bare vowel that sounds slurred. Keep
+`edge_pad_ms` (default 40ms) of sub-gate audio on each side.
+
+That padding is part of the gap the listener hears, so the silence actually inserted is
+`join_pause_ms - 2 * edge_pad_ms`. `join_pause_ms` is what you tune; it is the perceived
+gap. It depends on the reference voice and speaking rate — re-measure when you swap voices
+rather than inheriting 210.
+
+## Streaming: ramp the chunks up
+
+Chunks are synthesized serially, so the first one can play while the rest are still being
+made. Two things decide whether that works.
+
+**The opening chunk sets the latency.** Nothing is heard until it exists. `first_max_chars`
+(default 24) caps it, buying a first-audio latency of ~1.7s instead of ~11s, at the cost of
+one extra seam.
+
+**Every chunk must play for longer than the next one takes to make.** Synthesis runs at
+roughly 0.33x realtime, so a chunk can afford to be about 3x its predecessor before the
+listener catches up to the generator. `growth` (default 2.0) leaves margin. A uniformly
+short opening chunk starts fast and then stalls — measured, chunk 1 gave 5s of audio while
+chunk 2 needed 10s to synthesize.
+
+Measured on a live engine with the ramp: first audio at 1.72s, and the buffer never ran dry.
+The margin is thinnest at the very first seam (+0.67s) and grows from there (+4s, +17s,
++30s…). If that first seam ever stalls — a busy GPU, or the engine's `retry_badcase` firing
+— raise `first_max_chars` or lower `growth`.
+
+**The player must not block the producer.** `ffplay` drains its stdin at playback speed and
+the pipe holds well under a second of audio. Writing to it from the synthesis loop makes
+generation wait for playback: measured end-to-end RTF went from 0.33 to 1.04, and the buffer
+was underrun at every seam. Pipe from a background thread (`sinks.PlayerSink` does).
 
 ## A note on `timesteps`
 

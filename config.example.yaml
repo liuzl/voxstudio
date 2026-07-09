@@ -29,6 +29,9 @@ tts_defaults:
 
 chunking:
   max_chars: 160                  # ~30s of Mandarin; timbre drifts within a longer generation
+  first_max_chars: 24             # short opening chunk: streamed audio starts sooner
+  growth: 2.0                     # then ramp up; playback must outlast the next synthesis
   sentence_enders: "。！？；!?;"
-  join_pause_ms: 290              # the model's own median inter-sentence pause
-  trim_silence_db: -45.0
+  join_pause_ms: 210              # the gap a listener should perceive at a seam
+  trim_floor_db: 25.0             # gate this far below the speech level (not the peak)
+  edge_pad_ms: 40                 # keep this much sub-gate audio; it holds the consonants

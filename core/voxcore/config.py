@@ -33,9 +33,12 @@ class TTSDefaults:
 @dataclass(frozen=True)
 class ChunkCfg:
     max_chars: int = 160
+    first_max_chars: int = 24   # streamed audio starts only once chunk 1 exists
+    growth: float = 2.0         # then ramp up, so playback never outruns synthesis
     sentence_enders: str = "。！？；!?;"
-    join_pause_ms: int = 290
-    trim_silence_db: float = -45.0
+    join_pause_ms: int = 210     # gap the listener perceives, matched to the model's own
+    trim_floor_db: float = 25.0  # gate this far below speech level, not below peak
+    edge_pad_ms: int = 40        # keep this much sub-gate audio: it holds the consonants
 
 
 @dataclass(frozen=True)
@@ -91,7 +94,8 @@ def _env_overrides(cfg: Config) -> Config:
             engines[name] = replace(engine, **patch)
 
     chunk_patch = {}
-    for f, cast in (("max_chars", int), ("join_pause_ms", int), ("trim_silence_db", float),
+    for f, cast in (("max_chars", int), ("first_max_chars", int), ("growth", float),
+                    ("join_pause_ms", int), ("trim_floor_db", float), ("edge_pad_ms", int),
                     ("sentence_enders", str)):
         raw = os.environ.get(f"VOXSTUDIO_CHUNK_{f.upper()}")
         if raw is not None:

@@ -26,7 +26,7 @@ def test_yaml_merges_onto_defaults(tmp_path, monkeypatch):
     assert cfg.engine("tts").model == "voxcpm2"          # kept from defaults
     assert cfg.engine("asr").model == "nemotron-asr"     # engine absent from yaml
     assert cfg.chunking.max_chars == 200
-    assert cfg.chunking.join_pause_ms == 290             # kept from defaults
+    assert cfg.chunking.join_pause_ms == 210             # kept from defaults
 
 
 def test_env_vars_expand_and_unset_ones_become_empty(tmp_path, monkeypatch):
