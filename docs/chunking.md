@@ -101,6 +101,28 @@ nothing drifts. A 30s chunk dilutes them.
 Re-measure the table if you change the reference voice. Speaking rate is a property of
 the voice as much as of the script.
 
+### One pass over the text, not one per cut
+
+The whole document is priced once, into a cumulative duration table, and every cut after
+that is a bisect into it. This is not premature optimisation: `vox say -f` accepts a file
+of any size, and a document that offers no sentence enders — one long Thai paragraph, a
+wall of unpunctuated Chinese — gives the splitter nothing but its own tail to chew on. An
+earlier revision re-priced that shrinking tail on every cut, which is quadratic: 10k
+characters took 0.4s, 50k took 11s, and 100k took 45s **before the first TTS request**,
+so the CLI simply appeared to hang. It is now linear, at ~0.35M characters/sec.
+
+Pricing the document in one pass also means a character with no script of its own is
+resolved by the text around it rather than by the chunk it lands in. A lone `।` at the
+head of a chunk is charged at the Devanagari rate that follows it, not at the
+unknown-script fallback. The one place this shows: a chunk's *leading* punctuation is
+charged at the rate of the script that ran before the cut, so it can be off by up to
+0.14s — a fifth of the model's own error, on a 30s budget, and only where scripts change
+mid-sentence.
+
+Two consequences worth keeping: the per-chunk estimates sum exactly to the estimate for
+the whole text, and `growth ** len(chunks)` is clamped — a document long enough to need
+1024 chunks would otherwise overflow a float and crash the splitter.
+
 ## Where to cut
 
 A chunk boundary inserts a pause and re-conditions the voice, so it should land where a

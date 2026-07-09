@@ -6,6 +6,8 @@ before touching a number.
 """
 
 import unicodedata
+from bisect import bisect_right
+from itertools import accumulate
 
 # Sentence enders, per script. A chunk boundary is a good place to stop only if a
 # listener would already have expected a pause there.
@@ -106,7 +108,9 @@ def _char_seconds(text: str) -> list[float]:
 
     A character with no script of its own is charged at the rate of the script that
     precedes it. Leading ones -- an opening quote, say -- are charged at the rate of the
-    first script that turns up, which is why this cannot be a simple left-to-right sum.
+    first script that turns up, which is why this cannot be a simple left-to-right sum,
+    and why it has to see the whole text: a lone `।` priced on its own would be charged
+    the unknown-script rate that the Devanagari after it was about to settle.
     """
     seconds = [0.0] * len(text)
     unresolved: list[int] = []
@@ -141,6 +145,9 @@ def est_seconds(text: str) -> float:
     """
     return sum(_char_seconds(" ".join(text.split())))
 
+
+# `growth ** n` past this has long since exceeded any `max_seconds`, and overflows at 1024.
+_MAX_RAMP_STEPS = 64
 
 _DROP_CATEGORIES = frozenset(("Cc", "Cf", "Co", "Cs", "Cn", "So", "Sk"))
 _JOINERS = ("‌", "‍")  # ZWNJ, ZWJ
@@ -212,12 +219,14 @@ def _period_ends_sentence(text: str, i: int) -> bool:
     return token.lower() not in _ABBREVIATIONS
 
 
-def _split_sentences(text: str, enders: str) -> list[str]:
-    """Split after each sentence ender, keeping the ender and any closing punctuation.
+def _sentence_bounds(text: str, enders: str) -> list[tuple[int, int]]:
+    """`(start, end)` after each sentence ender, keeping it and any closing punctuation.
 
-    Nothing is stripped: the pieces concatenate back to `text`.
+    Half-open index pairs rather than substrings: every chunk is a contiguous slice of
+    `text`, so the whole splitter can run on offsets into one duration table. Nothing is
+    stripped -- the spans tile `text` end to end.
     """
-    sentences: list[str] = []
+    bounds: list[tuple[int, int]] = []
     start = 0
     for i, ch in enumerate(text):
         if ch not in enders:
@@ -227,23 +236,23 @@ def _split_sentences(text: str, enders: str) -> list[str]:
         end = i + 1
         while end < len(text) and text[end] in _CLOSERS:
             end += 1
-        sentences.append(text[start:end])
+        bounds.append((start, end))
         start = end
     if start < len(text):
-        sentences.append(text[start:])
-    return sentences
+        bounds.append((start, len(text)))
+    return bounds
 
 
-def _safe_cut(text: str, i: int) -> int:
-    """Move a cut off the inside of a grapheme cluster."""
-    while 0 < i < len(text) and (unicodedata.category(text[i])[0] == "M"
-                                 or text[i - 1] in _JOINERS):
+def _safe_cut(text: str, pos: int, i: int) -> int:
+    """Move a cut off the inside of a grapheme cluster, without backing past `pos`."""
+    while pos < i < len(text) and (unicodedata.category(text[i])[0] == "M"
+                                   or text[i - 1] in _JOINERS):
         i -= 1
-    return max(1, i)
+    return max(pos + 1, i)
 
 
-def _break_index(text: str, hi: int) -> int:
-    """Where to cut a sentence that does not fit, searching backwards from `hi`.
+def _break_index(text: str, pos: int, hi: int) -> int:
+    """Where to cut `text[pos:]`, which does not fit, searching backwards from `hi`.
 
     A clause mark is the best break, a space the next best, and an arbitrary character
     the last resort -- which is the normal case for Chinese, Japanese and Thai, none of
@@ -252,31 +261,28 @@ def _break_index(text: str, hi: int) -> int:
     A break is only taken in the back half of what fits. Otherwise a comma near the very
     start of a long sentence would strand a two-word chunk and re-open the same problem.
     """
-    floor = max(1, hi // 2)
+    floor = pos + max(1, (hi - pos) // 2)
     for i in range(hi, floor, -1):
         if text[i - 1] in _CLAUSE_BREAKS:
             return i
     for i in range(hi, floor, -1):
         if text[i - 1].isspace():
             return i - 1  # leave the space to the tail, as sentence splitting does
-    return _safe_cut(text, hi)
+    return _safe_cut(text, pos, hi)
 
 
-def _split_oversized(sentence: str, cap: float) -> tuple[str, str]:
-    """Bite `cap` seconds off the front of a sentence too long to chunk whole."""
-    seconds = _char_seconds(sentence)
-    total = 0.0
-    hi = 0
-    for i, cost in enumerate(seconds):
-        if i and total + cost > cap:
-            break
-        total += cost
-        hi = i + 1
-    hi = max(1, hi)
-    if hi >= len(sentence):
-        return sentence, ""
-    cut = _break_index(sentence, hi)
-    return sentence[:cut], sentence[cut:]
+def _cut_index(text: str, prefix: list[float], pos: int, end: int, cap: float) -> int:
+    """Where to end a chunk starting at `pos`, worth at most `cap` seconds, within `end`.
+
+    `prefix` is a cumulative duration over the whole text, so this is a bisect rather than
+    a scan: the tail is never re-priced as it shrinks. At least one character is always
+    taken, even when that one character is worth more than the cap.
+    """
+    hi = bisect_right(prefix, prefix[pos] + cap, pos, end + 1) - 1
+    hi = min(max(hi, pos + 1), end)
+    if hi >= end:
+        return end
+    return _break_index(text, pos, hi)
 
 
 def chunk_text(text: str, max_seconds: float = 30.0, enders: str = SENTENCE_ENDERS,
@@ -295,46 +301,55 @@ def chunk_text(text: str, max_seconds: float = 30.0, enders: str = SENTENCE_ENDE
     longer than the next one takes to synthesize, or playback stalls. Synthesis runs at
     roughly 0.37x realtime, so a chunk can afford to be ~2.7x its predecessor; 2.0 leaves
     margin. A uniformly short opening chunk would start fast and then stall.
+
+    Every character is priced exactly once, before any cutting. `vox say -f` takes a file
+    of any size, and a document with no sentence enders in it -- one long Thai paragraph,
+    a wall of Chinese without punctuation -- would otherwise re-price the whole shrinking
+    tail on every cut, burning tens of seconds of CPU before the engine is contacted.
     """
     text = " ".join(text.split())
     if not text:
         return []
 
+    prefix = list(accumulate(_char_seconds(text), initial=0.0))
+
+    def span(a: int, b: int) -> float:
+        return prefix[b] - prefix[a]
+
     # A cap on the opening chunk only makes it shorter, never longer than the rest.
     first_cap = min(first_max_seconds, max_seconds) if first_max_seconds else max_seconds
 
     chunks: list[str] = []
-    current = ""
+    start: int | None = None   # where the chunk being packed began, if one is open
 
     def limit() -> float:
         if not chunks:
             return first_cap
-        return min(max_seconds, first_cap * growth ** len(chunks))
+        # Clamp the exponent. The ramp has pinned itself to `max_seconds` within a few
+        # steps anyway, and `2.0 ** 1024` raises OverflowError -- which a long document
+        # cut into a thousand chunks would otherwise reach.
+        return min(max_seconds, first_cap * growth ** min(len(chunks), _MAX_RAMP_STEPS))
 
-    for sentence in _split_sentences(text, enders):
-        while True:
-            # Read the cap once: appending below flips `limit()` to the general one,
-            # and cutting with a stale cap would silently drop text.
-            cap = limit()
-            if sum(_char_seconds(sentence)) <= cap:
-                break
-            if current:
-                chunks.append(current)
-                current = ""
+    for sentence_start, sentence_end in _sentence_bounds(text, enders):
+        pos = sentence_start
+        while span(pos, sentence_end) > limit():
+            # Re-read the cap each pass: appending below flips `limit()` to the general
+            # one, and cutting with a stale cap would silently drop text.
+            if start is not None:
+                chunks.append(text[start:pos])
+                start = None
                 continue
-            head, sentence = _split_oversized(sentence, cap)
-            chunks.append(head)
-            if not sentence:
-                break
-        if not sentence:
+            cut = _cut_index(text, prefix, pos, sentence_end, limit())
+            chunks.append(text[pos:cut])
+            pos = cut
+
+        if pos >= sentence_end:
             continue
-        if not current:
-            current = sentence
-        elif sum(_char_seconds(current + sentence)) <= limit():
-            current += sentence
-        else:
-            chunks.append(current)
-            current = sentence
-    if current:
-        chunks.append(current)
+        if start is None:
+            start = pos
+        elif span(start, sentence_end) > limit():
+            chunks.append(text[start:pos])
+            start = pos
+    if start is not None:
+        chunks.append(text[start:])
     return chunks

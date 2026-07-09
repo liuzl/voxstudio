@@ -159,6 +159,40 @@ def test_first_cap_larger_than_max_seconds_is_clamped():
     assert all(est_seconds(c) <= cap for c in chunks)
 
 
+def test_every_character_is_priced_exactly_once():
+    # `vox say -f` takes a file of any size. Re-pricing the shrinking tail on every cut
+    # made a 100k-character document with no sentence enders take 45s of CPU before the
+    # first TTS request. Counting the passes pins that down without timing anything.
+    from voxcore import text as textmod
+
+    calls = []
+    original = textmod._char_seconds
+    textmod._char_seconds = lambda s: (calls.append(len(s)), original(s))[1]
+    try:
+        chunks = textmod.chunk_text("啊" * 20_000, 30.0, first_max_seconds=4.5)
+    finally:
+        textmod._char_seconds = original
+
+    assert len(chunks) > 100          # plenty of cuts, none of which re-priced anything
+    assert calls == [20_000]
+
+
+def test_a_thousand_chunks_do_not_overflow_the_ramp():
+    # `growth ** len(chunks)` is `2.0 ** 1024` once a document needs that many chunks,
+    # and float exponentiation raises rather than saturating.
+    chunks = chunk_text("啊" * 5_000, 0.5, first_max_seconds=0.5)
+    assert len(chunks) > 1_024
+    assert "".join(chunks) == "啊" * 5_000
+
+
+def test_leading_punctuation_is_priced_by_the_script_that_resolves_it():
+    # A lone danda carries no script. Priced on its own it would take the slow
+    # unknown-script rate; the Devanagari that follows is what settles it.
+    text = "।इआ।इ। ।अआ"
+    assert est_seconds(text) < 10 / 14.0        # not 10 chars at the 5.1 cps fallback
+    assert chunk_text(text, 2.0, first_max_seconds=0.8) == [text]
+
+
 def test_chunks_ramp_up_so_playback_never_outruns_synthesis():
     chunks = chunk_text("甲。" * 200, 30.0, first_max_seconds=4.5, growth=2.0)
     spans = [est_seconds(c) for c in chunks]
