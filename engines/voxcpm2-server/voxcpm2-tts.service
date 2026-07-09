@@ -6,12 +6,12 @@ After=network-online.target
 # Adjust WorkingDirectory and VOXCPM2_* env to your host.
 WorkingDirectory=%h/voxstudio/engines/voxcpm2-server
 Environment=VOXCPM2_BASE=%h/tts-eval-voxcpm2
-# Without this, tracebacks sit in a stdout buffer and never reach the journal.
 Environment=PYTHONUNBUFFERED=1
-# Where `uv sync --frozen` put the environment (optional; defaults to ./.venv):
-Environment=UV_PROJECT_ENVIRONMENT=%h/tts-eval-voxcpm2/.venv-locked
-# --no-sync: never mutate the environment at boot; install with `uv sync --frozen`.
-ExecStart=/usr/bin/env uv run --no-sync uvicorn server_voxcpm2:app --host 0.0.0.0 --port 8880
+# Run the interpreter that `uv sync --frozen` installed, directly. Do NOT wrap this
+# in `uv run`: under systemd, uv swallows the child's stdout and stderr, so uvicorn's
+# access log and any traceback never reach the journal. uv installs; it does not launch.
+# Path is wherever UV_PROJECT_ENVIRONMENT pointed during sync (default: ./.venv).
+ExecStart=%h/voxstudio/engines/voxcpm2-server/.venv/bin/python -m uvicorn server_voxcpm2:app --host 0.0.0.0 --port 8880
 Restart=on-failure
 RestartSec=5
 

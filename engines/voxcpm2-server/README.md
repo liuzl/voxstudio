@@ -40,10 +40,12 @@ Dependencies live in `pyproject.toml` and are pinned in `uv.lock`; [uv](https://
 
 ```bash
 uv sync --frozen                                          # exact, hash-verified install
-uv run --no-sync uvicorn server_voxcpm2:app --host 0.0.0.0 --port 8880
+.venv/bin/python -m uvicorn server_voxcpm2:app --host 0.0.0.0 --port 8880
 ```
 
-`--frozen` installs precisely what `uv.lock` records and never re-resolves, so every host gets the same environment. `--no-sync` on `uv run` keeps a service restart from touching a multi-GB install. To place the environment somewhere other than `./.venv`, set `UV_PROJECT_ENVIRONMENT`.
+`--frozen` installs precisely what `uv.lock` records and never re-resolves, so every host gets the same environment. To place the environment somewhere other than `./.venv`, set `UV_PROJECT_ENVIRONMENT` during sync.
+
+**uv installs; it does not launch.** `uv run` works interactively, but under systemd it swallows the child process's stdout and stderr — uvicorn's access log and any traceback vanish. Invoke the interpreter directly in a service.
 
 The lock resolves for **x86_64 Linux only** — this engine runs on CUDA hosts, and resolving for macOS too would drag the solution down to that platform's lowest common denominator. `torch`/`torchaudio` are pinned to the validated versions; the default PyPI linux wheel is already a CUDA 13 build, so no `download.pytorch.org` index is needed. `numpy` is capped below 2.5 because old `numba` releases declare no numpy upper bound and an unconstrained resolve pairs them disastrously.
 
