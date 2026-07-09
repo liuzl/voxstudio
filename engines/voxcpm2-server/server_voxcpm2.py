@@ -37,9 +37,13 @@ print(f"VoxCPM2 loaded, sample_rate={SR}", flush=True)
 lock = threading.Lock()
 app = FastAPI()
 
-def _generate(text, ref, cfg, ts):
+def _generate(text, ref, cfg, ts, prompt=None):
+    """prompt = (wav_path, transcript). Conditions on an aligned text/audio example, which
+    the model follows for tempo; `ref` alone only carries timbre. Output excludes the prompt."""
+    kw = {"prompt_wav_path": prompt[0], "prompt_text": prompt[1]} if prompt else {}
     with lock:
-        wav = model.generate(text=text, reference_wav_path=ref, cfg_value=cfg, inference_timesteps=ts)
+        wav = model.generate(text=text, reference_wav_path=ref, cfg_value=cfg,
+                             inference_timesteps=ts, **kw)
     buf = io.BytesIO(); sf.write(buf, wav, SR, format="WAV"); buf.seek(0)
     return buf.read()
 
@@ -82,6 +86,14 @@ def resolve_voice(voice):
         return _vref(voice)
     raise HTTPException(400, {"error": {"code": "voice_not_found",
         "message": "Unknown voice id.", "type": "invalid_request_error"}})
+
+def resolve_prompt(voice):
+    """A registered voice also has a transcript of its reference audio. Passing both as a
+    prompt (rather than the audio alone) gives the model an aligned tempo example."""
+    if voice in ("clone", "design") or not os.path.exists(_vmeta(voice)):
+        return None
+    text = (_read_meta(voice) or {}).get("prompt_text") or ""
+    return (_vref(voice), text) if text.strip() else None
 
 @app.get("/health")
 def health():
@@ -165,11 +177,14 @@ class OAIReq(BaseModel):
     model: str | None = None
     cfg_value: float = 2.0
     timesteps: int = 10
+    prosody_prompt: bool = False   # condition on the voice's reference transcript too
 
 @app.post("/v1/audio/speech")
 def oai_speech(r: OAIReq):
     ref = resolve_voice(r.voice)   # clone(默认音) / design(零样本) / <已注册 id>
-    return Response(_generate(r.input, ref, r.cfg_value, r.timesteps), media_type="audio/wav")
+    prompt = resolve_prompt(r.voice) if r.prosody_prompt else None
+    return Response(_generate(r.input, ref, r.cfg_value, r.timesteps, prompt),
+                    media_type="audio/wav")
 
 @app.get("/", response_class=HTMLResponse)
 def index():
