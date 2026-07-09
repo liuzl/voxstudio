@@ -6,6 +6,8 @@ After=network-online.target
 # Adjust WorkingDirectory and VOXCPM2_* env to your host.
 WorkingDirectory=%h/voxstudio/engines/voxcpm2-server
 Environment=VOXCPM2_BASE=%h/tts-eval-voxcpm2
+# Without this, tracebacks sit in a stdout buffer and never reach the journal.
+Environment=PYTHONUNBUFFERED=1
 # Where `uv sync --frozen` put the environment (optional; defaults to ./.venv):
 Environment=UV_PROJECT_ENVIRONMENT=%h/tts-eval-voxcpm2/.venv-locked
 # --no-sync: never mutate the environment at boot; install with `uv sync --frozen`.
