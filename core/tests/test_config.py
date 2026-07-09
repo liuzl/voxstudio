@@ -61,6 +61,40 @@ def test_a_character_budget_is_refused_rather_than_read_as_seconds(tmp_path):
         load_config(write(tmp_path, stale))
 
 
+def test_a_nan_budget_is_refused(tmp_path):
+    # Every comparison against nan is false, so `chunk_text` would never find a chunk
+    # too long: the whole document goes to the engine in one generation. YAML spells it
+    # `.nan`, and it survives `float()` without complaint.
+    import pytest
+    for key in ("max_seconds", "first_max_seconds"):
+        with pytest.raises(SystemExit, match=f"chunking.{key}"):
+            load_config(write(tmp_path, f"chunking:\n  {key}: .nan\n"))
+
+
+def test_a_budget_that_bounds_nothing_is_refused(tmp_path):
+    import pytest
+    for value in (".inf", "0", "-5"):
+        with pytest.raises(SystemExit, match="positive number of seconds"):
+            load_config(write(tmp_path, f"chunking:\n  max_seconds: {value}\n"))
+
+
+def test_growth_must_be_finite_but_may_shrink_the_ramp(tmp_path, monkeypatch):
+    # `growth: inf` makes `limit()` non-finite; `growth: 0.5` is merely an odd trade,
+    # buying lower latency with more seams, and the exponent clamp keeps it off zero.
+    import pytest
+    monkeypatch.delenv("VOXSTUDIO_CHUNK_GROWTH", raising=False)
+    with pytest.raises(SystemExit, match="chunking.growth"):
+        load_config(write(tmp_path, "chunking:\n  growth: .nan\n"))
+    assert load_config(write(tmp_path, "chunking:\n  growth: 0.5\n")).chunking.growth == 0.5
+
+
+def test_a_nan_budget_from_the_environment_is_refused_too(tmp_path, monkeypatch):
+    import pytest
+    monkeypatch.setenv("VOXSTUDIO_CHUNK_MAX_SECONDS", "nan")
+    with pytest.raises(SystemExit, match="chunking.max_seconds"):
+        load_config(write(tmp_path))
+
+
 def test_a_stale_env_budget_is_refused_too(tmp_path, monkeypatch):
     # A host that had tuned VOXSTUDIO_CHUNK_MAX_CHARS away from the default would
     # otherwise boot on the default and say nothing.

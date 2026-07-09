@@ -1,5 +1,6 @@
 """Configuration: YAML file, then `${VAR}` expansion, then flat env overrides."""
 
+import math
 import os
 import re
 from dataclasses import dataclass, field, replace
@@ -130,6 +131,35 @@ def _stale_budget_key(old: str, new: str) -> SystemExit:
     )
 
 
+def _validate_chunking(chunking: ChunkCfg) -> ChunkCfg:
+    """Reject a budget that cannot bound anything.
+
+    `nan` is the one that matters. Every comparison against it is false, so `chunk_text`
+    never finds a chunk too long and hands the engine the whole document in one
+    generation -- silently, and precisely the drift this budget exists to prevent. YAML
+    spells it `.nan` and the environment spells it `nan`; both reach `float()` intact.
+
+    A non-positive budget is merely absurd rather than dangerous -- one character per
+    chunk, slow and obvious -- but it is always a mistake, and failing at load beats
+    failing ten minutes into a long file. `inf` is left alone on `growth`, where it just
+    pins the ramp to `max_seconds`, but not on the budgets themselves.
+    """
+    for field_name in ("max_seconds", "first_max_seconds"):
+        value = getattr(chunking, field_name)
+        if not math.isfinite(value) or value <= 0:
+            raise SystemExit(
+                f"config: `chunking.{field_name}` must be a positive number of seconds, "
+                f"not {value!r}. A budget that compares false against everything (`nan`) "
+                f"or bounds nothing (`inf`, 0) would send the whole document to the "
+                f"engine as one generation."
+            )
+    if not math.isfinite(chunking.growth):
+        raise SystemExit(
+            f"config: `chunking.growth` must be finite, not {chunking.growth!r}."
+        )
+    return chunking
+
+
 def _migrate_chunking(raw: dict) -> dict:
     """`max_chars: 160` read as `max_seconds: 160` is two minutes in one generation."""
     for old, new in _RENAMED.items():
@@ -150,8 +180,11 @@ def load_config(path: str | None = None) -> Config:
         base = engines.get(name)
         engines[name] = replace(base, **values) if base else EngineCfg(**values)
 
-    return _env_overrides(Config(
+    cfg = _env_overrides(Config(
         engines=engines,
         tts_defaults=TTSDefaults(**(raw.get("tts_defaults") or {})),
         chunking=ChunkCfg(**_migrate_chunking(raw.get("chunking") or {})),
     ))
+    # After the env overrides, so neither source of a budget can slip past.
+    _validate_chunking(cfg.chunking)
+    return cfg
