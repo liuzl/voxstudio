@@ -28,8 +28,8 @@ def stream_long(tts: TTSClient, text: str, voice: str | None = None, *,
     for why the edges cannot simply be concatenated.
     """
     chunking = chunking or ChunkCfg()
-    chunks = chunk_text(text, chunking.max_chars, chunking.sentence_enders,
-                        chunking.first_max_chars, chunking.growth)
+    chunks = chunk_text(text, chunking.max_seconds, chunking.sentence_enders,
+                        chunking.first_max_seconds, chunking.growth)
     if not chunks:
         raise ValueError("nothing to synthesize")
 

@@ -49,17 +49,20 @@ uv run vox chat "用三句话介绍一下你自己" --speak -o reply.wav
 uv run vox voices add alice --audio sample.wav --text "参考音的逐字稿"
 ```
 
-Long text is chunked at ~160 Chinese characters (≈30s) and the pieces are joined by
-trimming each one's edge silence and inserting a single fixed pause. Both numbers are
-empirical: a single TTS generation drifts away from the reference voice as it runs, and
-raw concatenation produces seams of wildly uneven length. See `docs/chunking.md`.
+Long text is chunked at ~30 seconds of *estimated speech* — roughly 160 Chinese
+characters, or 540 English ones — and the pieces are joined by trimming each one's edge
+silence and inserting a single fixed pause. Both numbers are empirical: a single TTS
+generation drifts away from the reference voice as it runs, and raw concatenation
+produces seams of wildly uneven length. The estimate comes from a per-script speech rate
+table measured against the engine, so the budget means the same thing in every language
+it speaks. See `docs/chunking.md`.
 
 ## Model stack
 
 | Layer | Engine |
 |---|---|
 | ASR | parakeet.cpp (`nemotron-3.5-asr-streaming-0.6b`, Mandarin-capable) |
-| TTS | **VoxCPM2 PyTorch** (this repo) — 48kHz, strong Chinese, voice cloning + zero-shot voice design |
+| TTS | **VoxCPM2 PyTorch** (this repo) — 48kHz, 30 languages + 9 Chinese dialects, voice cloning + zero-shot voice design |
 | LLM | Gemma (llama.cpp) |
 
 ## Status

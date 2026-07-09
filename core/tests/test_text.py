@@ -1,43 +1,98 @@
-from voxcore import chunk_text, sanitize_for_tts
+from voxcore import chunk_text, est_seconds, sanitize_for_tts
+
+# Chunking is budgeted in seconds, so the tests express their caps in seconds too --
+# via `est_seconds` of the text they expect to fit, rather than a magic float.
+ZH = "第一句。第二句。第三句。"
+EN = "Speech synthesis has improved. Voices sound natural now. Anyone can use them."
+TH = "พรุ่งนี้บ่ายเรามาเจอกัน ถ้ามีธุระด่วนช่วยบอกล่วงหน้า เราเลื่อนไปตอนเย็นก็ได้"
 
 
 def test_breaks_only_after_sentence_enders():
-    text = "第一句。第二句。第三句。"
-    assert chunk_text(text, max_chars=4) == ["第一句。", "第二句。", "第三句。"]
+    assert chunk_text(ZH, est_seconds("第一句。")) == ["第一句。", "第二句。", "第三句。"]
     # Packing is greedy: fewer chunks means fewer seams to hide.
-    assert chunk_text(text, max_chars=8) == ["第一句。第二句。", "第三句。"]
+    assert chunk_text(ZH, est_seconds("第一句。第二句。")) == ["第一句。第二句。", "第三句。"]
 
 
 def test_packs_sentences_up_to_the_limit():
-    chunks = chunk_text("甲。乙。丙。丁。", max_chars=6)
+    cap = est_seconds("甲。乙。丙。")
+    chunks = chunk_text("甲。乙。丙。丁。", cap)
     assert chunks == ["甲。乙。丙。", "丁。"]
-    assert all(len(c) <= 6 for c in chunks)
+    assert all(est_seconds(c) <= cap for c in chunks)
+
+
+def test_the_budget_is_duration_not_characters():
+    # The whole point of the rewrite: the same cap admits very different character counts.
+    cap = 30.0
+    zh = chunk_text("啊" * 400, cap)[0]
+    en = chunk_text("a " * 400, cap)[0]
+    assert 150 <= len(zh) <= 175, len(zh)
+    assert len(en) > 3 * len(zh), (len(en), len(zh))
+    assert est_seconds(zh) <= cap and est_seconds(en) <= cap
+
+
+def test_est_seconds_matches_the_measured_rates():
+    # 5.4 chars/s for Han, 18.1 for Latin -- the constants the engine was measured at.
+    assert abs(est_seconds("啊" * 162) - 30.0) < 0.5
+    assert abs(est_seconds("a" * 543) - 30.0) < 0.5
 
 
 def test_long_sentence_without_an_ender_is_hard_split():
-    chunks = chunk_text("啊" * 25, max_chars=10)
+    # No spaces and no clause marks: Chinese has to be cut mid-phrase.
+    cap = est_seconds("啊" * 10)
+    chunks = chunk_text("啊" * 25, cap)
     assert chunks == ["啊" * 10, "啊" * 10, "啊" * 5]
 
 
+def test_an_oversized_latin_sentence_breaks_at_word_boundaries():
+    text = "the quick brown fox jumps over the lazy dog and keeps running well past dusk"
+    words = set(text.split())
+    chunks = chunk_text(text, est_seconds("the quick brown fox"))
+    assert len(chunks) > 1
+    assert "".join(chunks) == text
+    for chunk in chunks:
+        assert all(word in words for word in chunk.split()), chunk
+
+
+def test_an_oversized_thai_sentence_breaks_at_spaces():
+    # Thai writes no sentence-ending mark: the spaces are the only break points there are.
+    chunks = chunk_text(TH, est_seconds("พรุ่งนี้บ่ายเรามาเจอกัน"))
+    assert len(chunks) > 1
+    assert "".join(chunks) == TH
+    assert all(not c.strip().startswith(("ถ้", "เร")) or c.startswith(" ") for c in chunks)
+
+
 def test_a_pending_chunk_is_flushed_before_a_hard_split():
-    chunks = chunk_text("短。" + "长" * 12, max_chars=10)
+    text = "短。" + "长" * 12
+    chunks = chunk_text(text, est_seconds("啊" * 10))
     assert chunks[0] == "短。"
-    assert "".join(chunks) == "短。" + "长" * 12
+    assert "".join(chunks) == text
+
+
+def test_a_period_is_not_a_sentence_ender_inside_decimals_or_names():
+    text = "Pi is 3.14 exactly. Dr. Chen agrees."
+    chunks = chunk_text(text, est_seconds("Pi is 3.14 exactly."))
+    assert chunks == ["Pi is 3.14 exactly.", " Dr. Chen agrees."]
+
+
+def test_an_acronym_does_not_end_a_sentence():
+    text = "She works at the U.S. mission today."
+    assert chunk_text(text, 60.0) == [text]
 
 
 def test_ascii_enders_and_whitespace_collapse():
-    assert chunk_text("Hello world!  Bye?", max_chars=100) == ["Hello world! Bye?"]
+    assert chunk_text("Hello world!  Bye?", 60.0) == ["Hello world! Bye?"]
 
 
 def test_empty_text_yields_no_chunks():
     assert chunk_text("   \n ") == []
 
 
-def test_sanitize_drops_out_of_script_glyphs():
-    # The LLM has been seen slipping a Vietnamese glyph into Mandarin output.
-    clean, dropped = sanitize_for_tts("我们继续ứ往前")
-    assert clean == "我们继续往前"
-    assert dropped == ["ứ"]
+def test_sanitize_keeps_every_script_the_engine_speaks():
+    # VoxCPM2 speaks 30 languages. A filter that knows only CJK and ASCII would eat these.
+    for text in ("Chúng ta gặp nhau", "Давайте встретимся", "لنلتق غدا",
+                 "चलो कल मिलते हैं", "만나기로 해요", "Grüße aus München", "Ας συναντηθούμε"):
+        clean, dropped = sanitize_for_tts(text)
+        assert clean == text and dropped == []
 
 
 def test_sanitize_keeps_cjk_ascii_and_punctuation():
@@ -47,37 +102,69 @@ def test_sanitize_keeps_cjk_ascii_and_punctuation():
     assert dropped == []
 
 
+def test_sanitize_drops_what_cannot_be_spoken():
+    clean, dropped = sanitize_for_tts("好👍的\x00话")
+    assert clean == "好的话"
+    assert dropped == ["👍", "\x00"]
+
+
+def test_sanitize_drops_an_emoji_presentation_selector():
+    # U+2602 is a symbol, U+FE0F a format character. Neither has a pronunciation.
+    clean, dropped = sanitize_for_tts("下雨☂️了")
+    assert clean == "下雨了"
+    assert len(dropped) == 2
+
+
+def test_sanitize_keeps_newlines_so_words_do_not_weld_together():
+    clean, _ = sanitize_for_tts("hello\nworld")
+    assert clean == "hello\nworld"
+
+
+def test_sanitize_keeps_a_joiner_between_letters_but_not_between_emoji():
+    devanagari = "क्‍ष"          # ZWJ is orthography here
+    clean, dropped = sanitize_for_tts(devanagari)
+    assert clean == devanagari and dropped == []
+
+    clean, dropped = sanitize_for_tts("👨‍👩")   # ZWJ only glues two dropped emoji
+    assert clean == ""
+    assert "‍" in dropped
+
+
 def test_first_chunk_can_be_capped_shorter_than_the_rest():
     text = "甲。" * 20
-    chunks = chunk_text(text, max_chars=10, first_max_chars=4)
-    assert len(chunks[0]) == 4
-    assert all(len(c) <= 10 for c in chunks[1:])
+    cap, first = est_seconds("甲。" * 5), est_seconds("甲。" * 2)
+    chunks = chunk_text(text, cap, first_max_seconds=first)
+    assert est_seconds(chunks[0]) <= first
+    assert all(est_seconds(c) <= cap for c in chunks[1:])
     assert "".join(chunks) == text
 
 
 def test_first_chunk_cap_does_not_lose_an_overlong_sentence():
-    chunks = chunk_text("啊" * 9, max_chars=10, first_max_chars=4)
+    chunks = chunk_text("啊" * 9, est_seconds("啊" * 10),
+                        first_max_seconds=est_seconds("啊" * 4))
     assert chunks == ["啊" * 4, "啊" * 5]
 
 
 def test_chunking_never_drops_or_reorders_text():
-    text = "第一句。" + "长" * 250 + "。收尾。"
-    for max_chars, first in ((160, 60), (10, 4), (5, 5), (200, 500)):
-        chunks = chunk_text(text, max_chars=max_chars, first_max_chars=first)
-        assert "".join(chunks) == text, (max_chars, first)
+    for text in ("第一句。" + "长" * 250 + "。收尾。", EN * 4, TH * 3,
+                 "Mixed 中英 text。With English. And 中文句子。"):
+        for cap, first in ((30.0, 4.5), (2.0, 0.8), (1.0, 1.0), (40.0, 90.0)):
+            chunks = chunk_text(text, cap, first_max_seconds=first)
+            assert "".join(chunks) == " ".join(text.split()), (text[:20], cap, first)
 
 
-def test_first_cap_larger_than_max_chars_is_clamped():
-    chunks = chunk_text("甲。" * 10, max_chars=4, first_max_chars=60)
-    assert all(len(c) <= 4 for c in chunks)
+def test_first_cap_larger_than_max_seconds_is_clamped():
+    cap = est_seconds("甲。")
+    chunks = chunk_text("甲。" * 10, cap, first_max_seconds=60.0)
+    assert all(est_seconds(c) <= cap for c in chunks)
 
 
 def test_chunks_ramp_up_so_playback_never_outruns_synthesis():
-    chunks = chunk_text("甲。" * 200, max_chars=160, first_max_chars=24, growth=2.0)
-    sizes = [len(c) for c in chunks]
-    assert sizes[0] <= 24
-    assert sizes[-1] <= 160
+    chunks = chunk_text("甲。" * 200, 30.0, first_max_seconds=4.5, growth=2.0)
+    spans = [est_seconds(c) for c in chunks]
+    assert spans[0] <= 4.5
+    assert spans[-1] <= 30.0
     # Synthesis runs at ~0.37x realtime, so a chunk may be at most ~2.7x its
     # predecessor without the listener catching up to it. Growth is capped at 2.0.
-    for prev, nxt in zip(sizes, sizes[1:]):
+    for prev, nxt in zip(spans, spans[1:]):
         assert nxt <= 2.7 * prev, (prev, nxt)

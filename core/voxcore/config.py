@@ -7,6 +7,8 @@ from pathlib import Path
 
 import yaml
 
+from .text import SENTENCE_ENDERS
+
 SEARCH_PATHS = (
     Path("voxstudio.yaml"),
     Path.home() / ".config" / "voxstudio" / "config.yaml",
@@ -32,10 +34,10 @@ class TTSDefaults:
 
 @dataclass(frozen=True)
 class ChunkCfg:
-    max_chars: int = 160
-    first_max_chars: int = 24   # streamed audio starts only once chunk 1 exists
-    growth: float = 2.0         # then ramp up, so playback never outruns synthesis
-    sentence_enders: str = "。！？；!?;"
+    max_seconds: float = 30.0        # timbre drifts within a longer single generation
+    first_max_seconds: float = 4.5   # streamed audio starts only once chunk 1 exists
+    growth: float = 2.0              # then ramp up, so playback never outruns synthesis
+    sentence_enders: str = SENTENCE_ENDERS
     join_pause_ms: int = 210     # gap the listener perceives, matched to the model's own
     trim_floor_db: float = 25.0  # gate this far below speech level, not below peak
     edge_pad_ms: int = 40        # keep this much sub-gate audio: it holds the consonants
@@ -82,7 +84,7 @@ def _find_config(explicit: str | None) -> Path | None:
 
 
 def _env_overrides(cfg: Config) -> Config:
-    """`VOXSTUDIO_TTS_BASE_URL`, `VOXSTUDIO_LLM_MAX_TOKENS`, `VOXSTUDIO_CHUNK_MAX_CHARS`, ..."""
+    """`VOXSTUDIO_TTS_BASE_URL`, `VOXSTUDIO_LLM_MAX_TOKENS`, `VOXSTUDIO_CHUNK_MAX_SECONDS`, ..."""
     engines = dict(cfg.engines)
     for name, engine in engines.items():
         patch = {}
@@ -94,7 +96,7 @@ def _env_overrides(cfg: Config) -> Config:
             engines[name] = replace(engine, **patch)
 
     chunk_patch = {}
-    for f, cast in (("max_chars", int), ("first_max_chars", int), ("growth", float),
+    for f, cast in (("max_seconds", float), ("first_max_seconds", float), ("growth", float),
                     ("join_pause_ms", int), ("trim_floor_db", float), ("edge_pad_ms", int),
                     ("sentence_enders", str)):
         raw = os.environ.get(f"VOXSTUDIO_CHUNK_{f.upper()}")
@@ -103,6 +105,25 @@ def _env_overrides(cfg: Config) -> Config:
 
     return replace(cfg, engines=engines,
                    chunking=replace(cfg.chunking, **chunk_patch) if chunk_patch else cfg.chunking)
+
+
+_RENAMED = {"max_chars": "max_seconds", "first_max_chars": "first_max_seconds"}
+
+
+def _migrate_chunking(raw: dict) -> dict:
+    """Refuse a character budget rather than silently reading it as seconds.
+
+    `max_chars: 160` and `max_seconds: 160` differ by a factor of five, and the second
+    one produces two minutes of audio in a single generation.
+    """
+    for old, new in _RENAMED.items():
+        if old in raw:
+            raise SystemExit(
+                f"config: `chunking.{old}` was replaced by `chunking.{new}`. "
+                f"The budget is now estimated speech duration, not characters: "
+                f"~160 Chinese characters or ~540 English ones fit in 30 seconds."
+            )
+    return raw
 
 
 def load_config(path: str | None = None) -> Config:
@@ -120,5 +141,5 @@ def load_config(path: str | None = None) -> Config:
     return _env_overrides(Config(
         engines=engines,
         tts_defaults=TTSDefaults(**(raw.get("tts_defaults") or {})),
-        chunking=ChunkCfg(**(raw.get("chunking") or {})),
+        chunking=ChunkCfg(**_migrate_chunking(raw.get("chunking") or {})),
     ))

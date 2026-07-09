@@ -30,11 +30,12 @@ def run(args, cfg) -> int:
     print(reply)
 
     if args.speak:
-        # An LLM will occasionally slip a glyph from another script into otherwise
-        # clean Chinese, and the TTS engine renders it as garbage. Filter before speaking.
+        # An LLM answer arrives with emoji and the occasional control character, and the
+        # TTS engine renders them as garbage. Filter before speaking. Other scripts pass
+        # through: the engine speaks thirty languages, and the reply may be in any.
         spoken, dropped = sanitize_for_tts(reply)
         if dropped:
-            print(f"dropped {len(dropped)} out-of-script glyph(s): "
+            print(f"dropped {len(dropped)} unspeakable character(s): "
                   f"{''.join(sorted(set(dropped)))}", file=sys.stderr)
         with TTSClient(cfg.engine("tts"), cfg.tts_defaults) as tts:
             wav = synthesize_long(tts, spoken, args.voice, chunking=cfg.chunking)

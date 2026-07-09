@@ -3,7 +3,7 @@
 import sys
 import time
 
-from voxcore import TTSClient, sanitize_for_tts, stream_long, write_wav
+from voxcore import TTSClient, est_seconds, sanitize_for_tts, stream_long, write_wav
 from voxcore.sinks import PlayerSink, Tee, WavFileSink
 
 from .._io import read_text_arg
@@ -34,8 +34,8 @@ def run(args, cfg) -> int:
 
     text, dropped = sanitize_for_tts(text)
     if dropped and not args.quiet:
-        print(f"dropped {len(dropped)} out-of-script glyph(s): {''.join(sorted(set(dropped)))}",
-              file=sys.stderr)
+        print(f"dropped {len(dropped)} unspeakable character(s): "
+              f"{''.join(sorted(set(dropped)))}", file=sys.stderr)
 
     voice = args.voice
     if args.design:
@@ -44,7 +44,8 @@ def run(args, cfg) -> int:
         voice = "design"
 
     def progress(i, total, chunk):
-        print(f"  [{i + 1}/{total}] {len(chunk)} chars", file=sys.stderr)
+        print(f"  [{i + 1}/{total}] {len(chunk)} chars, ~{est_seconds(chunk):.1f}s",
+              file=sys.stderr)
 
     # stdout can't take an incremental WAV -- the header carries lengths we only know
     # at the end, and a pipe isn't seekable. Buffer that one case; stream the rest.

@@ -20,7 +20,8 @@ class FakeTTS:
         return write_wav(np.concatenate([pad, body, pad]), SR)
 
 
-CFG = ChunkCfg(max_chars=2, join_pause_ms=250, edge_pad_ms=0)  # one sentence per chunk
+# 0.4s holds one `甲。` (two Han characters, ~0.37s) but never two.
+CFG = ChunkCfg(max_seconds=0.4, join_pause_ms=250, edge_pad_ms=0)
 
 
 def test_chunks_are_requested_serially_in_order():

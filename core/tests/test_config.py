@@ -9,7 +9,7 @@ engines:
     base_url: http://127.0.0.1:8080
     api_key: ${VOXTEST_ABSENT}
 chunking:
-  max_chars: 200
+  max_seconds: 20.0
 """
 
 
@@ -25,7 +25,7 @@ def test_yaml_merges_onto_defaults(tmp_path, monkeypatch):
     assert cfg.engine("tts").base_url == "http://127.0.0.1:9999"
     assert cfg.engine("tts").model == "voxcpm2"          # kept from defaults
     assert cfg.engine("asr").model == "nemotron-asr"     # engine absent from yaml
-    assert cfg.chunking.max_chars == 200
+    assert cfg.chunking.max_seconds == 20.0
     assert cfg.chunking.join_pause_ms == 210             # kept from defaults
 
 
@@ -39,10 +39,10 @@ def test_env_vars_expand_and_unset_ones_become_empty(tmp_path, monkeypatch):
 
 def test_env_overrides_win_over_yaml(tmp_path, monkeypatch):
     monkeypatch.setenv("VOXSTUDIO_TTS_BASE_URL", "http://elsewhere:1234")
-    monkeypatch.setenv("VOXSTUDIO_CHUNK_MAX_CHARS", "80")
+    monkeypatch.setenv("VOXSTUDIO_CHUNK_MAX_SECONDS", "8")
     cfg = load_config(write(tmp_path))
     assert cfg.engine("tts").base_url == "http://elsewhere:1234"
-    assert cfg.chunking.max_chars == 80
+    assert cfg.chunking.max_seconds == 8.0
 
 
 def test_missing_engine_is_a_clean_exit(tmp_path):
@@ -50,3 +50,12 @@ def test_missing_engine_is_a_clean_exit(tmp_path):
     cfg = load_config(write(tmp_path))
     with pytest.raises(SystemExit, match="engines.nope"):
         cfg.engine("nope")
+
+
+def test_a_character_budget_is_refused_rather_than_read_as_seconds(tmp_path):
+    # `max_chars: 160` read as 160 seconds would synthesize the timbre drift it exists
+    # to prevent, and it would do it silently.
+    import pytest
+    stale = "chunking:\n  max_chars: 160\n"
+    with pytest.raises(SystemExit, match="max_seconds"):
+        load_config(write(tmp_path, stale))

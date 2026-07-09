@@ -2,7 +2,7 @@
 
 Two constants in `core/voxcore/` look arbitrary and are not. Both were measured.
 
-## Chunk at ~160 characters, not at the token limit
+## Chunk at ~30 seconds of speech, not at the token limit
 
 VoxCPM2 accepts a long passage in one call and will happily synthesize two minutes of
 audio from it. The audio degrades in a specific way: **the timbre drifts away from the
@@ -36,6 +36,114 @@ chunks. The model speeds up as it loses the reference.
 Send the chunks **serially**. The engine's peak VRAM grows with the length of a single
 generation and torch's caching allocator does not release it, so overlapping requests can
 walk a shared GPU into an out-of-memory 500.
+
+## The budget is seconds, and a character is not a second
+
+Everything above was measured on Mandarin, where 160 characters happen to be ~30s. That
+coincidence is not a rule. VoxCPM2 speaks thirty languages, and the same 160 characters
+are 30 seconds of Chinese, 11 seconds of English, and 9 seconds of Greek. A character
+budget silently means a different constraint in every script — and the constraint that
+actually matters is **duration**, because that is what the timbre drifts with.
+
+So `chunk_text` budgets in estimated seconds. The estimate is a per-script speech rate,
+measured against the live engine on paragraphs of roughly a full chunk's length. (Short
+utterances run measurably faster — they contain no inter-sentence pauses — so sentences
+would have fitted the wrong regime.) Rate is pooled as `total_chars / total_seconds`, not
+averaged per paragraph: the question is how long *N characters* take.
+
+| script | chars/sec | | script | chars/sec |
+|---|---|---|---|---|
+| Cyrillic | 18.3 | | Thai | 13.4 |
+| Latin | 18.1 | | Hebrew | 11.9 |
+| Greek | 15.8 | | Arabic | 11.4 |
+| Myanmar | 15.0 | | Hangul | 8.2 |
+| Devanagari | 14.6 | | Han | 5.4 |
+| Khmer | 14.3 | | Kana | 5.1 |
+| Lao | 14.0 | | *(unknown)* | 5.1 |
+
+The table is keyed on **script, not language**, because a bare string carries nothing
+else. It survives that approximation because rate is dominated by how much phonetic
+content one character holds — an ideograph is a syllable, a Latin letter is a phoneme or
+less. English, German, Vietnamese and Indonesian all measure within 4% of the pooled
+Latin rate. Characters with no script of their own — spaces, digits, punctuation — are
+charged at the rate of the script running before them.
+
+Japanese is the one script that could not be pooled. Its text interleaves kanji with
+kana, and the estimator charges the kanji at the Han rate, so the kana rate was solved
+for under that assumption rather than read off the paragraph: **5.1**, against a naive
+pooled 5.2.
+
+Against held-out paragraphs the estimate lands within **+13% / −17%**. Against real
+chunks cut from running prose it ran −12% to +10%. The bias is deliberately toward
+over-estimating: a chunk that runs short costs one seam, a chunk that runs long costs
+speaker similarity. At the −17% end a 30s budget yields 36s of audio — still short of
+the ~40s where drift becomes audible.
+
+### What the estimate cannot know
+
+A rare letter sequence gets spelled out, and a pronounceable one does not. Measured in a
+fixed Chinese carrier sentence, seconds per character:
+
+| probe | s/char | read as |
+|---|---|---|
+| `banana` | 0.060 | a word |
+| `NASA` | 0.098 | a word |
+| `voxcpm` | 0.205 | v-o-x-c-p-m |
+| `TTS` | 0.203 | t-t-s |
+
+Case is not the signal — `NASA` is uppercase and read as a word, `voxcpm` is lowercase
+and spelled out. Telling the two apart needs a lexicon or a phonotactic model, which a
+chunker has no business carrying, so **this is left unmodelled**. Normal prose is
+unaffected: `banana` at 0.060 s/char is exactly the 18.1 chars/sec Latin rate. The error
+concentrates in short chunks dense in acronyms, where a 25% overshoot is 0.7 seconds and
+nothing drifts. A 30s chunk dilutes them.
+
+Re-measure the table if you change the reference voice. Speaking rate is a property of
+the voice as much as of the script.
+
+## Where to cut
+
+A chunk boundary inserts a pause and re-conditions the voice, so it should land where a
+listener already expects one. In order of preference:
+
+1. **After a sentence ender.** `。！？；` and `!?;`, plus the marks the other scripts use:
+   the Devanagari danda `।`, the Arabic question mark `؟`, the Khmer khan `។`, the Myanmar
+   `။`, the Greek question mark `;` (U+037E, not the ASCII semicolon it resembles).
+2. **After a clause mark**, when one sentence alone overruns a whole chunk: `，、,：:—…`
+   and the Arabic comma `،`.
+3. **At a space**, which is the only break Thai and Lao offer — neither writes a
+   sentence-ending mark, so rule 1 almost never fires for them.
+4. **Anywhere**, for Chinese, Japanese and Khmer, which write no spaces at all. The cut is
+   nudged off the inside of a grapheme cluster so a combining mark never leads a chunk.
+
+Rules 2 and 3 only take a break in the back half of what fits. A comma near the start of a
+long sentence would otherwise strand a two-word chunk and leave the rest still oversized.
+
+`.` is in the ender set but is never trusted on sight: not before a digit (`3.14`), not
+after a single letter (`J. Smith`), not inside an acronym (`U.S.`), and not after a known
+abbreviation (`Dr.`). Every one of those rules fails toward *not* splitting, because a
+missed split falls through to rule 2 or 3, while a false split puts a 210ms pause and a
+fresh voice conditioning in the middle of a name.
+
+## What gets dropped before synthesis
+
+`sanitize_for_tts` filters by Unicode category, not by script. Control codes, format
+characters, private-use and unassigned code points, emoji and variation selectors have no
+pronunciation and corrupt the audio; every letter, mark, digit and punctuation mark
+survives. A script whitelist would have been wrong — the engine speaks thirty of them.
+
+Two exceptions, both learned the hard way:
+
+- **Newlines and tabs** are control characters. Dropping them welds the words on either
+  side into one.
+- **ZWJ and ZWNJ** are format characters, and so nominally droppable — but between two
+  letters they are orthography, and Devanagari, Khmer and Myanmar spell with them. They
+  are kept there and dropped elsewhere, which also strips the joiner left behind by a
+  removed emoji sequence.
+
+Variation selectors are the trap: `U+FE0F`, the character that turns `☂` into an emoji, is
+categorised as a nonspacing **mark**, not a format character, so a category filter keeps it
+unless you name it.
 
 ## Join with a trimmed edge, matched loudness, and one fixed pause
 
@@ -84,9 +192,9 @@ rather than inheriting 210.
 Chunks are synthesized serially, so the first one can play while the rest are still being
 made. Two things decide whether that works.
 
-**The opening chunk sets the latency.** Nothing is heard until it exists. `first_max_chars`
-(default 24) caps it, buying a first-audio latency of ~1.7s instead of ~11s, at the cost of
-one extra seam.
+**The opening chunk sets the latency.** Nothing is heard until it exists.
+`first_max_seconds` (default 4.5) caps it, buying a first-audio latency of ~1.7s instead of
+~11s, at the cost of one extra seam.
 
 **Every chunk must play for longer than the next one takes to make.** Synthesis runs at
 roughly 0.33x realtime, so a chunk can afford to be about 3x its predecessor before the
@@ -97,7 +205,7 @@ chunk 2 needed 10s to synthesize.
 Measured on a live engine with the ramp: first audio at 1.72s, and the buffer never ran dry.
 The margin is thinnest at the very first seam (+0.67s) and grows from there (+4s, +17s,
 +30s…). If that first seam ever stalls — a busy GPU, or the engine's `retry_badcase` firing
-— raise `first_max_chars` or lower `growth`.
+— raise `first_max_seconds` or lower `growth`.
 
 **The player must not block the producer.** `ffplay` drains its stdin at playback speed and
 the pipe holds well under a second of audio. Writing to it from the synthesis loop makes
