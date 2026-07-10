@@ -6,36 +6,65 @@ Two constants in `core/voxcore/` look arbitrary and are not. Both were measured.
 
 VoxCPM2 accepts a long passage in one call and will happily synthesize two minutes of
 audio from it. The audio degrades in a specific way: **the timbre drifts away from the
-reference voice as the generation runs.** Measuring speaker-embedding cosine similarity
-against the reference audio, in 6s windows:
+reference voice as the generation runs.**
 
-| chunking | chunk length | mean similarity | std | trend |
-|---|---|---|---|---|
-| 80 chars | 6–15s | 0.9113 | 0.018 | −0.002 / min |
-| **160 chars** | 19–28s | 0.9064 | **0.016** | −0.001 / min |
-| 240 chars | 38–43s | 0.8945 | 0.019 | −0.015 / min |
-| 320 chars | 18–55s | 0.8772 | 0.030 | −0.003 / min |
-| whole text | 119s | 0.8639 | 0.036 | **−0.060 / min** |
+The same 140s passage, synthesized under five chunk budgets, three times each. Every
+chunk is embedded in 6s windows and compared, by cosine, against the reference audio the
+voice was cloned from (ECAPA-TDNN speaker verification):
 
-The single-pass curve falls monotonically — 0.90 at the start, 0.77 by the two-minute
-mark. It is not noise. Pooling every arm by "seconds since this chunk began" shows the
-decay starts immediately and steepens past ~30s; there is no safe plateau to sit on.
+| `max_seconds` | chunks | windows | mean similarity | std | trend |
+|---|---|---|---|---|---|
+| 15 | 12 | 80 | 0.7464 | 0.045 | −0.004 / min |
+| **30** | 6 | 75 | 0.7214 | 0.047 | **+0.003 / min** |
+| 45 | 4 | 75 | 0.7148 | 0.052 | −0.000 / min |
+| 60 | 3 | 72 | 0.6999 | 0.051 | −0.013 / min |
+| whole text | 1 | 70 | 0.6349 | 0.095 | **−0.121 / min** |
+
+**Chunking resets the timbre.** Unchunked, similarity falls at −0.121/min and does not
+stop. At 30s the trend is flat — the last chunk sounds like the first. Past 45s the drift
+starts showing up inside the chunk.
+
+Pooling every window by "seconds since this chunk began" says where the decay lives:
+
+| since chunk began | 0–6s | 6–12s | 12–18s | 18–24s | 24–30s | 30–45s | 45–60s | 60s+ |
+|---|---|---|---|---|---|---|---|---|
+| mean similarity | 0.774 | 0.736 | 0.712 | 0.703 | 0.689 | 0.670 | 0.672 | 0.570 |
+
+It starts at the first window and never stops. **There is no safe plateau to sit on**, so
+a chunk's mean similarity necessarily falls with its length. Picking `max_seconds` is a
+trade against seams, not a threshold below which nothing goes wrong.
 
 The mechanism: the reference audio conditions the generation, but that conditioning is
 diluted with every autoregressive step, as the model increasingly attends to the audio
-it just produced. A chunk boundary re-injects the reference. It resets the timbre.
+it just produced. A chunk boundary re-injects the reference.
 
 So chunking is **not** a workaround for `max_len=4096` — 675 characters never came close
-to that ceiling. Chunk to hold the voice. 160 characters buys a flat curve with half the
-seams of an 80-character split; the 0.005 similarity the smaller chunks gain isn't worth
-doubling the joins.
+to that ceiling. Chunk to hold the voice.
 
-Prosody drifts too: the same text runs 13% shorter as one generation than as five
-chunks. The model speeds up as it loses the reference.
+> **On 15s vs 30s.** Halving the budget buys +0.025 similarity (≈5 standard errors) and
+> doubles the seams. An earlier measurement, on a different speaker encoder, put that gain
+> at 0.005 and judged it not worth the joins. Both numbers are real; **cosine scales are
+> not comparable across encoders** — the same cloned voice scores 0.911 on the old one and
+> 0.737 on ECAPA. Whether the gain is audible is a listening question, and nobody has done
+> that listening test. 30s stands until someone does.
 
-Send the chunks **serially**. The engine's peak VRAM grows with the length of a single
-generation and torch's caching allocator does not release it, so overlapping requests can
-walk a shared GPU into an out-of-memory 500.
+Prosody drifts too: the same text runs 15% shorter as one generation than when chunked
+(125s against 145–155s). The model speeds up as it loses the reference.
+
+### Send the chunks serially — and never send an unchunked one
+
+The engine's peak VRAM grows with the length of a single generation, and torch's caching
+allocator does not release it. Concurrent requests are the obvious hazard, but they are
+not the only one:
+
+**One long generation can poison the process.** A 140s single-pass generation succeeds on
+a freshly started engine and then makes the *next identical request* fail with a 500. It is
+deterministic, and backing off does not help — the memory is not in flight, it is cached.
+Only restarting the engine gets it back.
+
+So an unchunked long passage is not merely a quality problem, it is an availability one: it
+leaves the engine in a state that only a restart exits. Chunking bounds the peak and the
+question never arises.
 
 ## The budget is seconds, and a character is not a second
 

@@ -18,10 +18,11 @@ def stream_long(tts: TTSClient, text: str, voice: str | None = None, *,
                 on_chunk: OnChunk | None = None) -> Iterator[tuple[np.ndarray, int]]:
     """Yield `(samples, rate)` as each chunk finishes, ready to play or append.
 
-    Chunks go out one at a time on purpose. The engine's peak VRAM grows with the
-    length of a single generation and torch does not hand it back, so overlapping
-    requests can push a shared GPU host into an out-of-memory 500. Serial requests
-    also mean a listener hears the first chunk while the rest are still being made.
+    Chunks go out one at a time on purpose. The engine's peak VRAM grows with the length
+    of a single generation and torch does not hand it back, so overlapping requests can
+    push a shared GPU host into an out-of-memory 500 -- and so can one unchunked passage,
+    which leaves the engine 500ing until it is restarted. Serial requests also mean a
+    listener hears the first chunk while the rest are still being made.
 
     What comes out is already joined: each chunk is trimmed against its speech level,
     levelled to the first chunk, and preceded by one pause. See `audio.join_chunks`
