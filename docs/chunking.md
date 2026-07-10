@@ -10,7 +10,9 @@ reference voice as the generation runs.**
 
 The same 140s passage, synthesized under five chunk budgets, three times each. Every
 chunk is embedded in 6s windows and compared, by cosine, against the reference audio the
-voice was cloned from (ECAPA-TDNN speaker verification):
+voice was cloned from (ECAPA-TDNN speaker verification). `tools/measure_timbre_drift.py`
+runs it; re-run it when you change the reference voice, because the drift rate belongs to
+the voice as much as to the model:
 
 | `max_seconds` | chunks | windows | mean similarity | std | trend |
 |---|---|---|---|---|---|

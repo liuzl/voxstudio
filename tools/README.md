@@ -7,17 +7,35 @@ re-derived rather than trusted.
 | script | fits | re-run when |
 |---|---|---|
 | `measure_speech_rates.py` | `voxcore.text._CPS`, the per-script chars/sec table | you change the default reference voice, or the TTS model |
+| `measure_timbre_drift.py` | `chunking.max_seconds` — how fast the voice drifts within one generation | same |
 | `probe_spelled_out.py` | nothing — it documents a rule deliberately left unimplemented | same, if you want to re-check that decision |
 
-Both read `voxstudio.yaml` like the CLI does, and both send their requests serially: the
-engine's peak VRAM grows with the length of a single generation and torch does not hand it
-back, so overlapping requests can walk a shared GPU into an out-of-memory 500.
+All three read `voxstudio.yaml` like the CLI does, and all three send their requests
+serially: the engine's peak VRAM grows with the length of a single generation and torch
+does not hand it back, so overlapping requests can walk a shared GPU into an
+out-of-memory 500.
 
 ```bash
-uv run python tools/measure_speech_rates.py            # ~3 minutes, 39 generations
+uv run python tools/measure_speech_rates.py            # ~15 minutes, 195 generations
 uv run python tools/measure_speech_rates.py Han Latin  # or just the scripts you care about
 uv run python tools/probe_spelled_out.py               # ~30 seconds
 ```
+
+`measure_timbre_drift.py` is the odd one out: it needs a speaker-verification encoder,
+which the workspace lock does not carry. Run it in a throwaway environment, **on the engine
+host** — it moves half an hour of audio, and there is no reason to pull that across a
+network. Give the encoder the CPU; the GPU is holding the TTS model.
+
+```bash
+CUDA_VISIBLE_DEVICES= uv run --with speechbrain --with torch --with torchaudio \
+  python tools/measure_timbre_drift.py --reference ref.wav --voice alice
+uv run python tools/measure_timbre_drift.py --out drift.jsonl --report-only  # re-analyse
+```
+
+Its `whole` arm — one unchunked generation of the whole passage — may 500 partway through
+its repeats. That is the finding, not a bug: one long generation raises the engine's peak
+VRAM permanently, and the next identical request fails until the engine is restarted.
+Restart it and run again; every window is appended as it is measured, so a re-run resumes.
 
 `measure_speech_rates.py` prints a `_CPS = {...}` literal to paste into
 `core/voxcore/text.py`, and, before it, the error against a held-out paragraph per script
