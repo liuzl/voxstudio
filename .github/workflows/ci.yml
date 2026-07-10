@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typescript:
+    name: CLI (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Linux x64
+            runner: ubuntu-24.04
+            executable: ./apps/cli/dist/vox
+          - platform: macOS arm64
+            runner: macos-15
+            executable: ./apps/cli/dist/vox
+          - platform: Windows x64
+            runner: windows-2025
+            executable: ./apps/cli/dist/vox.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Install locked dependencies
+        run: bun ci
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Test TypeScript
+        run: bun run test:ts
+      - name: Build native executable
+        run: bun run build:cli
+      - name: Smoke test executable
+        shell: bash
+        env:
+          VOX: ${{ matrix.executable }}
+        run: |
+          set -euo pipefail
+          "$VOX" --help | grep -q "voxstudio: self-hosted voice I/O"
+          "$VOX" say --help | grep -q "usage: vox say"
+          "$VOX" voices --help | grep -q "usage: vox voices"
+          set +e
+          "$VOX" invalid-command >/dev/null 2>&1
+          status=$?
+          set -e
+          test "$status" -eq 2
+
+  python:
+    name: Python parity
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: 0.11.28
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Test Python
+        run: uv run pytest -q

@@ -28,30 +28,45 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | Path | What |
 |---|---|
 | `engines/voxcpm2-server/` | Our TTS engine wrapper — FastAPI over OpenBMB VoxCPM2 |
-| `core/` | `voxcore` — engine clients, chunking, long-text synthesis, voice profiles |
-| `apps/cli/` | `voxcli` — the `vox` command line |
+| `packages/` | Shared TypeScript contracts, clients, configuration, text, audio, and orchestration |
+| `platforms/bun/` | Filesystem, process, recording, and playback adapters for Bun apps |
+| `core/` | Transitional Python parity implementation and research-facing core |
+| `apps/cli/` | Compiled TypeScript `vox` CLI plus the transitional Python fallback |
 | `docs/` | Product design docs |
 
-`core/` and `apps/cli/` form a uv workspace and share one light, cross-platform lock.
-`engines/` is excluded from it: the TTS engine pins a CUDA torch build and resolves for
-x86_64 Linux only, and a shared lock would have to satisfy that and a laptop at once.
+The product workspace uses Bun 1.3.14. Shared packages use Web APIs and remain independent
+of Bun; operating-system integration stays in `platforms/`. The Python parity code forms a
+uv workspace with one light, cross-platform lock. `engines/` is excluded from it because
+the TTS engine pins a CUDA torch build and resolves for x86_64 Linux only.
 
 ## Quick start
 
 ```bash
 cp config.example.yaml voxstudio.yaml    # point it at your engines
-uv sync
-uv run vox health                        # probe all three engines
+bun ci
+bun run build:cli
 
-uv run vox say -f article.txt --voice alice -o out.wav
-uv run vox transcribe recording.wav
-uv run vox chat "用三句话介绍一下你自己" --speak -o reply.wav
-uv run vox voices add alice --audio sample.wav --text "参考音的逐字稿"
-uv run vox voices add bob --audio sample.wav --language zh  # transcript via ASR
-uv run vox voices add carol --record 15 --language zh       # record, transcribe, register
+./apps/cli/dist/vox health               # probe all three engines
+
+./apps/cli/dist/vox say -f article.txt --voice alice -o out.wav
+./apps/cli/dist/vox transcribe recording.wav
+./apps/cli/dist/vox chat "用三句话介绍一下你自己" --speak -o reply.wav
+./apps/cli/dist/vox voices add alice --audio sample.wav --text "参考音的逐字稿"
+./apps/cli/dist/vox voices add bob --audio sample.wav --language zh  # transcript via ASR
+./apps/cli/dist/vox voices add carol --record 15 --language zh       # record, ASR, register
 ```
 
-Microphone recording requires `ffmpeg`; pass `--device` to select a non-default input.
+The build produces one standalone executable containing the Bun runtime and TypeScript
+dependencies. Windows writes `apps/cli/dist/vox.exe`. Playback and microphone recording
+remain optional external integrations: install FFmpeg for `ffplay` and `ffmpeg`, and pass
+`--device` to select a non-default microphone.
+
+The Python CLI remains available as a migration fallback and parity oracle:
+
+```bash
+uv sync --locked
+uv run vox health
+```
 
 Long text is chunked at ~15 seconds of *estimated speech* — roughly 85 Chinese
 characters, or 275 English ones — and the pieces are joined by trimming each one's edge
@@ -71,11 +86,11 @@ it speaks. See `docs/chunking.md`.
 
 ## Status
 
-The engine backend, the core layer, and the CLI app are all verified end-to-end
-against live engines. Long-text synthesis streams: chunks are played and written as
-they finish, so `vox say` starts speaking on the first one. Web / MCP / desktop
-apps are not built yet, and neither is persona rewriting or a duplex
-conversation loop.
+The engine backend and compiled TypeScript CLI are verified end-to-end against live
+engines. Long-text synthesis streams, and named voices support file input, microphone
+recording, automatic ASR, and transcript editing. Native CI builds and executes the CLI on
+macOS arm64, Linux x64, and Windows x64. Signed release artifacts, Web, MCP, desktop, persona
+rewriting, and a duplex conversation loop are not built yet.
 
 ## Related
 
