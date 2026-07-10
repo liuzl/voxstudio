@@ -9,10 +9,13 @@
   },
   "dependencies": {
     "@voxstudio/clients": "workspace:*",
+    "@voxstudio/config": "workspace:*",
     "@voxstudio/contracts": "workspace:*",
-    "@voxstudio/platform-bun": "workspace:*"
+    "@voxstudio/orchestration": "workspace:*",
+    "@voxstudio/platform-bun": "workspace:*",
+    "@voxstudio/text": "workspace:*"
   },
   "devDependencies": {
-    "@voxstudio/config": "workspace:*"
+    "@voxstudio/audio": "workspace:*"
   }
 }

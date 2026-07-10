@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import { ConfigError, parseConfig } from "@voxstudio/config";
 import type { VoxConfig } from "@voxstudio/contracts";
 
@@ -38,4 +38,18 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<VoxCo
 
   const raw = path ? Bun.YAML.parse(await Bun.file(path).text()) : {};
   return parseConfig(raw, env);
+}
+
+export async function readStdinText(): Promise<string> {
+  return new Response(Bun.stdin.stream()).text();
+}
+
+export async function readFileBlob(path: string): Promise<Blob> {
+  const file = Bun.file(path);
+  if (!(await file.exists())) throw new TypeError(`file not found: ${path}`);
+  return new File([file], basename(path), { type: file.type });
+}
+
+export async function writeBytes(path: string, bytes: Uint8Array): Promise<void> {
+  await Bun.write(path === "-" ? Bun.stdout : path, bytes);
 }

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig } from "./index";
+import { loadConfig, readFileBlob, writeBytes } from "./index";
 
 async function directory(): Promise<string> {
   return mkdtemp(join(tmpdir(), "voxstudio-config-"));
@@ -39,5 +39,14 @@ engines:
     await expect(loadConfig({ explicit: "missing.yaml", cwd, home: cwd, env: {} }))
       .rejects.toThrow("config not found: missing.yaml");
     expect((await loadConfig({ cwd, home: cwd, env: {} })).engines.tts?.model).toBe("voxcpm2");
+  });
+
+  test("reads files as blobs and writes binary output", async () => {
+    const cwd = await directory();
+    const path = join(cwd, "audio.bin");
+    await writeBytes(path, new Uint8Array([1, 2, 3]));
+    expect(new Uint8Array(await (await readFileBlob(path)).arrayBuffer()))
+      .toEqual(new Uint8Array([1, 2, 3]));
+    await expect(readFileBlob(join(cwd, "missing.bin"))).rejects.toThrow("file not found");
   });
 });

@@ -46,4 +46,12 @@ describe("compiled CLI foundation", () => {
     expect(await run(["--help"], output.io, loader)).toBe(0);
     expect(await run([], output.io, loader)).toBe(2);
   });
+
+  test("async command failures are rendered without escaping the entry point", async () => {
+    const output = capture();
+    const loader = async () => parseConfig();
+    expect(await run(["transcribe", "/tmp/voxstudio-missing-audio.wav"], output.io, loader))
+      .toBe(1);
+    expect(output.err).toEqual(["file not found: /tmp/voxstudio-missing-audio.wav"]);
+  });
 });

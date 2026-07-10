@@ -3,27 +3,24 @@
 import { probeEngine, type Fetch } from "@voxstudio/clients";
 import type { HealthResult, VoxConfig } from "@voxstudio/contracts";
 import { loadConfig } from "@voxstudio/platform-bun";
+import { runChat } from "./commands/chat";
+import { runTranscribe } from "./commands/transcribe";
+import { consoleIo, type CliIo } from "./io";
 
-const usage = `usage: vox-ts [-h] [--config CONFIG] {health} ...
+const usage = `usage: vox [-h] [--config CONFIG] {health,transcribe,chat} ...
 
 voxstudio: self-hosted voice I/O
 
 commands:
   health           probe configured engines
+  transcribe       transcribe an audio file
+  chat             one-shot LLM turn
 
 options:
   -h, --help       show this help message and exit
   --config CONFIG  path to config yaml`;
 
-export interface CliIo {
-  out: (line: string) => void;
-  err: (line: string) => void;
-}
-
-const consoleIo: CliIo = {
-  out: (line) => console.log(line),
-  err: (line) => console.error(line),
-};
+export type { CliIo } from "./io";
 
 export async function runHealth(
   config: VoxConfig,
@@ -57,18 +54,24 @@ export async function run(
   if (args[0] === "--config") {
     explicit = args[1];
     if (!explicit) {
-      io.err("vox-ts: --config requires a path");
+      io.err("vox: --config requires a path");
       return 2;
     }
     args.splice(0, 2);
   }
-  if (args.length !== 1 || args[0] !== "health") {
+  const command = args.shift();
+  if (!command || !["health", "transcribe", "chat"].includes(command)) {
     io.err(usage);
     return 2;
   }
   try {
     const config = explicit === undefined ? await configLoader() : await configLoader({ explicit });
-    return runHealth(config, io, fetch);
+    if (command === "health") {
+      if (args.length) throw new TypeError("health: no arguments expected");
+      return runHealth(config, io, fetch);
+    }
+    if (command === "transcribe") return await runTranscribe(args, config, io, fetch);
+    return await runChat(args, config, io, fetch);
   } catch (error) {
     io.err(error instanceof Error ? error.message : String(error));
     return 1;
