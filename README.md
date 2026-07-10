@@ -47,6 +47,7 @@ uv run vox say -f article.txt --voice alice -o out.wav
 uv run vox transcribe recording.wav
 uv run vox chat "用三句话介绍一下你自己" --speak -o reply.wav
 uv run vox voices add alice --audio sample.wav --text "参考音的逐字稿"
+uv run vox voices add bob --audio sample.wav --language zh  # transcript via ASR
 ```
 
 Long text is chunked at ~15 seconds of *estimated speech* — roughly 85 Chinese
