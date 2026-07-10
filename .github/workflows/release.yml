@@ -24,6 +24,11 @@ jobs:
             slug: macos-arm64
             executable: ./apps/cli/dist/vox
             archive: tar
+          - platform: macOS x64
+            runner: macos-13
+            slug: macos-x64
+            executable: ./apps/cli/dist/vox
+            archive: tar
           - platform: Linux x64
             runner: ubuntu-24.04
             slug: linux-x64
