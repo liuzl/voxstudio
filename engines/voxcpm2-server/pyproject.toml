@@ -13,7 +13,7 @@ dependencies = [
     # torch arrives via voxcpm, but pin it: it is the ABI-critical, multi-GB
     # dependency, and this is the version the service is validated against.
     # The default PyPI linux wheel is already a CUDA 13 build (nvidia-cudnn-cu13),
-    # which is what sz-ws runs -- no download.pytorch.org index needed.
+    # which is what our GPU host runs -- no download.pytorch.org index needed.
     "torch==2.12.0",
     "torchaudio==2.11.0",
 ]

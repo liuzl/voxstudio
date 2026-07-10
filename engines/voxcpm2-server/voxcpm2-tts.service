@@ -7,6 +7,12 @@ After=network-online.target
 WorkingDirectory=%h/voxstudio/engines/voxcpm2-server
 Environment=VOXCPM2_BASE=%h/tts-eval-voxcpm2
 Environment=PYTHONUNBUFFERED=1
+# The caching allocator's reserved pool ratchets up with the length of one generation and
+# never comes back down, which a co-tenant model on the same card pays for. Expandable
+# segments map and unmap on demand instead of reserving fixed-size blocks, cutting the pool
+# a long generation needs by ~10x. Must be set before torch initialises CUDA, which is why
+# it lives here and not in the code. Pairs with the `empty_cache()` in `_generate`.
+Environment=PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # Run the interpreter that `uv sync --frozen` installed, directly. Do NOT wrap this
 # in `uv run`: under systemd, uv swallows the child's stdout and stderr, so uvicorn's
 # access log and any traceback never reach the journal. uv installs; it does not launch.

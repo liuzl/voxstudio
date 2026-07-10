@@ -72,14 +72,30 @@ The engine's peak VRAM grows with the length of a single generation, and torch's
 allocator does not release it. Concurrent requests are the obvious hazard, but they are
 not the only one:
 
-**One long generation can poison the process.** A 140s single-pass generation succeeds on
-a freshly started engine and then makes the *next identical request* fail with a 500. It is
-deterministic, and backing off does not help — the memory is not in flight, it is cached.
-Only restarting the engine gets it back.
+**One long generation used to poison the process.** A 140s single-pass generation would
+succeed on a freshly started engine and then make the *next identical request* fail with a
+500. It was deterministic, and backing off did not help — the memory was not in flight, it
+was cached. Only restarting the engine got it back.
 
-So an unchunked long passage is not merely a quality problem, it is an availability one: it
-leaves the engine in a state that only a restart exits. Chunking bounds the peak and the
-question never arises.
+That is fixed in `engines/voxcpm2-server`, and the fix took both halves. Measured as the
+allocator's reserved pool, per second of generated audio:
+
+| | in flight | left behind |
+|---|---|---|
+| stock | 1x | 1x |
+| `+ torch.cuda.empty_cache()` after each generation | 1x | **1/40** |
+| `+ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` | **1/10** | 1/37 |
+
+`empty_cache()` runs *after* a generation, so it hands back what was cached but cannot
+bound the peak while the generation is running — and that peak is what returns the 500.
+Expandable segments map and unmap on demand rather than reserving fixed-size blocks, which
+is what collapses the peak. Neither alone is enough.
+
+Verified end to end against a live engine sharing its GPU with a resident LLM: a two-minute
+single-pass generation completes, and the co-tenant never restarts. Before, it did.
+
+Chunk anyway. The peak is bounded now, but a 140s single generation still drifts away from
+the reference voice, still runs 15% fast, and still cannot start playing until it finishes.
 
 ## The budget is seconds, and a character is not a second
 

@@ -11,9 +11,8 @@ re-derived rather than trusted.
 | `probe_spelled_out.py` | nothing — it documents a rule deliberately left unimplemented | same, if you want to re-check that decision |
 
 All three read `voxstudio.yaml` like the CLI does, and all three send their requests
-serially: the engine's peak VRAM grows with the length of a single generation and torch
-does not hand it back, so overlapping requests can walk a shared GPU into an
-out-of-memory 500.
+serially: the engine's peak VRAM grows with the length of a single generation, so
+overlapping requests can still walk a shared GPU into an out-of-memory 500.
 
 ```bash
 uv run python tools/measure_speech_rates.py            # ~15 minutes, 195 generations
@@ -32,10 +31,12 @@ CUDA_VISIBLE_DEVICES= uv run --with speechbrain --with torch --with torchaudio \
 uv run python tools/measure_timbre_drift.py --out drift.jsonl --report-only  # re-analyse
 ```
 
-Its `whole` arm — one unchunked generation of the whole passage — may 500 partway through
-its repeats. That is the finding, not a bug: one long generation raises the engine's peak
-VRAM permanently, and the next identical request fails until the engine is restarted.
-Restart it and run again; every window is appended as it is measured, so a re-run resumes.
+Its `whole` arm — one unchunked generation of the whole passage — used to 500 partway
+through its repeats, because one long generation raised the engine's peak VRAM permanently
+and the next identical request failed until a restart. `engines/voxcpm2-server` now calls
+`empty_cache()` after each generation and runs under `expandable_segments` (see
+`docs/chunking.md`), which holds the peak flat. Against an engine without those, expect the
+500 — every window is appended as it is measured, so a re-run resumes.
 
 `measure_speech_rates.py` prints a `_CPS = {...}` literal to paste into
 `core/voxcore/text.py`, and, before it, the error against a held-out paragraph per script

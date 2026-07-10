@@ -65,4 +65,8 @@ Notes:
 
 - Binds `0.0.0.0:8880`.
 - Single GPU model; a `threading.Lock` serializes generation.
-- ~7G VRAM resident, so it can comfortably share a typical 24GB GPU with another model.
+- ~7G VRAM resident, so it can comfortably share a typical 24GB GPU with another model. It
+  **stays** that way: `_generate` returns the allocator's cache after each generation, and
+  the unit sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` so a long generation does
+  not ratchet the reserved pool up and keep it there. Without both, one long generation
+  raises the pool ~10x and never gives it back. See `docs/chunking.md`.

@@ -14,6 +14,7 @@ voice 取值: clone(默认音) / design(零样本,text 前加 (English 描述)) 
 import io, os, re, json, threading, tempfile, subprocess, shutil
 from datetime import datetime, timezone
 import soundfile as sf
+import torch
 from fastapi import FastAPI, Response, Form, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -37,6 +38,9 @@ print(f"VoxCPM2 loaded, sample_rate={SR}", flush=True)
 lock = threading.Lock()
 app = FastAPI()
 
+_CUDA = torch.cuda.is_available()
+
+
 def _generate(text, ref, cfg, ts, prompt=None):
     """prompt = (wav_path, transcript). Conditions on an aligned text/audio example, which
     the model follows for tempo; `ref` alone only carries timbre. Output excludes the prompt."""
@@ -44,6 +48,14 @@ def _generate(text, ref, cfg, ts, prompt=None):
     with lock:
         wav = model.generate(text=text, reference_wav_path=ref, cfg_value=cfg,
                              inference_timesteps=ts, **kw)
+        if _CUDA:
+            # Peak VRAM grows with the length of one generation, and the caching allocator
+            # keeps that peak forever -- a co-tenant model on the same card never gets it
+            # back. Hand it over here, while we still hold the lock and nothing is in
+            # flight. Pair with PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True (see the
+            # systemd unit): this call returns what was cached *after* a generation, but
+            # only expandable segments bound the peak *during* one.
+            torch.cuda.empty_cache()
     buf = io.BytesIO(); sf.write(buf, wav, SR, format="WAV"); buf.seek(0)
     return buf.read()
 
