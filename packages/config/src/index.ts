@@ -5,11 +5,10 @@ import type {
   TtsDefaults,
   VoxConfig,
 } from "@voxstudio/contracts";
+import { sentenceEnders } from "@voxstudio/text";
 
 type Environment = Readonly<Record<string, string | undefined>>;
 type UnknownRecord = Record<string, unknown>;
-
-export const sentenceEnders = "。！？；!?;.;।॥؟۔។៕။";
 
 const defaultEngines: Record<string, ResolvedEngineConfig> = {
   tts: { baseUrl: "http://127.0.0.1:8880", model: "voxcpm2", apiKey: "", healthPath: "/health", maxTokens: 4096 },

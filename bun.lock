@@ -21,10 +21,15 @@
       "version": "0.1.0",
       "dependencies": {
         "@voxstudio/contracts": "workspace:*",
+        "@voxstudio/text": "workspace:*",
       },
     },
     "packages/contracts": {
       "name": "@voxstudio/contracts",
+      "version": "0.1.0",
+    },
+    "packages/text": {
+      "name": "@voxstudio/text",
       "version": "0.1.0",
     },
   },
@@ -38,6 +43,8 @@
     "@voxstudio/config": ["@voxstudio/config@workspace:packages/config"],
 
     "@voxstudio/contracts": ["@voxstudio/contracts@workspace:packages/contracts"],
+
+    "@voxstudio/text": ["@voxstudio/text@workspace:packages/text"],
 
     "bun-types": ["bun-types@1.3.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-4N0ig0fEomHt5R0KCFWjovxow98rIoRwKolrYdCcknNwMekCXRnWEUvgu5soYV8QXtVsrUD8B95MBOZGPvr6KQ=="],
 

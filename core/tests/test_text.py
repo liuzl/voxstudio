@@ -1,4 +1,37 @@
+import json
+from pathlib import Path
+
+import pytest
+
 from voxcore import chunk_text, est_seconds, sanitize_for_tts
+
+FIXTURES = Path(__file__).parents[2] / "fixtures" / "text"
+
+
+def fixture(name):
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("case", fixture("sanitize.json"), ids=lambda case: case["name"])
+def test_shared_sanitize_contract(case):
+    clean, dropped = sanitize_for_tts(case["input"])
+    assert {"clean": clean, "dropped": dropped} == {
+        "clean": case["clean"], "dropped": case["dropped"],
+    }
+
+
+@pytest.mark.parametrize("case", fixture("estimate.json"), ids=lambda case: case["name"])
+def test_shared_estimate_contract(case):
+    expected = est_seconds(case["sameAs"]) if "sameAs" in case else case["expected"]
+    assert est_seconds(case["input"]) == pytest.approx(expected, abs=1e-12)
+
+
+@pytest.mark.parametrize("case", fixture("chunks.json"), ids=lambda case: case["name"])
+def test_shared_chunk_contract(case):
+    cap = est_seconds(case["capText"]) if "capText" in case else case["maxSeconds"]
+    first = (est_seconds(case["firstCapText"]) if "firstCapText" in case
+             else case.get("firstMaxSeconds"))
+    assert chunk_text(case["input"], cap, first_max_seconds=first) == case["expected"]
 
 # Chunking is budgeted in seconds, so the tests express their caps in seconds too --
 # via `est_seconds` of the text they expect to fit, rather than a magic float.

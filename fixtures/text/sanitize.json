@@ -1,0 +1,11 @@
+[
+  {"name": "multiple scripts", "input": "Chúng ta Давайте لنلتق चलो 만나기로 Grüße Ας", "clean": "Chúng ta Давайте لنلتق चलो 만나기로 Grüße Ας", "dropped": []},
+  {"name": "CJK ASCII and punctuation", "input": "你好，world 2026！“引号”…—·", "clean": "你好，world 2026！“引号”…—·", "dropped": []},
+  {"name": "emoji and control", "input": "好👍的\u0000话", "clean": "好的话", "dropped": ["👍", "\u0000"]},
+  {"name": "emoji presentation selector", "input": "下雨☂️了", "clean": "下雨了", "dropped": ["☂", "️"]},
+  {"name": "newlines preserve word boundaries", "input": "hello\nworld", "clean": "hello\nworld", "dropped": []},
+  {"name": "Python-only whitespace controls", "input": "a\u0085b\u001cc", "clean": "a\u0085b\u001cc", "dropped": []},
+  {"name": "orthographic joiner", "input": "क्‍ष", "clean": "क्‍ष", "dropped": []},
+  {"name": "emoji joiner", "input": "👨‍👩", "clean": "", "dropped": ["👨", "‍", "👩"]},
+  {"name": "supplementary variation selector", "input": "字󠄀", "clean": "字", "dropped": ["󠄀"]}
+]

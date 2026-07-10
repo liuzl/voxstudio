@@ -1,0 +1,83 @@
+[
+  {
+    "name": "break after sentence enders",
+    "input": "第一句。第二句。第三句。",
+    "capText": "第一句。",
+    "expected": ["第一句。", "第二句。", "第三句。"]
+  },
+  {
+    "name": "greedily pack sentences",
+    "input": "甲。乙。丙。丁。",
+    "capText": "甲。乙。丙。",
+    "expected": ["甲。乙。丙。", "丁。"]
+  },
+  {
+    "name": "hard split unspaced Han",
+    "input": "啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊啊",
+    "capText": "啊啊啊啊啊啊啊啊啊啊",
+    "expected": ["啊啊啊啊啊啊啊啊啊啊", "啊啊啊啊啊啊啊啊啊啊", "啊啊啊啊啊"]
+  },
+  {
+    "name": "Latin word boundaries",
+    "input": "the quick brown fox jumps over the lazy dog and keeps running well past dusk",
+    "capText": "the quick brown fox",
+    "expected": ["the quick brown", " fox jumps over", " the lazy dog and", " keeps running", " well past dusk"]
+  },
+  {
+    "name": "Thai space and hard boundaries",
+    "input": "พรุ่งนี้บ่ายเรามาเจอกัน ถ้ามีธุระด่วนช่วยบอกล่วงหน้า เราเลื่อนไปตอนเย็นก็ได้",
+    "capText": "พรุ่งนี้บ่ายเรามาเจอกัน",
+    "expected": ["พรุ่งนี้บ่ายเรามาเจอกัน", " ถ้ามีธุระด่วนช่วยบอกล่", "วงหน้า เราเลื่อนไปตอนเ", "ย็นก็ได้"]
+  },
+  {
+    "name": "period exceptions",
+    "input": "Pi is 3.14 exactly. Dr. Chen agrees.",
+    "capText": "Pi is 3.14 exactly.",
+    "expected": ["Pi is 3.14 exactly.", " Dr. Chen agrees."]
+  },
+  {
+    "name": "acronym period is not a sentence end",
+    "input": "She works at the U.S. mission today.",
+    "maxSeconds": 60,
+    "expected": ["She works at the U.S. mission today."]
+  },
+  {
+    "name": "short first chunk",
+    "input": "啊啊啊啊啊啊啊啊啊",
+    "capText": "啊啊啊啊啊啊啊啊啊啊",
+    "firstCapText": "啊啊啊啊",
+    "expected": ["啊啊啊啊", "啊啊啊啊啊"]
+  },
+  {
+    "name": "first cap is clamped to the maximum",
+    "input": "甲。甲。甲。",
+    "capText": "甲。",
+    "firstMaxSeconds": 60,
+    "expected": ["甲。", "甲。", "甲。"]
+  },
+  {
+    "name": "leading danda inherits following script",
+    "input": "।इआ।इ। ।अआ",
+    "maxSeconds": 2,
+    "firstMaxSeconds": 0.8,
+    "expected": ["।इआ।इ। ।अआ"]
+  },
+  {
+    "name": "whitespace normalization",
+    "input": "Hello world!  Bye?",
+    "maxSeconds": 60,
+    "expected": ["Hello world! Bye?"]
+  },
+  {
+    "name": "empty text",
+    "input": "   \n ",
+    "maxSeconds": 15,
+    "expected": []
+  },
+  {
+    "name": "supplementary Han is never split as UTF-16",
+    "input": "𠀀𠀀𠀀",
+    "capText": "𠀀",
+    "expected": ["𠀀", "𠀀", "𠀀"]
+  }
+]

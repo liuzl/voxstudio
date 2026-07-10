@@ -1,0 +1,7 @@
+[
+  {"name": "Han measured rate", "input": "啊啊啊啊啊啊啊啊啊啊", "expected": 1.7543859649122806},
+  {"name": "Latin measured rate", "input": "aaaaaaaaaaaaaaaaaa", "expected": 0.9836065573770494},
+  {"name": "whitespace collapses", "input": "hello   \n world", "sameAs": "hello world"},
+  {"name": "leading danda inherits Devanagari", "input": "।इआ।इ। ।अआ", "expected": 0.6944444444444445},
+  {"name": "supplementary Han is one character", "input": "𠀀", "expected": 0.17543859649122806}
+]
