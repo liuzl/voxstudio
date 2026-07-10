@@ -15,6 +15,7 @@ OnChunk = Callable[[int, int, str], None]
 def stream_long(tts: TTSClient, text: str, voice: str | None = None, *,
                 chunking: ChunkCfg | None = None,
                 cfg_value: float | None = None, timesteps: int | None = None,
+                input_prefix: str = "",
                 on_chunk: OnChunk | None = None) -> Iterator[tuple[np.ndarray, int]]:
     """Yield `(samples, rate)` as each chunk finishes, ready to play or append.
 
@@ -42,7 +43,7 @@ def stream_long(tts: TTSClient, text: str, voice: str | None = None, *,
     for i, chunk in enumerate(chunks):
         if on_chunk:
             on_chunk(i, len(chunks), chunk)
-        samples, rate = read_wav(tts.speech(chunk, voice, cfg_value=cfg_value,
+        samples, rate = read_wav(tts.speech(input_prefix + chunk, voice, cfg_value=cfg_value,
                                             timesteps=timesteps))
         if sample_rate is not None and rate != sample_rate:
             raise ValueError(f"chunks disagree on sample rate: {sample_rate}, {rate}")
@@ -63,10 +64,11 @@ def stream_long(tts: TTSClient, text: str, voice: str | None = None, *,
 def synthesize_long(tts: TTSClient, text: str, voice: str | None = None, *,
                     chunking: ChunkCfg | None = None,
                     cfg_value: float | None = None, timesteps: int | None = None,
+                    input_prefix: str = "",
                     on_chunk: OnChunk | None = None) -> bytes:
     """Collect `stream_long` into one WAV."""
     pieces = list(stream_long(tts, text, voice, chunking=chunking, cfg_value=cfg_value,
-                              timesteps=timesteps, on_chunk=on_chunk))
+                              timesteps=timesteps, input_prefix=input_prefix, on_chunk=on_chunk))
     if not pieces:
         raise ValueError("engine returned no audio")
     rate = pieces[0][1]

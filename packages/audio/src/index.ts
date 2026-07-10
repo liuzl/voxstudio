@@ -97,12 +97,14 @@ export function readWav(input: ArrayBuffer | Uint8Array): PcmAudio {
   return { samples, sampleRate };
 }
 
-export function writeWav(samples: Float32Array, sampleRate: number): Uint8Array {
+export function wavHeader(sampleRate: number, sampleCount: number): Uint8Array {
   if (!Number.isInteger(sampleRate) || sampleRate <= 0) throw new TypeError("invalid sample rate");
-  const output = new Uint8Array(44 + samples.length * 2);
+  if (!Number.isInteger(sampleCount) || sampleCount < 0) throw new TypeError("invalid sample count");
+  if (36 + sampleCount * 2 > 0xffff_ffff) throw new TypeError("PCM16 WAV exceeds the RIFF size limit");
+  const output = new Uint8Array(44);
   const view = new DataView(output.buffer);
   writeAscii(view, 0, "RIFF");
-  view.setUint32(4, output.length - 8, true);
+  view.setUint32(4, 36 + sampleCount * 2, true);
   writeAscii(view, 8, "WAVE");
   writeAscii(view, 12, "fmt ");
   view.setUint32(16, 16, true);
@@ -113,11 +115,26 @@ export function writeWav(samples: Float32Array, sampleRate: number): Uint8Array 
   view.setUint16(32, 2, true);
   view.setUint16(34, 16, true);
   writeAscii(view, 36, "data");
-  view.setUint32(40, samples.length * 2, true);
+  view.setUint32(40, sampleCount * 2, true);
+  return output;
+}
+
+export function encodePcm16(samples: Float32Array): Uint8Array {
+  const output = new Uint8Array(samples.length * 2);
+  const view = new DataView(output.buffer);
   for (let index = 0; index < samples.length; index += 1) {
     const sample = Math.max(-1, Math.min(32767 / 32768, samples[index] as number));
-    view.setInt16(44 + index * 2, Math.round(sample * 32768), true);
+    view.setInt16(index * 2, Math.round(sample * 32768), true);
   }
+  return output;
+}
+
+export function writeWav(samples: Float32Array, sampleRate: number): Uint8Array {
+  const header = wavHeader(sampleRate, samples.length);
+  const pcm = encodePcm16(samples);
+  const output = new Uint8Array(header.length + pcm.length);
+  output.set(header);
+  output.set(pcm, header.length);
   return output;
 }
 

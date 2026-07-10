@@ -67,6 +67,7 @@
       "name": "@voxstudio/platform-bun",
       "version": "0.1.0",
       "dependencies": {
+        "@voxstudio/audio": "workspace:*",
         "@voxstudio/config": "workspace:*",
         "@voxstudio/contracts": "workspace:*",
       },

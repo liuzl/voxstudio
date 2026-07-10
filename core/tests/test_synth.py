@@ -84,3 +84,9 @@ def test_a_sample_rate_change_is_rejected():
 
     with pytest.raises(ValueError, match="sample rate"):
         list(stream_long(ChangingTTS(), "甲。乙。", chunking=CFG))
+
+
+def test_an_input_prefix_is_applied_to_every_chunk_but_not_the_budget():
+    tts = FakeTTS()
+    list(stream_long(tts, "甲。乙。", chunking=CFG, input_prefix="(calm voice)"))
+    assert tts.calls == ["(calm voice)甲。", "(calm voice)乙。"]

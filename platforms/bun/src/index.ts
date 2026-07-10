@@ -3,6 +3,8 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 import { ConfigError, parseConfig } from "@voxstudio/config";
 import type { VoxConfig } from "@voxstudio/contracts";
 
+export { FfplaySink, TeeSink, WavFileSink, type PcmSink } from "./audio-sinks";
+
 type Environment = Readonly<Record<string, string | undefined>>;
 
 export interface ConfigLoadOptions {
@@ -42,6 +44,12 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<VoxCo
 
 export async function readStdinText(): Promise<string> {
   return new Response(Bun.stdin.stream()).text();
+}
+
+export async function readTextFile(path: string): Promise<string> {
+  const file = Bun.file(path);
+  if (!(await file.exists())) throw new TypeError(`file not found: ${path}`);
+  return file.text();
 }
 
 export async function readFileBlob(path: string): Promise<Blob> {

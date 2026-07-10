@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@voxstudio/audio": "workspace:*",
     "@voxstudio/config": "workspace:*",
     "@voxstudio/contracts": "workspace:*"
   }

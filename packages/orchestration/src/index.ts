@@ -29,12 +29,13 @@ export interface SynthesisOptions {
   voice?: string;
   cfgValue?: number;
   timesteps?: number;
+  promptPrefix?: string;
   onChunk?: OnChunk;
 }
 
 function speechInput(text: string, options: SynthesisOptions): SpeechInput {
   return {
-    input: text,
+    input: `${options.promptPrefix ?? ""}${text}`,
     voice: options.voice ?? options.ttsDefaults.voice,
     response_format: options.ttsDefaults.responseFormat,
     cfg_value: options.cfgValue ?? options.ttsDefaults.cfgValue,

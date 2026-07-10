@@ -7,6 +7,7 @@ import {
   speechLevelDb,
   trimEdgeSilence,
   writeWav,
+  wavHeader,
 } from "./index";
 
 function tone(
@@ -83,6 +84,7 @@ describe("WAV codec", () => {
   test("invalid input and sample rates are rejected", () => {
     expect(() => readWav(new Uint8Array([1, 2, 3]))).toThrow("RIFF/WAVE");
     expect(() => writeWav(new Float32Array(), 0)).toThrow("sample rate");
+    expect(() => wavHeader(48_000, 0x8000_0000)).toThrow("RIFF size limit");
   });
 
   test("stereo float32 is downmixed to mono", () => {

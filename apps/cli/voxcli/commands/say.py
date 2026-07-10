@@ -38,9 +38,10 @@ def run(args, cfg) -> int:
               f"{''.join(sorted(set(dropped)))}", file=sys.stderr)
 
     voice = args.voice
+    input_prefix = ""
     if args.design:
-        # The engine reads the parenthesised description off the front of the input.
-        text = f"({args.design}){text}"
+        # Every independently generated chunk needs the voice description.
+        input_prefix = f"({args.design})"
         voice = "design"
 
     def progress(i, total, chunk):
@@ -56,6 +57,7 @@ def run(args, cfg) -> int:
     with TTSClient(cfg.engine("tts"), cfg.tts_defaults) as tts:
         pieces = stream_long(tts, text, voice, chunking=cfg.chunking,
                              cfg_value=args.cfg_value, timesteps=args.timesteps,
+                             input_prefix=input_prefix,
                              on_chunk=None if args.quiet else progress)
         sink = Tee(
             PlayerSink() if args.play else None,

@@ -4,15 +4,17 @@ import { probeEngine, type Fetch } from "@voxstudio/clients";
 import type { HealthResult, VoxConfig } from "@voxstudio/contracts";
 import { loadConfig } from "@voxstudio/platform-bun";
 import { runChat } from "./commands/chat";
+import { runSay } from "./commands/say";
 import { runTranscribe } from "./commands/transcribe";
 import { consoleIo, type CliIo } from "./io";
 
-const usage = `usage: vox [-h] [--config CONFIG] {health,transcribe,chat} ...
+const usage = `usage: vox [-h] [--config CONFIG] {health,say,transcribe,chat} ...
 
 voxstudio: self-hosted voice I/O
 
 commands:
   health           probe configured engines
+  say              synthesize speech from text
   transcribe       transcribe an audio file
   chat             one-shot LLM turn
 
@@ -60,7 +62,7 @@ export async function run(
     args.splice(0, 2);
   }
   const command = args.shift();
-  if (!command || !["health", "transcribe", "chat"].includes(command)) {
+  if (!command || !["health", "say", "transcribe", "chat"].includes(command)) {
     io.err(usage);
     return 2;
   }
@@ -71,6 +73,7 @@ export async function run(
       return runHealth(config, io, fetch);
     }
     if (command === "transcribe") return await runTranscribe(args, config, io, fetch);
+    if (command === "say") return await runSay(args, config, io, fetch);
     return await runChat(args, config, io, fetch);
   } catch (error) {
     io.err(error instanceof Error ? error.message : String(error));
