@@ -25,7 +25,7 @@ jobs:
             executable: ./apps/cli/dist/vox
             archive: tar
           - platform: macOS x64
-            runner: macos-13
+            runner: macos-15-intel
             slug: macos-x64
             executable: ./apps/cli/dist/vox
             archive: tar
