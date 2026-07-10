@@ -1,6 +1,6 @@
 # voxstudio
 
-Self-hosted, **Chinese-first voice I/O studio**. ASR + LLM + TTS engines behind **one OpenAI-compatible contract**, with a core orchestration layer and thin surfaces (CLI / Web / MCP / mobile client).
+Self-hosted, **Chinese-first voice I/O studio**. ASR + LLM + TTS engines behind **one OpenAI-compatible contract**, with a core orchestration layer and thin apps (CLI / Web / MCP / mobile client).
 
 > Design lineage: benchmarked against [VoxWeaver Studio](https://github.com/nicekate/VOXWEAVER-STUDIO) and [Voicebox](https://github.com/jamiepine/voicebox). Focus = **strong Chinese engines, fully self-hosted, one swappable engine contract**.
 
@@ -29,10 +29,10 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 |---|---|
 | `engines/voxcpm2-server/` | Our TTS engine wrapper — FastAPI over OpenBMB VoxCPM2 |
 | `core/` | `voxcore` — engine clients, chunking, long-text synthesis, voice profiles |
-| `surfaces/cli/` | `voxcli` — the `vox` command line |
+| `apps/cli/` | `voxcli` — the `vox` command line |
 | `docs/` | Product design docs |
 
-`core/` and `surfaces/cli/` form a uv workspace and share one light, cross-platform lock.
+`core/` and `apps/cli/` form a uv workspace and share one light, cross-platform lock.
 `engines/` is excluded from it: the TTS engine pins a CUDA torch build and resolves for
 x86_64 Linux only, and a shared lock would have to satisfy that and a laptop at once.
 
@@ -67,10 +67,10 @@ it speaks. See `docs/chunking.md`.
 
 ## Status
 
-The engine backend, the core layer, and the CLI surface are all verified end-to-end
+The engine backend, the core layer, and the CLI app are all verified end-to-end
 against live engines. Long-text synthesis streams: chunks are played and written as
 they finish, so `vox say` starts speaking on the first one. Web / MCP / desktop
-surfaces are not built yet, and neither is persona rewriting or a duplex
+apps are not built yet, and neither is persona rewriting or a duplex
 conversation loop.
 
 ## Related

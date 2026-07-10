@@ -630,7 +630,7 @@ wheels = [
 [[package]]
 name = "voxcli"
 version = "0.1.0"
-source = { editable = "surfaces/cli" }
+source = { editable = "apps/cli" }
 dependencies = [
     { name = "voxcore" },
 ]

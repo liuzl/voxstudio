@@ -4,7 +4,7 @@
 
 ## 仓边界（SoT）
 
-- **本仓**：我们自己的引擎 wrapper（`engines/`）+ 核心编排层（`core/`）+ 表面（`surfaces/`）+ 产品设计文档（`docs/`）。
+- **本仓**：我们自己的引擎 wrapper（`engines/`）+ 核心编排层（`core/`）+ 应用入口（`apps/`）+ 产品设计文档（`docs/`）。
 - **不进本仓**：上游 C++ 引擎源码（`liuzl/VoxCPM.cpp`、`mudler/parakeet.cpp` —— 本仓只放我们的 wrapper/适配/部署模板）；网关部署、运维时间线、机器清单等归各自的内部仓。
 
 ## 维护约定
