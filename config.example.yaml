@@ -28,9 +28,9 @@ tts_defaults:
   response_format: wav
 
 chunking:
-  # The budget is estimated speech duration, not characters -- 170 Chinese characters
-  # and 550 English ones both take about 30s to say. See docs/chunking.md.
-  max_seconds: 30.0               # timbre drifts within a longer single generation
+  # The budget is estimated speech duration, not characters -- 85 Chinese characters
+  # and 275 English ones both take about 15s to say. See docs/chunking.md.
+  max_seconds: 15.0               # timbre drifts within a longer single generation
   first_max_seconds: 4.5          # short opening chunk: streamed audio starts sooner
   growth: 2.0                     # then ramp up; playback must outlast the next synthesis
   # Sentence enders across the engine's 30 languages. `.` is checked for decimals,

@@ -156,9 +156,6 @@ def est_seconds(text: str) -> float:
     return sum(_char_seconds(" ".join(text.split())))
 
 
-# `growth ** n` past this has long since exceeded any `max_seconds`, and overflows at 1024.
-_MAX_RAMP_STEPS = 64
-
 # A span is `prefix[b] - prefix[a]`, which is not bit-identical to summing `costs[a:b]`:
 # subtracting two partial sums loses the low bits. Without slack, whether a sentence fits
 # its budget would depend on how much rounding error the document accumulated before it --
@@ -306,22 +303,29 @@ def _cut_index(text: str, prefix: list[float], pos: int, end: int, cap: float) -
     return _break_index(text, pos, hi)
 
 
-def chunk_text(text: str, max_seconds: float = 30.0, enders: str = SENTENCE_ENDERS,
+def chunk_text(text: str, max_seconds: float = 15.0, enders: str = SENTENCE_ENDERS,
                first_max_seconds: float | None = None, growth: float = 2.0) -> list[str]:
     """Split into chunks of at most `max_seconds` of estimated speech.
 
     The bound is on *duration*, not on characters: a single TTS generation drifts away
-    from the reference voice as it runs -- speaker similarity decays monotonically,
-    noticeably past ~40s -- and 170 Chinese characters and 550 English ones both take
-    about 30 seconds to say. It is not about any token limit. Each chunk re-conditions on
-    the reference audio, which resets the timbre.
+    from the reference voice as it runs, from the first second and with no plateau, and
+    85 Chinese characters and 275 English ones both take about 15 seconds to say. It is
+    not about any token limit. Each chunk re-conditions on the reference audio, which
+    resets the timbre. Shortening the chunk buys similarity and pays in seams; 15s is
+    where a listener judged the trade. See `docs/chunking.md`.
 
     `first_max_seconds` caps the opening chunk, and each chunk after it may be `growth`
-    times the last, up to `max_seconds`. That ramp exists for streaming: the listener
-    waits for chunk 1 before hearing anything, but from then on each chunk must play for
-    longer than the next one takes to synthesize, or playback stalls. Synthesis runs at
-    roughly 0.37x realtime, so a chunk can afford to be ~2.7x its predecessor; 2.0 leaves
-    margin. A uniformly short opening chunk would start fast and then stall.
+    times **the one actually emitted before it**, up to `max_seconds`. That ramp exists for
+    streaming: the listener waits for chunk 1 before hearing anything, but from then on
+    each chunk must play for longer than the next one takes to synthesize, or playback
+    stalls. Synthesis runs at roughly 0.37x realtime, so a chunk can afford to be ~2.7x its
+    predecessor; 2.0 leaves margin. A uniformly short opening chunk would start fast and
+    then stall.
+
+    Hanging the ramp off the previous chunk's real duration, rather than off `first_cap *
+    growth ** k`, is the whole point: a sentence boundary can end a chunk well short of its
+    cap, and the next chunk would otherwise still be allowed the full ramped cap -- six
+    times its predecessor, and the buffer runs dry at that seam.
 
     Every character is priced exactly once, before any cutting. `vox say -f` takes a file
     of any size, and a document with no sentence enders in it -- one long Thai paragraph,
@@ -342,35 +346,41 @@ def chunk_text(text: str, max_seconds: float = 30.0, enders: str = SENTENCE_ENDE
 
     chunks: list[str] = []
     start: int | None = None   # where the chunk being packed began, if one is open
+    previous = 0.0             # duration of the last chunk emitted, not of its cap
+
+    def emit(a: int, b: int) -> None:
+        nonlocal previous
+        chunks.append(text[a:b])
+        previous = span(a, b)
 
     def limit() -> float:
         if not chunks:
             return first_cap
-        # Clamp the exponent. The ramp has pinned itself to `max_seconds` within a few
-        # steps anyway, and `2.0 ** 1024` raises OverflowError -- which a long document
-        # cut into a thousand chunks would otherwise reach.
-        return min(max_seconds, first_cap * growth ** min(len(chunks), _MAX_RAMP_STEPS))
+        # The ramp hangs off what the last chunk actually *was*, not off what it was
+        # allowed to be. A sentence boundary can end a chunk far short of its cap -- and
+        # if the next chunk were still allowed the full ramped cap, it could be many times
+        # its predecessor, which is exactly the case where playback runs dry.
+        return min(max_seconds, growth * previous)
 
     for sentence_start, sentence_end in _sentence_bounds(text, enders):
         pos = sentence_start
-        while _exceeds(span(pos, sentence_end), limit()):
-            # Re-read the cap each pass: appending below flips `limit()` to the general
-            # one, and cutting with a stale cap would silently drop text.
+        # Re-read `limit()` after every emit. Closing a chunk lowers the cap to `growth`
+        # times what that chunk turned out to be, and a sentence measured against the old
+        # cap may no longer fit under the new one. Deciding once, up front, is how a
+        # sentence twice the new cap used to slip through whole.
+        while pos < sentence_end:
             if start is not None:
-                chunks.append(text[start:pos])
+                if not _exceeds(span(start, sentence_end), limit()):
+                    break            # the sentence rides along in the open chunk
+                emit(start, pos)     # close it; `pos` is this sentence's first character
                 start = None
                 continue
+            if not _exceeds(span(pos, sentence_end), limit()):
+                start = pos          # open a chunk on a sentence that fits alone
+                break
             cut = _cut_index(text, prefix, pos, sentence_end, limit())
-            chunks.append(text[pos:cut])
+            emit(pos, cut)           # a sentence too long for a whole chunk: break it up
             pos = cut
-
-        if pos >= sentence_end:
-            continue
-        if start is None:
-            start = pos
-        elif _exceeds(span(start, sentence_end), limit()):
-            chunks.append(text[start:pos])
-            start = pos
     if start is not None:
-        chunks.append(text[start:])
+        emit(start, len(text))
     return chunks

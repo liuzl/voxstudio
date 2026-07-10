@@ -35,7 +35,7 @@ class TTSDefaults:
 
 @dataclass(frozen=True)
 class ChunkCfg:
-    max_seconds: float = 30.0        # timbre drifts within a longer single generation
+    max_seconds: float = 15.0        # timbre drifts within a longer single generation
     first_max_seconds: float = 4.5   # streamed audio starts only once chunk 1 exists
     growth: float = 2.0              # then ramp up, so playback never outruns synthesis
     sentence_enders: str = SENTENCE_ENDERS
@@ -126,8 +126,8 @@ def _stale_budget_key(old: str, new: str) -> SystemExit:
     """
     return SystemExit(
         f"config: `{old}` was replaced by `{new}`. The budget is now estimated speech "
-        f"duration, not characters: ~170 Chinese characters or ~550 English ones fit "
-        f"in 30 seconds."
+        f"duration, not characters: ~85 Chinese characters or ~275 English ones fit "
+        f"in 15 seconds."
     )
 
 

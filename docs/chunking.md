@@ -2,7 +2,7 @@
 
 Two constants in `core/voxcore/` look arbitrary and are not. Both were measured.
 
-## Chunk at ~30 seconds of speech, not at the token limit
+## Chunk at ~15 seconds of speech, not at the token limit
 
 VoxCPM2 accepts a long passage in one call and will happily synthesize two minutes of
 audio from it. The audio degrades in a specific way: **the timbre drifts away from the
@@ -16,15 +16,15 @@ the voice as much as to the model:
 
 | `max_seconds` | chunks | windows | mean similarity | std | trend |
 |---|---|---|---|---|---|
-| 15 | 12 | 80 | 0.7464 | 0.045 | −0.004 / min |
-| **30** | 6 | 75 | 0.7214 | 0.047 | **+0.003 / min** |
+| **15** | 12 | 80 | **0.7464** | 0.045 | −0.004 / min |
+| 30 | 6 | 75 | 0.7214 | 0.047 | +0.003 / min |
 | 45 | 4 | 75 | 0.7148 | 0.052 | −0.000 / min |
 | 60 | 3 | 72 | 0.6999 | 0.051 | −0.013 / min |
 | whole text | 1 | 70 | 0.6349 | 0.095 | **−0.121 / min** |
 
 **Chunking resets the timbre.** Unchunked, similarity falls at −0.121/min and does not
-stop. At 30s the trend is flat — the last chunk sounds like the first. Past 45s the drift
-starts showing up inside the chunk.
+stop. At 30s and below the trend is flat — the last chunk sounds like the first. Past 45s
+the drift starts showing up inside the chunk.
 
 Pooling every window by "seconds since this chunk began" says where the decay lives:
 
@@ -43,12 +43,25 @@ it just produced. A chunk boundary re-injects the reference.
 So chunking is **not** a workaround for `max_len=4096` — 675 characters never came close
 to that ceiling. Chunk to hold the voice.
 
-> **On 15s vs 30s.** Halving the budget buys +0.025 similarity (≈5 standard errors) and
-> doubles the seams. An earlier measurement, on a different speaker encoder, put that gain
-> at 0.005 and judged it not worth the joins. Both numbers are real; **cosine scales are
-> not comparable across encoders** — the same cloned voice scores 0.911 on the old one and
-> 0.737 on ECAPA. Whether the gain is audible is a listening question, and nobody has done
-> that listening test. 30s stands until someone does.
+### Why the default is 15s and not 30s
+
+Halving the budget buys +0.025 similarity (≈5 standard errors) and nearly doubles the
+seams: 12 against 7, over a 140s passage. An earlier measurement, on a different speaker
+encoder, put that gain at 0.005 and judged it not worth the joins. Both numbers are real —
+**cosine scales are not comparable across encoders**; the same cloned voice scores 0.911
+on the old one and 0.737 on ECAPA — but the old one made 15s look pointless and this one
+does not.
+
+Cosine cannot settle it. A listener compared the same 140s passage at both budgets, blind
+to which was which, and preferred 15s: the extra seams did not bother them, and the voice
+held. So the default moved.
+
+That is **one listener, one trial, in a fixed order** (30s always played first), and the
+order effect was not controlled for. It is the best evidence there is, not strong evidence.
+If you disagree with it, `chunking.max_seconds: 30.0` gives back the old behaviour, and
+`tools/measure_timbre_drift.py` will tell you what it costs in similarity. What the
+measurement *can* settle is the shape: decay starts at the first window and never
+plateaus, so there is no budget at which seams stop buying anything.
 
 Prosody drifts too: the same text runs 15% shorter as one generation than when chunked
 (125s against 145–155s). The model speeds up as it loses the reference.
@@ -137,8 +150,9 @@ times a Latin letter) tower over the noise. Do not tune the second digit; you wo
 fitting the sampler.
 
 **No estimator can predict a given generation's length**, because the engine will not
-produce the same length twice. A budget of 30s must therefore leave room for a chunk that
-happens to come out 25% long. It does: drift becomes audible past ~40s.
+produce the same length twice. The budget must therefore leave room for a chunk that
+happens to come out 25% long. It does: 15s becomes 19s, and the decay curve above is still
+almost flat there.
 
 Against held-out paragraphs the committed table lands within **±15.6%**, and every error
 larger than 5% sits inside the engine's own spread on that same paragraph. That is the
@@ -163,7 +177,8 @@ and spelled out. Telling the two apart needs a lexicon or a phonotactic model, w
 chunker has no business carrying, so **this is left unmodelled**. Normal prose is
 unaffected: `banana` at 0.060 s/char is exactly the 18.3 chars/sec Latin rate. The error
 concentrates in short chunks dense in acronyms, where a 25% overshoot is 0.7 seconds and
-nothing drifts. A 30s chunk dilutes them.
+nothing drifts. A full-length chunk dilutes them; the shorter the budget, the less it does,
+which is one more reason not to drive `max_seconds` far below 15.
 
 Re-measure the table if you change the reference voice. Speaking rate is a property of
 the voice as much as of the script.
@@ -183,12 +198,10 @@ resolved by the text around it rather than by the chunk it lands in. A lone `।
 head of a chunk is charged at the Devanagari rate that follows it, not at the
 unknown-script fallback. The one place this shows: a chunk's *leading* punctuation is
 charged at the rate of the script that ran before the cut, so it can be off by up to
-0.14s — a fifth of the model's own error, on a 30s budget, and only where scripts change
-mid-sentence.
+0.14s — under 1% of a 15s budget, and only where scripts change mid-sentence.
 
-Two consequences worth keeping: the per-chunk estimates sum exactly to the estimate for
-the whole text, and `growth ** len(chunks)` is clamped — a document long enough to need
-1024 chunks would otherwise overflow a float and crash the splitter.
+One consequence worth keeping: the per-chunk estimates sum exactly to the estimate for the
+whole text.
 
 ## Where to cut
 
@@ -286,15 +299,45 @@ made. Two things decide whether that works.
 ~11s, at the cost of one extra seam.
 
 **Every chunk must play for longer than the next one takes to make.** Synthesis runs at
-roughly 0.33x realtime, so a chunk can afford to be about 3x its predecessor before the
+0.33–0.40x realtime, so a chunk can afford to be about 2.5–3x its predecessor before the
 listener catches up to the generator. `growth` (default 2.0) leaves margin. A uniformly
 short opening chunk starts fast and then stalls — measured, chunk 1 gave 5s of audio while
 chunk 2 needed 10s to synthesize.
 
-Measured on a live engine with the ramp: first audio at 1.72s, and the buffer never ran dry.
-The margin is thinnest at the very first seam (+0.67s) and grows from there (+4s, +17s,
-+30s…). If that first seam ever stalls — a busy GPU, or the engine's `retry_badcase` firing
-— raise `first_max_seconds` or lower `growth`.
+### The ramp hangs off the previous chunk, not off the chunk count
+
+Read "its predecessor" above literally. The obvious implementation — cap chunk *k* at
+`first_max_seconds * growth ** k` — is wrong, and it underran on real text. A cap is an
+upper bound, not a lower one: a chunk ends early whenever the next sentence will not fit
+beside it. Then the count-based cap hands its successor the full ramped budget, which the
+successor happily fills. Simulated over a Chinese passage at `max_seconds=30`, the chunks ran
+
+```
+3.3  2.6  17.2  21.9  27.0  ...
+```
+
+— chunk 2 stopped at 2.6s because the 9.7s sentence after it did not fit under `4.5×2=9.0`,
+and chunk 3 then took `4.5×2²=18` and produced 17.2s of audio. That is 6.6x its predecessor.
+The buffer went dry by 0.97s at that seam, and it went dry at every budget of 20s and up,
+across the whole 0.33–0.40x range: the stall is governed by the ramp, so raising or lowering
+`max_seconds` did not move it at all.
+
+So the cap on each chunk is `growth ×` **what the previous chunk actually turned out to be**.
+Two things follow, both of which the count-based version got wrong:
+
+- The cap has to be re-read after every chunk is closed. Closing one lowers the cap for the
+  next, and a sentence already measured against the old cap may no longer fit under the new
+  one — that is how a sentence twice the new cap used to slip through whole.
+- A short chunk now ramps back up from where it landed. After a 0.4s opening sentence the
+  chunks go 0.4, 0.7, 1.4, 2.8, … and a few land mid-sentence. Those extra seams are the
+  price of never stalling, and they fall in the first seconds of playback, where a pause is
+  least conspicuous.
+
+With the ramp on the previous chunk, no budget from 15s to 45s underruns at any rate in
+0.33–0.40x, and the thinnest margin is +1.12s. First-audio latency is untouched: the
+opening chunk is capped by `first_max_seconds`, which this changes nothing about. If that
+first seam ever stalls anyway — a busy GPU, or the engine's `retry_badcase` firing — raise
+`first_max_seconds` or lower `growth`.
 
 **The player must not block the producer.** `ffplay` drains its stdin at playback speed and
 the pipe holds well under a second of audio. Writing to it from the synthesis loop makes

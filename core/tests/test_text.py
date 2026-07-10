@@ -187,9 +187,7 @@ def test_every_character_is_priced_exactly_once():
     assert calls == [20_000]
 
 
-def test_a_thousand_chunks_do_not_overflow_the_ramp():
-    # `growth ** len(chunks)` is `2.0 ** 1024` once a document needs that many chunks,
-    # and float exponentiation raises rather than saturating.
+def test_a_thousand_chunks_ramp_without_arithmetic_trouble():
     chunks = chunk_text("啊" * 5_000, 0.5, first_max_seconds=0.5)
     assert len(chunks) > 1_024
     assert "".join(chunks) == "啊" * 5_000
@@ -212,3 +210,17 @@ def test_chunks_ramp_up_so_playback_never_outruns_synthesis():
     # predecessor without the listener catching up to it. Growth is capped at 2.0.
     for prev, nxt in zip(spans, spans[1:]):
         assert nxt <= 2.7 * prev, (prev, nxt)
+
+
+def test_a_chunk_cut_short_by_a_sentence_end_still_bounds_the_next_one():
+    # The ramp used to be `first_cap * growth ** index`, which asks how many chunks have
+    # been emitted rather than how long the last one was. Here the second chunk ends after
+    # one short sentence -- the third sentence does not fit beside it -- and the third
+    # chunk was then handed the full index-based cap, arriving four times its predecessor.
+    # By then the listener is still playing 2.6 seconds of audio against 3.5 of synthesis.
+    text = "甲" * 20 + "。" + "乙" * 15 + "。" + "丙" * 55 + "。" + "丁" * 55 + "。"
+    spans = [est_seconds(c) for c in chunk_text(text, 30.0, first_max_seconds=4.5, growth=2.0)]
+
+    assert spans[1] < 3.0                      # the short chunk that used to license a huge one
+    for prev, nxt in zip(spans, spans[1:]):
+        assert nxt <= 2.0 * prev * (1 + 1e-9), (prev, nxt)
