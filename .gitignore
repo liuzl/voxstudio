@@ -9,6 +9,9 @@ __pycache__/
 .venv/
 venv/
 
+# javascript / typescript
+node_modules/
+
 # runtime data / models / audio (never commit)
 data/
 voices/
