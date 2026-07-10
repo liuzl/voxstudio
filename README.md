@@ -48,7 +48,10 @@ uv run vox transcribe recording.wav
 uv run vox chat "用三句话介绍一下你自己" --speak -o reply.wav
 uv run vox voices add alice --audio sample.wav --text "参考音的逐字稿"
 uv run vox voices add bob --audio sample.wav --language zh  # transcript via ASR
+uv run vox voices add carol --record 15 --language zh       # record, transcribe, register
 ```
+
+Microphone recording requires `ffmpeg`; pass `--device` to select a non-default input.
 
 Long text is chunked at ~15 seconds of *estimated speech* — roughly 85 Chinese
 characters, or 275 English ones — and the pieces are joined by trimming each one's edge
