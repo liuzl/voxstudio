@@ -39,6 +39,8 @@ def speech_level_db(samples: np.ndarray, rate: int) -> float:
     db = _frame_db(samples, rate)
     if not db.size:
         return -120.0
+    if db.max() <= -119:
+        return -120.0
     voiced = db[db > db.max() - 40]
     return float(np.percentile(voiced, 60)) if voiced.size else -120.0
 
@@ -59,7 +61,10 @@ def trim_edge_silence(samples: np.ndarray, rate: int, floor_below_speech_db: flo
     db = _frame_db(samples, rate)
     if not db.size:
         return samples[:0]
-    voiced = np.flatnonzero(db > speech_level_db(samples, rate) - floor_below_speech_db)
+    level = speech_level_db(samples, rate)
+    if level <= -119:
+        return samples[:0]
+    voiced = np.flatnonzero(db > level - floor_below_speech_db)
     if voiced.size == 0:
         return samples[:0]
     frame = max(1, int(rate * FRAME_MS / 1000))

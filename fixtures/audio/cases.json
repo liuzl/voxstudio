@@ -1,0 +1,21 @@
+{
+  "trim": [
+    {"name": "remove edges and keep pad", "rate": 8000, "toneSeconds": 0.5, "leadSeconds": 0.2, "tailSeconds": 0.3, "padMs": 40, "expectedLength": 4640, "tolerance": 160},
+    {"name": "pad clamps to input", "rate": 8000, "toneSeconds": 0.3, "leadSeconds": 0, "tailSeconds": 0, "padMs": 100, "expectedLength": 2400, "tolerance": 80}
+  ],
+  "join": [
+    {
+      "name": "uniform three chunk seam",
+      "rate": 8000,
+      "pauseMs": 210,
+      "padMs": 40,
+      "chunks": [
+        {"toneSeconds": 0.4, "leadSeconds": 0.1, "tailSeconds": 0.3, "gain": 1},
+        {"toneSeconds": 0.4, "leadSeconds": 0.3, "tailSeconds": 0.1, "gain": 0.2},
+        {"toneSeconds": 0.4, "leadSeconds": 0.1, "tailSeconds": 0.1, "gain": 0.5}
+      ],
+      "expectedLength": 13600,
+      "tolerance": 400
+    }
+  ]
+}

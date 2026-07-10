@@ -1,9 +1,15 @@
+import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from voxcore import join_chunks, read_wav, trim_edge_silence, write_wav
 
 SR = 8000
+CASES = json.loads(
+    (Path(__file__).parents[2] / "fixtures" / "audio" / "cases.json").read_text(encoding="utf-8")
+)
 
 
 def tone(seconds: float, lead: float = 0.0, tail: float = 0.0) -> bytes:
@@ -11,6 +17,25 @@ def tone(seconds: float, lead: float = 0.0, tail: float = 0.0) -> bytes:
     body = (0.5 * np.sin(2 * np.pi * 220 * t)).astype("float32")
     pad = lambda s: np.zeros(int(SR * s), dtype="float32")  # noqa: E731
     return write_wav(np.concatenate([pad(lead), body, pad(tail)]), SR)
+
+
+@pytest.mark.parametrize("case", CASES["trim"], ids=lambda case: case["name"])
+def test_shared_trim_contract(case):
+    samples, _ = read_wav(tone(case["toneSeconds"], case["leadSeconds"], case["tailSeconds"]))
+    trimmed = trim_edge_silence(samples, case["rate"], pad_ms=case["padMs"])
+    assert len(trimmed) == pytest.approx(case["expectedLength"], abs=case["tolerance"])
+
+
+@pytest.mark.parametrize("case", CASES["join"], ids=lambda case: case["name"])
+def test_shared_join_contract(case):
+    chunks = []
+    for chunk in case["chunks"]:
+        samples, _ = read_wav(tone(chunk["toneSeconds"], chunk["leadSeconds"],
+                                   chunk["tailSeconds"]))
+        chunks.append(write_wav(samples * chunk["gain"], case["rate"]))
+    joined, rate = read_wav(join_chunks(chunks, case["pauseMs"], pad_ms=case["padMs"]))
+    assert rate == case["rate"]
+    assert len(joined) == pytest.approx(case["expectedLength"], abs=case["tolerance"])
 
 
 def test_trim_removes_both_edges_but_keeps_a_pad():
@@ -71,3 +96,9 @@ def test_mixed_sample_rates_are_rejected():
 def test_empty_input_is_rejected():
     with pytest.raises(ValueError):
         join_chunks([])
+
+
+def test_all_silent_chunks_join_to_an_empty_wav():
+    joined, rate = read_wav(join_chunks([write_wav(np.zeros(800, dtype="float32"), SR)]))
+    assert rate == SR
+    assert len(joined) == 0

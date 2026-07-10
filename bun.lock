@@ -9,6 +9,10 @@
         "typescript": "^5.9.3",
       },
     },
+    "packages/audio": {
+      "name": "@voxstudio/audio",
+      "version": "0.1.0",
+    },
     "packages/clients": {
       "name": "@voxstudio/clients",
       "version": "0.1.0",
@@ -37,6 +41,8 @@
     "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
 
     "@types/node": ["@types/node@26.1.1", "", { "dependencies": { "undici-types": "~8.3.0" } }, "sha512-nxAkRSVkN1Y0JC1W8ky/fTfkGsMmcrRsbx+3XoZE+rMOX71kLYTV7fLXpqud1GpbpP5TuffXFqfX7fH2GgZREw=="],
+
+    "@voxstudio/audio": ["@voxstudio/audio@workspace:packages/audio"],
 
     "@voxstudio/clients": ["@voxstudio/clients@workspace:packages/clients"],
 
