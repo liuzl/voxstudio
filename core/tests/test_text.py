@@ -31,9 +31,9 @@ def test_the_budget_is_duration_not_characters():
 
 
 def test_est_seconds_matches_the_measured_rates():
-    # 5.4 chars/s for Han, 18.1 for Latin -- the constants the engine was measured at.
-    assert abs(est_seconds("啊" * 162) - 30.0) < 0.5
-    assert abs(est_seconds("a" * 543) - 30.0) < 0.5
+    # 5.7 chars/s for Han, 18.3 for Latin -- the constants the engine was measured at.
+    assert abs(est_seconds("啊" * 171) - 30.0) < 0.5
+    assert abs(est_seconds("a" * 549) - 30.0) < 0.5
 
 
 def test_long_sentence_without_an_ender_is_hard_split():
@@ -157,6 +157,16 @@ def test_first_cap_larger_than_max_seconds_is_clamped():
     cap = est_seconds("甲。")
     chunks = chunk_text("甲。" * 10, cap, first_max_seconds=60.0)
     assert all(est_seconds(c) <= cap for c in chunks)
+
+
+def test_a_sentence_splits_the_same_wherever_it_sits_in_the_document():
+    # Spans are `prefix[b] - prefix[a]`, which drops the low bits of a float. Without
+    # slack, a sentence that exactly fills its budget would fit near the top of a
+    # document and overflow it further down, by one ULP of accumulated rounding.
+    cap = est_seconds("第一句。")
+    for count in range(2, 40):
+        chunks = chunk_text("第一句。" * count, cap)
+        assert chunks == ["第一句。"] * count, count
 
 
 def test_every_character_is_priced_exactly_once():

@@ -41,25 +41,27 @@ walk a shared GPU into an out-of-memory 500.
 
 Everything above was measured on Mandarin, where 160 characters happen to be ~30s. That
 coincidence is not a rule. VoxCPM2 speaks thirty languages, and the same 160 characters
-are 30 seconds of Chinese, 11 seconds of English, and 9 seconds of Greek. A character
+are 28 seconds of Chinese, 9 seconds of English, and 10 seconds of Greek. A character
 budget silently means a different constraint in every script — and the constraint that
 actually matters is **duration**, because that is what the timbre drifts with.
 
 So `chunk_text` budgets in estimated seconds. The estimate is a per-script speech rate,
-measured against the live engine on paragraphs of roughly a full chunk's length. (Short
-utterances run measurably faster — they contain no inter-sentence pauses — so sentences
-would have fitted the wrong regime.) Rate is pooled as `total_chars / total_seconds`, not
-averaged per paragraph: the question is how long *N characters* take.
+fitted by `tools/measure_speech_rates.py` against the live engine, on paragraphs of
+roughly a full chunk's length. (Short utterances run measurably faster — they contain no
+inter-sentence pauses — so sentences would have fitted the wrong regime.) Each paragraph
+is generated five times and reduced by its **median**; rates are then pooled as
+`total_chars / total_seconds`, not averaged per paragraph, because the question is how
+long *N characters* take. The next section explains why five, and why the median.
 
 | script | chars/sec | | script | chars/sec |
 |---|---|---|---|---|
-| Cyrillic | 18.3 | | Thai | 13.4 |
-| Latin | 18.1 | | Hebrew | 11.9 |
-| Greek | 15.8 | | Arabic | 11.4 |
-| Myanmar | 15.0 | | Hangul | 8.2 |
-| Devanagari | 14.6 | | Han | 5.4 |
-| Khmer | 14.3 | | Kana | 5.1 |
-| Lao | 14.0 | | *(unknown)* | 5.1 |
+| Latin | 18.3 | | Khmer | 13.6 |
+| Greek | 16.4 | | Hebrew | 12.5 |
+| Cyrillic | 16.1 | | Arabic | 11.0 |
+| Myanmar | 15.2 | | Hangul | 7.9 |
+| Lao | 14.6 | | Kana | 6.3 |
+| Devanagari | 14.4 | | Han | 5.7 |
+| Thai | 14.0 | | *(unknown)* | 5.7 |
 
 The table is keyed on **script, not language**, because a bare string carries nothing
 else. It survives that approximation because rate is dominated by how much phonetic
@@ -69,15 +71,49 @@ Latin rate. Characters with no script of their own — spaces, digits, punctuati
 charged at the rate of the script running before them.
 
 Japanese is the one script that could not be pooled. Its text interleaves kanji with
-kana, and the estimator charges the kanji at the Han rate, so the kana rate was solved
-for under that assumption rather than read off the paragraph: **5.1**, against a naive
-pooled 5.2.
+kana, and the estimator charges the kanji at the Han rate, so the kana rate is solved for
+under that assumption rather than read off the paragraph. It therefore inherits Han's
+error on top of its own, and it is the least stable number in the table — four fits put
+it at 5.1, 6.0, 5.3 and 6.3.
 
-Against held-out paragraphs the estimate lands within **+13% / −17%**. Against real
-chunks cut from running prose it ran −12% to +10%. The bias is deliberately toward
-over-estimating: a chunk that runs short costs one seam, a chunk that runs long costs
-speaker similarity. At the −17% end a 30s budget yields 36s of audio — still short of
-the ~40s where drift becomes audible.
+### The engine is not reproducible, and that floors the whole exercise
+
+Synthesize the same paragraph six times, same voice, same `cfg_value` and `timesteps`.
+The durations spread **13% to 25%** peak-to-peak:
+
+| script | chars | six generations (s) | mean | spread |
+|---|---|---|---|---|
+| Han | 87 | 15.16 15.28 16.42 15.43 15.45 14.46 | 15.37 | 12.8% |
+| Cyrillic | 254 | 13.65 13.97 14.24 16.26 14.77 14.57 | 14.58 | 17.9% |
+| Latin | 297 | 15.31 14.07 14.77 16.58 18.09 16.44 | 15.88 | 25.3% |
+
+The outliers are **one-sided**. A run comes back twice as long as its siblings, never half
+as long — the engine's own `retry_badcase` check silently re-synthesizes a generation it
+judges bad, and the retry lands in the audio. One such run in four drags a mean by 20% and
+a median by nothing, which is why `tools/measure_speech_rates.py` reduces its repeats by
+the median.
+
+Three things follow, and they matter more than any digit in the table above.
+
+**A rate measured from one generation per paragraph is mostly noise.** The first fit did
+exactly that. Re-running it moved Han from 5.4 to 5.9 and Cyrillic from 18.3 to 15.0
+without a line of code changing — and a *second* four-repeat fit put Cyrillic back at 17.2.
+Two honest fits of the same voice, disagreeing by 15%.
+
+**Only the first significant figure of a rate is real.** Han ≈ 6, Hangul ≈ 8, Arabic ≈ 11,
+Latin ≈ 18. That is enough — the ratios the budget depends on (an ideograph costs three
+times a Latin letter) tower over the noise. Do not tune the second digit; you would be
+fitting the sampler.
+
+**No estimator can predict a given generation's length**, because the engine will not
+produce the same length twice. A budget of 30s must therefore leave room for a chunk that
+happens to come out 25% long. It does: drift becomes audible past ~40s.
+
+Against held-out paragraphs the committed table lands within **±15.6%**, and every error
+larger than 5% sits inside the engine's own spread on that same paragraph. That is the
+floor: the fit cannot be shown to be better than the noise it was measured through. The
+bias is deliberately toward over-estimating — a chunk that runs short costs one seam, a
+chunk that runs long costs speaker similarity.
 
 ### What the estimate cannot know
 
@@ -94,7 +130,7 @@ fixed Chinese carrier sentence, seconds per character:
 Case is not the signal — `NASA` is uppercase and read as a word, `voxcpm` is lowercase
 and spelled out. Telling the two apart needs a lexicon or a phonotactic model, which a
 chunker has no business carrying, so **this is left unmodelled**. Normal prose is
-unaffected: `banana` at 0.060 s/char is exactly the 18.1 chars/sec Latin rate. The error
+unaffected: `banana` at 0.060 s/char is exactly the 18.3 chars/sec Latin rate. The error
 concentrates in short chunks dense in acronyms, where a 25% overshoot is 0.7 seconds and
 nothing drifts. A 30s chunk dilutes them.
 

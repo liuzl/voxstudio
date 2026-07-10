@@ -38,28 +38,36 @@ _ABBREVIATIONS = frozenset(
     "mr mrs ms dr prof st vs etc fig no vol jr sr approx cf al".split()
 )
 
-# Speech rate per script, chars/sec, measured against the live engine on paragraphs of
-# roughly a full chunk's length. See `docs/chunking.md` for the method and the error.
+# Speech rate per script, chars/sec. Fitted by `tools/measure_speech_rates.py` against the
+# live engine: 5 generations of each paragraph, reduced by their median. See
+# `docs/chunking.md` for the method, the error, and why the median.
+#
+# **Only the first significant figure is real.** The engine is not reproducible -- the same
+# paragraph varies 13-25% in duration run to run -- and independent fits of the same voice
+# disagree in the second digit. Do not tune these. The ratios the budget rests on (an
+# ideograph costs three Latin letters) tower over that noise.
 #
 # These are properties of the *script*, not the language, because that is all a lone
 # string can tell us. It works because rate is dominated by how much phonetic content a
-# character carries: an ideograph is a syllable, a Latin letter is a phoneme or less.
-# Where script and language disagree the estimate degrades gracefully -- German and
-# Vietnamese both measure within 4% of the pooled Latin rate.
+# character carries. Where script and language disagree the estimate degrades gracefully --
+# English, German and Vietnamese all measure within 4% of the pooled Latin rate.
 _CPS = {
-    "Cyrillic": 18.3,
-    "Latin": 18.1,
-    "Greek": 15.8,
-    "Myanmar": 15.0,
-    "Devanagari": 14.6,
-    "Khmer": 14.3,
-    "Lao": 14.0,
-    "Thai": 13.4,
-    "Hebrew": 11.9,
-    "Arabic": 11.4,
-    "Hangul": 8.2,
-    "Han": 5.4,
-    "Kana": 5.1,
+    "Latin": 18.3,
+    "Greek": 16.4,
+    "Cyrillic": 16.1,
+    "Myanmar": 15.2,
+    "Lao": 14.6,
+    "Devanagari": 14.4,
+    "Thai": 14.0,
+    "Khmer": 13.6,
+    "Hebrew": 12.5,
+    "Arabic": 11.0,
+    "Hangul": 7.9,
+    # Solved for, not pooled: Japanese interleaves kanji with kana and `_char_seconds`
+    # charges the kanji at the Han rate. So this number carries Han's error too, and it is
+    # the least stable in the table.
+    "Kana": 6.3,
+    "Han": 5.7,
 }
 
 # An unrecognised script gets the slowest measured rate. The engine may well speak it --
@@ -139,15 +147,28 @@ def _char_seconds(text: str) -> list[float]:
 def est_seconds(text: str) -> float:
     """Estimated speech duration, in seconds.
 
-    Accurate to about +13% / -17% against held-out text (`docs/chunking.md`). The bias
-    is deliberately toward over-estimating: a chunk that runs short costs a seam, one
-    that runs long costs speaker similarity.
+    Within ~15% on held-out text, which is also roughly the engine's own run-to-run
+    spread on a fixed paragraph -- it will not synthesize the same text to the same
+    length twice, so no estimator can do better (`docs/chunking.md`). The bias is
+    deliberately toward over-estimating: a chunk that runs short costs a seam, one that
+    runs long costs speaker similarity.
     """
     return sum(_char_seconds(" ".join(text.split())))
 
 
 # `growth ** n` past this has long since exceeded any `max_seconds`, and overflows at 1024.
 _MAX_RAMP_STEPS = 64
+
+# A span is `prefix[b] - prefix[a]`, which is not bit-identical to summing `costs[a:b]`:
+# subtracting two partial sums loses the low bits. Without slack, whether a sentence fits
+# its budget would depend on how much rounding error the document accumulated before it --
+# the same sentence splits differently at the top of a page and the bottom. The estimate
+# carries ~15% error; refusing to split on the last ULP of a float is not a compromise.
+_SPAN_TOLERANCE = 1e-9
+
+
+def _exceeds(span: float, cap: float) -> bool:
+    return span > cap * (1 + _SPAN_TOLERANCE)
 
 _DROP_CATEGORIES = frozenset(("Cc", "Cf", "Co", "Cs", "Cn", "So", "Sk"))
 _JOINERS = ("‌", "‍")  # ZWNJ, ZWJ
@@ -278,7 +299,7 @@ def _cut_index(text: str, prefix: list[float], pos: int, end: int, cap: float) -
     a scan: the tail is never re-priced as it shrinks. At least one character is always
     taken, even when that one character is worth more than the cap.
     """
-    hi = bisect_right(prefix, prefix[pos] + cap, pos, end + 1) - 1
+    hi = bisect_right(prefix, prefix[pos] + cap * (1 + _SPAN_TOLERANCE), pos, end + 1) - 1
     hi = min(max(hi, pos + 1), end)
     if hi >= end:
         return end
@@ -291,7 +312,7 @@ def chunk_text(text: str, max_seconds: float = 30.0, enders: str = SENTENCE_ENDE
 
     The bound is on *duration*, not on characters: a single TTS generation drifts away
     from the reference voice as it runs -- speaker similarity decays monotonically,
-    noticeably past ~40s -- and 160 Chinese characters and 540 English ones both take
+    noticeably past ~40s -- and 170 Chinese characters and 550 English ones both take
     about 30 seconds to say. It is not about any token limit. Each chunk re-conditions on
     the reference audio, which resets the timbre.
 
@@ -332,7 +353,7 @@ def chunk_text(text: str, max_seconds: float = 30.0, enders: str = SENTENCE_ENDE
 
     for sentence_start, sentence_end in _sentence_bounds(text, enders):
         pos = sentence_start
-        while span(pos, sentence_end) > limit():
+        while _exceeds(span(pos, sentence_end), limit()):
             # Re-read the cap each pass: appending below flips `limit()` to the general
             # one, and cutting with a stale cap would silently drop text.
             if start is not None:
@@ -347,7 +368,7 @@ def chunk_text(text: str, max_seconds: float = 30.0, enders: str = SENTENCE_ENDE
             continue
         if start is None:
             start = pos
-        elif span(start, sentence_end) > limit():
+        elif _exceeds(span(start, sentence_end), limit()):
             chunks.append(text[start:pos])
             start = pos
     if start is not None:

@@ -49,8 +49,8 @@ uv run vox chat "用三句话介绍一下你自己" --speak -o reply.wav
 uv run vox voices add alice --audio sample.wav --text "参考音的逐字稿"
 ```
 
-Long text is chunked at ~30 seconds of *estimated speech* — roughly 160 Chinese
-characters, or 540 English ones — and the pieces are joined by trimming each one's edge
+Long text is chunked at ~30 seconds of *estimated speech* — roughly 170 Chinese
+characters, or 550 English ones — and the pieces are joined by trimming each one's edge
 silence and inserting a single fixed pause. Both numbers are empirical: a single TTS
 generation drifts away from the reference voice as it runs, and raw concatenation
 produces seams of wildly uneven length. The estimate comes from a per-script speech rate

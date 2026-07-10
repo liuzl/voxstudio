@@ -126,7 +126,7 @@ def _stale_budget_key(old: str, new: str) -> SystemExit:
     """
     return SystemExit(
         f"config: `{old}` was replaced by `{new}`. The budget is now estimated speech "
-        f"duration, not characters: ~160 Chinese characters or ~540 English ones fit "
+        f"duration, not characters: ~170 Chinese characters or ~550 English ones fit "
         f"in 30 seconds."
     )
 
