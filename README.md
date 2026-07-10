@@ -1,8 +1,8 @@
 # voxstudio
 
-Self-hosted, **Chinese-first voice I/O studio**. ASR + LLM + TTS engines behind **one OpenAI-compatible contract**, with a core orchestration layer and thin apps (CLI / Web / MCP / mobile client).
+Self-hosted, **multilingual voice I/O studio** with support for Chinese and other languages. ASR + LLM + TTS engines sit behind **one OpenAI-compatible contract**, with a core orchestration layer and thin apps (CLI / Web / MCP / mobile client).
 
-> Design lineage: benchmarked against [VoxWeaver Studio](https://github.com/nicekate/VOXWEAVER-STUDIO) and [Voicebox](https://github.com/jamiepine/voicebox). Focus = **strong Chinese engines, fully self-hosted, one swappable engine contract**.
+> Design lineage: benchmarked against [VoxWeaver Studio](https://github.com/nicekate/VOXWEAVER-STUDIO) and [Voicebox](https://github.com/jamiepine/voicebox). Focus = **multilingual speech, fully self-hosted deployment, and one swappable engine contract**.
 
 ## Architecture
 
