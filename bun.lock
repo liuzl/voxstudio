@@ -9,6 +9,21 @@
         "typescript": "^5.9.3",
       },
     },
+    "apps/cli": {
+      "name": "@voxstudio/cli",
+      "version": "0.1.0",
+      "bin": {
+        "vox-ts": "./src/main.ts",
+      },
+      "dependencies": {
+        "@voxstudio/clients": "workspace:*",
+        "@voxstudio/contracts": "workspace:*",
+        "@voxstudio/platform-bun": "workspace:*",
+      },
+      "devDependencies": {
+        "@voxstudio/config": "workspace:*",
+      },
+    },
     "packages/audio": {
       "name": "@voxstudio/audio",
       "version": "0.1.0",
@@ -45,6 +60,14 @@
       "name": "@voxstudio/text",
       "version": "0.1.0",
     },
+    "platforms/bun": {
+      "name": "@voxstudio/platform-bun",
+      "version": "0.1.0",
+      "dependencies": {
+        "@voxstudio/config": "workspace:*",
+        "@voxstudio/contracts": "workspace:*",
+      },
+    },
   },
   "packages": {
     "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
@@ -53,6 +76,8 @@
 
     "@voxstudio/audio": ["@voxstudio/audio@workspace:packages/audio"],
 
+    "@voxstudio/cli": ["@voxstudio/cli@workspace:apps/cli"],
+
     "@voxstudio/clients": ["@voxstudio/clients@workspace:packages/clients"],
 
     "@voxstudio/config": ["@voxstudio/config@workspace:packages/config"],
@@ -60,6 +85,8 @@
     "@voxstudio/contracts": ["@voxstudio/contracts@workspace:packages/contracts"],
 
     "@voxstudio/orchestration": ["@voxstudio/orchestration@workspace:packages/orchestration"],
+
+    "@voxstudio/platform-bun": ["@voxstudio/platform-bun@workspace:platforms/bun"],
 
     "@voxstudio/text": ["@voxstudio/text@workspace:packages/text"],
 

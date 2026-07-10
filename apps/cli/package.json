@@ -1,0 +1,18 @@
+{
+  "name": "@voxstudio/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {"vox-ts": "./src/main.ts"},
+  "scripts": {
+    "build": "bun build --compile ./src/main.ts --outfile ./dist/vox"
+  },
+  "dependencies": {
+    "@voxstudio/clients": "workspace:*",
+    "@voxstudio/contracts": "workspace:*",
+    "@voxstudio/platform-bun": "workspace:*"
+  },
+  "devDependencies": {
+    "@voxstudio/config": "workspace:*"
+  }
+}

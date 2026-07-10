@@ -11,6 +11,7 @@ venv/
 
 # javascript / typescript
 node_modules/
+dist/
 
 # runtime data / models / audio (never commit)
 data/
