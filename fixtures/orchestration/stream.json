@@ -1,0 +1,9 @@
+{
+  "text": "甲。乙。丙。",
+  "expectedChunks": ["甲。", "乙。", "丙。"],
+  "expectedPieces": 5,
+  "silentPieceIndexes": [1, 3],
+  "pauseSamples": 2000,
+  "outputSamples": 13600,
+  "sampleRate": 8000
+}

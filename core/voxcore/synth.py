@@ -37,12 +37,16 @@ def stream_long(tts: TTSClient, text: str, voice: str | None = None, *,
     gap_ms = max(0, chunking.join_pause_ms - 2 * chunking.edge_pad_ms)
     pause: np.ndarray | None = None
     target_db: float | None = None
+    sample_rate: int | None = None
 
     for i, chunk in enumerate(chunks):
         if on_chunk:
             on_chunk(i, len(chunks), chunk)
         samples, rate = read_wav(tts.speech(chunk, voice, cfg_value=cfg_value,
                                             timesteps=timesteps))
+        if sample_rate is not None and rate != sample_rate:
+            raise ValueError(f"chunks disagree on sample rate: {sample_rate}, {rate}")
+        sample_rate = sample_rate or rate
         samples = trim_edge_silence(samples, rate, chunking.trim_floor_db,
                                     chunking.edge_pad_ms)
         if not samples.size:

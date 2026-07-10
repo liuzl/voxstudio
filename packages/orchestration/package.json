@@ -1,0 +1,12 @@
+{
+  "name": "@voxstudio/orchestration",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@voxstudio/audio": "workspace:*",
+    "@voxstudio/contracts": "workspace:*",
+    "@voxstudio/text": "workspace:*"
+  }
+}

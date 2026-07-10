@@ -1,4 +1,4 @@
-import type { EngineConfig, SpeechRequest, Voice } from "@voxstudio/contracts";
+import type { EngineConfig, SpeechInput, SpeechRequest, Voice } from "@voxstudio/contracts";
 import { EngineClient, type Fetch } from "./http";
 
 function isVoice(value: unknown): value is Voice {
@@ -11,7 +11,8 @@ export class TtsClient extends EngineClient {
     super(config, fetch);
   }
 
-  async speech(body: SpeechRequest): Promise<ArrayBuffer> {
+  async speech(input: SpeechInput): Promise<ArrayBuffer> {
+    const body: SpeechRequest = { ...input, model: this.config.model };
     const response = await this.request("/v1/audio/speech", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -32,6 +32,15 @@
       "name": "@voxstudio/contracts",
       "version": "0.1.0",
     },
+    "packages/orchestration": {
+      "name": "@voxstudio/orchestration",
+      "version": "0.1.0",
+      "dependencies": {
+        "@voxstudio/audio": "workspace:*",
+        "@voxstudio/contracts": "workspace:*",
+        "@voxstudio/text": "workspace:*",
+      },
+    },
     "packages/text": {
       "name": "@voxstudio/text",
       "version": "0.1.0",
@@ -49,6 +58,8 @@
     "@voxstudio/config": ["@voxstudio/config@workspace:packages/config"],
 
     "@voxstudio/contracts": ["@voxstudio/contracts@workspace:packages/contracts"],
+
+    "@voxstudio/orchestration": ["@voxstudio/orchestration@workspace:packages/orchestration"],
 
     "@voxstudio/text": ["@voxstudio/text@workspace:packages/text"],
 

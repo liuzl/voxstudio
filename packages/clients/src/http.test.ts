@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { SpeechRequest } from "@voxstudio/contracts";
+import type { SpeechInput, SpeechRequest } from "@voxstudio/contracts";
 import { AsrClient, EngineHttpError, LlmClient, TtsClient, type Fetch } from "./index";
 
 function json(value: unknown, init: ResponseInit = {}): Response {
@@ -49,21 +49,21 @@ describe("engine HTTP clients", () => {
   });
 
   test("TTS returns binary audio", async () => {
-    const body: SpeechRequest = {
+    const input: SpeechInput = {
       input: "hello",
-      model: "voxcpm2",
       voice: "alice",
       response_format: "wav",
       cfg_value: 2,
       timesteps: 10,
     };
+    const body: SpeechRequest = { ...input, model: "voxcpm2" };
     const fetch: Fetch = async (_input, init) => {
       expect(JSON.parse(String(init?.body))).toEqual(body);
       return new Response(new Uint8Array([1, 2, 3]));
     };
     const client = new TtsClient({ baseUrl: "https://voice.example", model: "voxcpm2" }, fetch);
 
-    expect(new Uint8Array(await client.speech(body))).toEqual(new Uint8Array([1, 2, 3]));
+    expect(new Uint8Array(await client.speech(input))).toEqual(new Uint8Array([1, 2, 3]));
   });
 
   test("non-success responses throw normalized errors", async () => {

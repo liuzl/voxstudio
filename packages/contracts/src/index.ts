@@ -51,6 +51,8 @@ export interface SpeechRequest {
   timesteps: number;
 }
 
+export type SpeechInput = Omit<SpeechRequest, "model">;
+
 export type ChatRole = "system" | "user" | "assistant";
 
 export interface ChatMessage {
