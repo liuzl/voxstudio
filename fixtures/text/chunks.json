@@ -79,5 +79,16 @@
     "input": "𠀀𠀀𠀀",
     "capText": "𠀀",
     "expected": ["𠀀", "𠀀", "𠀀"]
+  },
+  {
+    "name": "mixed-language narration keeps English terms in Chinese context",
+    "input": "反观 GPT 的作者，他们敏锐地看到：互联网数据里本就散落着大量的任务描述。于是，基于对并行计算友好的 Transformer 架构，用 next-token 预测这个最朴素的语言模型目标，暴力刷互联网数据——竟一步步做成了真正的 NLP 大一统模型，直到初步建起那座巴别塔。云泥之别。",
+    "maxSeconds": 15,
+    "firstMaxSeconds": 8,
+    "expected": [
+      "反观 GPT 的作者，他们敏锐地看到：互联网数据里本就散落着大量的任务描述。",
+      "于是，基于对并行计算友好的 Transformer 架构，用 next-token 预测这个最朴素的语言模型目标，暴力刷互联网数据——竟一步步做成了真正的 NLP 大一统模型，",
+      "直到初步建起那座巴别塔。云泥之别。"
+    ]
   }
 ]

@@ -36,7 +36,7 @@ class TTSDefaults:
 @dataclass(frozen=True)
 class ChunkCfg:
     max_seconds: float = 15.0        # timbre drifts within a longer single generation
-    first_max_seconds: float = 4.5   # streamed audio starts only once chunk 1 exists
+    first_max_seconds: float = 8.0   # enough context to stabilize mixed-language delivery
     growth: float = 2.0              # then ramp up, so playback never outruns synthesis
     sentence_enders: str = SENTENCE_ENDERS
     join_pause_ms: int = 210     # gap the listener perceives, matched to the model's own

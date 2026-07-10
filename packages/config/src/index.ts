@@ -25,7 +25,7 @@ const defaultTts: TtsDefaults = {
 
 const defaultChunking: ChunkConfig = {
   maxSeconds: 15,
-  firstMaxSeconds: 4.5,
+  firstMaxSeconds: 8,
   growth: 2,
   sentenceEnders,
   joinPauseMs: 210,

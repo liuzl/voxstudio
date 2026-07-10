@@ -9,7 +9,7 @@
         "asr": {"baseUrl": "http://127.0.0.1:18086", "model": "nemotron-asr"},
         "llm": {"baseUrl": "http://127.0.0.1:8080", "model": "gemma", "maxTokens": 4096}
       },
-      "chunking": {"maxSeconds": 15, "firstMaxSeconds": 4.5, "joinPauseMs": 210}
+      "chunking": {"maxSeconds": 15, "firstMaxSeconds": 8, "joinPauseMs": 210}
     }
   },
   {

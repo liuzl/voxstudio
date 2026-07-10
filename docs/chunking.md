@@ -311,8 +311,13 @@ Chunks are synthesized serially, so the first one can play while the rest are st
 made. Two things decide whether that works.
 
 **The opening chunk sets the latency.** Nothing is heard until it exists.
-`first_max_seconds` (default 4.5) caps it, buying a first-audio latency of ~1.7s instead of
-~11s, at the cost of one extra seam.
+`first_max_seconds` (default 8) caps it. The original 4.5s budget minimized first-audio
+latency, but it also created context-starved chunks in mixed Chinese/English narration.
+In one observed paragraph, a clause beginning near `next-token` became an independent
+request and changed voice noticeably. Raising the opening budget kept the term in Chinese
+context, reduced five requests to three, moved first audio from 1.6s to 2.4s, and reduced
+total generation time from 10.7s to 8.3s. The 8s default keeps the latency ramp while
+giving the model enough linguistic context to stabilize delivery.
 
 **Every chunk must play for longer than the next one takes to make.** Synthesis runs at
 0.33–0.40x realtime, so a chunk can afford to be about 2.5–3x its predecessor before the
