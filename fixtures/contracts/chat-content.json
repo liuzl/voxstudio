@@ -1,0 +1,17 @@
+[
+  {
+    "name": "content ignores reasoning",
+    "payload": {"choices": [{"message": {"reasoning_content": "thinking...", "content": "答案"}}]},
+    "expected": "答案"
+  },
+  {
+    "name": "truncated reasoning has no content",
+    "payload": {"choices": [{"message": {"reasoning_content": "thinking..."}}]},
+    "expected": ""
+  },
+  {
+    "name": "missing choices",
+    "payload": {},
+    "expected": ""
+  }
+]

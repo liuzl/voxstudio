@@ -33,7 +33,7 @@ export interface ChatCompletionRequest {
   model: string;
   messages: ChatMessage[];
   max_tokens: number;
-  stream: false;
+  temperature?: number;
 }
 
 export interface Voice {
@@ -46,6 +46,7 @@ export interface NormalizedEngineError {
   status: number;
   code: string;
   message: string;
+  type?: string;
 }
 
 export interface HealthResult {

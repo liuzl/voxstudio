@@ -1,0 +1,32 @@
+[
+  {
+    "name": "fastapi error envelope",
+    "status": 400,
+    "body": {"detail": {"error": {"code": "voice_not_found", "message": "Unknown voice id."}}},
+    "expected": {"code": "voice_not_found", "message": "Unknown voice id."}
+  },
+  {
+    "name": "cpp error envelope",
+    "status": 400,
+    "body": {"error": {"code": "voice_not_found", "message": "Unknown voice id."}},
+    "expected": {"code": "voice_not_found", "message": "Unknown voice id."}
+  },
+  {
+    "name": "non-json gateway response",
+    "status": 502,
+    "body": "<html>bad gateway</html>",
+    "expected": {"code": "engine_error", "message": "HTTP 502"}
+  },
+  {
+    "name": "fastapi validation detail",
+    "status": 422,
+    "body": {"detail": [{"loc": ["body", "input"]}]},
+    "expected": {"code": "engine_error", "messageContains": "loc"}
+  },
+  {
+    "name": "typed engine error",
+    "status": 429,
+    "body": {"error": {"code": "busy", "message": "Try later", "type": "capacity"}},
+    "expected": {"code": "busy", "message": "Try later", "type": "capacity"}
+  }
+]

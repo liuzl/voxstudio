@@ -1,0 +1,17 @@
+[
+  {
+    "name": "trailing Chinese language tag",
+    "raw": "今天天气很好 <zh-CN>",
+    "expected": {"text": "今天天气很好", "lang": "zh"}
+  },
+  {
+    "name": "English tag after every sentence",
+    "raw": "Hello there.<en-US> How are you?<en-US>",
+    "expected": {"text": "Hello there. How are you?", "lang": "en"}
+  },
+  {
+    "name": "no language tag",
+    "raw": "bare text",
+    "expected": {"text": "bare text", "lang": null}
+  }
+]

@@ -20,7 +20,6 @@ describe("engine contracts", () => {
       model: "gemma",
       messages: [{ role: "user", content: "你好" }],
       max_tokens: 4096,
-      stream: false,
     };
 
     expect(speech.response_format).toBe("wav");
