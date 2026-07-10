@@ -44,6 +44,8 @@ describe("compiled CLI foundation", () => {
     const output = capture();
     const loader = async (): Promise<never> => { throw new Error("must not load"); };
     expect(await run(["--help"], output.io, loader)).toBe(0);
+    expect(await run(["say", "--help"], output.io, loader)).toBe(0);
+    expect(output.out.at(-1)).toContain("usage: vox say");
     expect(await run([], output.io, loader)).toBe(2);
   });
 

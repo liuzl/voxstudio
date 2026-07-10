@@ -6,7 +6,7 @@ import { readWav, writeWav } from "@voxstudio/audio";
 import type { Fetch } from "@voxstudio/clients";
 import { parseConfig } from "@voxstudio/config";
 import type { CliIo } from "../io";
-import { runSay } from "./say";
+import { defaultDestination, runSay } from "./say";
 
 function output(): { io: CliIo; out: string[]; err: string[] } {
   const out: string[] = [];
@@ -29,6 +29,12 @@ function tone(): Uint8Array {
 }
 
 describe("say command", () => {
+  test("plays by default in a terminal and preserves redirected WAV output", () => {
+    expect(defaultDestination(true)).toEqual({ play: true });
+    expect(defaultDestination(false)).toEqual({ play: false, output: "-" });
+    expect(defaultDestination(undefined)).toEqual({ play: false, output: "-" });
+  });
+
   test("streams chunks to a valid output WAV", async () => {
     const dir = await mkdtemp(join(tmpdir(), "vox-say-"));
     const path = join(dir, "speech.wav");

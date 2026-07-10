@@ -27,6 +27,26 @@ interface SayArgs {
   quiet: boolean;
 }
 
+export function defaultDestination(stdoutIsTty: boolean | undefined): Pick<SayArgs, "play" | "output"> {
+  return stdoutIsTty ? { play: true } : { play: false, output: "-" };
+}
+
+export const sayUsage = `usage: vox say [options] [TEXT]
+
+Synthesize speech from text. Reads stdin when TEXT is omitted or '-'.
+In a terminal, audio plays by default; when redirected, WAV is written to stdout.
+
+options:
+  -f, --file PATH     read text from a file
+  -o, --output PATH   write WAV to PATH ('-' for stdout)
+  --play              play while generating (needs ffplay)
+  --voice ID          clone | design | registered voice ID
+  --design DESC       English voice description; implies --voice design
+  --cfg VALUE         classifier-free guidance value
+  --timesteps N       generation timesteps
+  -q, --quiet         suppress progress output
+  -h, --help          show this help message and exit`;
+
 function required(args: string[], index: number, option: string): string {
   const value = args[index];
   if (!value) throw new TypeError(`say: ${option} requires a value`);
@@ -58,7 +78,9 @@ function parse(args: string[]): SayArgs {
     else if (options.text === undefined) options.text = arg;
     else throw new TypeError("say: expected one text argument");
   }
-  if (options.output === undefined && !options.play) options.output = "-";
+  if (options.output === undefined && !options.play) {
+    Object.assign(options, defaultDestination(process.stdout.isTTY));
+  }
   return options;
 }
 

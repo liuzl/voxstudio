@@ -4,7 +4,7 @@ import { probeEngine, type Fetch } from "@voxstudio/clients";
 import type { HealthResult, VoxConfig } from "@voxstudio/contracts";
 import { loadConfig } from "@voxstudio/platform-bun";
 import { runChat } from "./commands/chat";
-import { runSay } from "./commands/say";
+import { runSay, sayUsage } from "./commands/say";
 import { runTranscribe } from "./commands/transcribe";
 import { consoleIo, type CliIo } from "./io";
 
@@ -48,7 +48,7 @@ export async function run(
   fetch: Fetch = globalThis.fetch,
 ): Promise<number> {
   const args = [...argv];
-  if (args.includes("-h") || args.includes("--help")) {
+  if (args[0] === "-h" || args[0] === "--help") {
     io.out(usage);
     return 0;
   }
@@ -65,6 +65,10 @@ export async function run(
   if (!command || !["health", "say", "transcribe", "chat"].includes(command)) {
     io.err(usage);
     return 2;
+  }
+  if (command === "say" && args.length === 1 && ["-h", "--help"].includes(args[0] as string)) {
+    io.out(sayUsage);
+    return 0;
   }
   try {
     const config = explicit === undefined ? await configLoader() : await configLoader({ explicit });
