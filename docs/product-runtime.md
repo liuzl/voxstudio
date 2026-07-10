@@ -179,8 +179,9 @@ rates, HTTP fields, and error codes are exact.
 
 - Build macOS arm64/x64, Linux x64/musl, and Windows x64 artifacts.
 - Execute smoke tests on native CI runners even when cross-compilation is available.
-- Sign and notarize macOS artifacts and sign Windows artifacts for public distribution.
 - Publish checksums and a minimal install path.
+- Deferred until external distribution: signing and notarizing macOS artifacts and
+  signing Windows artifacts. Self-hosted installs verify `SHA256SUMS` instead.
 
 ### Phase 5: first additional apps
 

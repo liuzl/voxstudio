@@ -61,6 +61,11 @@ dependencies. Windows writes `apps/cli/dist/vox.exe`. Playback and microphone re
 remain optional external integrations: install FFmpeg for `ffplay` and `ffmpeg`, and pass
 `--device` to select a non-default microphone.
 
+Tagged releases provide native archives for macOS arm64, Linux x64, and Windows x64. After
+extracting the archive, put `vox` (or `vox.exe`) on `PATH`, copy `config.example.yaml` to a
+writable location, and point `--config` at it. Verify a downloaded archive against the
+release's `SHA256SUMS` file before installing it. FFmpeg remains optional and is not bundled.
+
 The Python CLI remains available as a migration fallback and parity oracle:
 
 ```bash
