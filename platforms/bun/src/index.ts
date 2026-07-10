@@ -4,6 +4,14 @@ import { ConfigError, parseConfig } from "@voxstudio/config";
 import type { VoxConfig } from "@voxstudio/contracts";
 
 export { FfplaySink, TeeSink, WavFileSink, type PcmSink } from "./audio-sinks";
+export {
+  editText,
+  recordAudio,
+  recordCommand,
+  removeRecording,
+  splitCommand,
+  type HostSystem,
+} from "./voice-tools";
 
 type Environment = Readonly<Record<string, string | undefined>>;
 

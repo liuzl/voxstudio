@@ -6,9 +6,10 @@ import { loadConfig } from "@voxstudio/platform-bun";
 import { runChat } from "./commands/chat";
 import { runSay, sayUsage } from "./commands/say";
 import { runTranscribe } from "./commands/transcribe";
+import { runVoices, voicesUsage } from "./commands/voices";
 import { consoleIo, type CliIo } from "./io";
 
-const usage = `usage: vox [-h] [--config CONFIG] {health,say,transcribe,chat} ...
+const usage = `usage: vox [-h] [--config CONFIG] {health,say,transcribe,chat,voices} ...
 
 voxstudio: self-hosted voice I/O
 
@@ -17,6 +18,7 @@ commands:
   say              synthesize speech from text
   transcribe       transcribe an audio file
   chat             one-shot LLM turn
+  voices           manage named voices
 
 options:
   -h, --help       show this help message and exit
@@ -62,12 +64,16 @@ export async function run(
     args.splice(0, 2);
   }
   const command = args.shift();
-  if (!command || !["health", "say", "transcribe", "chat"].includes(command)) {
+  if (!command || !["health", "say", "transcribe", "chat", "voices"].includes(command)) {
     io.err(usage);
     return 2;
   }
   if (command === "say" && args.length === 1 && ["-h", "--help"].includes(args[0] as string)) {
     io.out(sayUsage);
+    return 0;
+  }
+  if (command === "voices" && args.length === 1 && ["-h", "--help"].includes(args[0] as string)) {
+    io.out(voicesUsage);
     return 0;
   }
   try {
@@ -78,6 +84,7 @@ export async function run(
     }
     if (command === "transcribe") return await runTranscribe(args, config, io, fetch);
     if (command === "say") return await runSay(args, config, io, fetch);
+    if (command === "voices") return await runVoices(args, config, io, fetch);
     return await runChat(args, config, io, fetch);
   } catch (error) {
     io.err(error instanceof Error ? error.message : String(error));
