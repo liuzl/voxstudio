@@ -1,3 +1,10 @@
+import json
+from dataclasses import asdict
+from pathlib import Path
+
+import pytest
+import yaml
+
 from voxcore import load_config
 
 YAML = """
@@ -17,6 +24,63 @@ def write(tmp_path, text=YAML):
     path = tmp_path / "voxstudio.yaml"
     path.write_text(text, encoding="utf-8")
     return str(path)
+
+
+SHARED_CASES = json.loads(
+    (Path(__file__).parents[2] / "fixtures" / "config" / "cases.json").read_text(encoding="utf-8")
+)
+
+
+def canonical(cfg):
+    def engine(value):
+        return {
+            "baseUrl": value.base_url, "model": value.model, "apiKey": value.api_key,
+            "healthPath": value.health_path, "maxTokens": value.max_tokens,
+        }
+    chunk = asdict(cfg.chunking)
+    return {
+        "engines": {name: engine(value) for name, value in cfg.engines.items()},
+        "ttsDefaults": {
+            "voice": cfg.tts_defaults.voice, "cfgValue": cfg.tts_defaults.cfg_value,
+            "timesteps": cfg.tts_defaults.timesteps,
+            "responseFormat": cfg.tts_defaults.response_format,
+        },
+        "chunking": {
+            "maxSeconds": chunk["max_seconds"], "firstMaxSeconds": chunk["first_max_seconds"],
+            "growth": chunk["growth"], "sentenceEnders": chunk["sentence_enders"],
+            "joinPauseMs": chunk["join_pause_ms"], "trimFloorDb": chunk["trim_floor_db"],
+            "edgePadMs": chunk["edge_pad_ms"],
+        },
+    }
+
+
+def assert_subset(actual, expected):
+    if isinstance(expected, dict):
+        for key, value in expected.items():
+            assert_subset(actual[key], value)
+    else:
+        assert actual == expected
+
+
+@pytest.mark.parametrize("case", SHARED_CASES, ids=lambda case: case["name"])
+def test_shared_config_contract(case, tmp_path, monkeypatch):
+    env_keys = set(case["env"])
+    env_keys.update({
+        "VOXSTUDIO_TTS_BASE_URL", "VOXSTUDIO_LLM_MAX_TOKENS",
+        "VOXSTUDIO_CHUNK_MAX_SECONDS", "VOXSTUDIO_CHUNK_MAX_CHARS",
+        "VOXSTUDIO_CHUNK_FIRST_MAX_CHARS", "VOXSTUDIO_CHUNK_GROWTH",
+        "VOXTEST_KEY", "VOXTEST_ABSENT", "VOXTEST_BARE_ABSENT",
+    })
+    for key in env_keys:
+        monkeypatch.delenv(key, raising=False)
+    for key, value in case["env"].items():
+        monkeypatch.setenv(key, value)
+    path = write(tmp_path, yaml.safe_dump(case["raw"], allow_unicode=True))
+    if fragment := case.get("errorContains"):
+        with pytest.raises((SystemExit, TypeError, ValueError), match=fragment):
+            load_config(path)
+    else:
+        assert_subset(canonical(load_config(path)), case["expected"])
 
 
 def test_yaml_merges_onto_defaults(tmp_path, monkeypatch):

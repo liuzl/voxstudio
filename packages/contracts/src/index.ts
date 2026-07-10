@@ -8,6 +8,35 @@ export interface EngineConfig {
   maxTokens?: number;
 }
 
+export interface ResolvedEngineConfig extends EngineConfig {
+  apiKey: string;
+  healthPath: string;
+  maxTokens: number;
+}
+
+export interface TtsDefaults {
+  voice: string;
+  cfgValue: number;
+  timesteps: number;
+  responseFormat: string;
+}
+
+export interface ChunkConfig {
+  maxSeconds: number;
+  firstMaxSeconds: number;
+  growth: number;
+  sentenceEnders: string;
+  joinPauseMs: number;
+  trimFloorDb: number;
+  edgePadMs: number;
+}
+
+export interface VoxConfig {
+  engines: Record<string, ResolvedEngineConfig>;
+  ttsDefaults: TtsDefaults;
+  chunking: ChunkConfig;
+}
+
 export interface Transcription {
   text: string;
   lang: string | null;
@@ -50,7 +79,7 @@ export interface NormalizedEngineError {
 }
 
 export interface HealthResult {
-  name: EngineName;
+  name: string;
   baseUrl: string;
   model: string;
   ok: boolean;

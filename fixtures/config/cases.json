@@ -1,0 +1,85 @@
+[
+  {
+    "name": "defaults",
+    "raw": {},
+    "env": {},
+    "expected": {
+      "engines": {
+        "tts": {"baseUrl": "http://127.0.0.1:8880", "model": "voxcpm2"},
+        "asr": {"baseUrl": "http://127.0.0.1:18086", "model": "nemotron-asr"},
+        "llm": {"baseUrl": "http://127.0.0.1:8080", "model": "gemma", "maxTokens": 4096}
+      },
+      "chunking": {"maxSeconds": 15, "firstMaxSeconds": 4.5, "joinPauseMs": 210}
+    }
+  },
+  {
+    "name": "yaml merge and environment expansion",
+    "raw": {
+      "engines": {
+        "tts": {"base_url": "http://127.0.0.1:9999", "api_key": "$VOXTEST_KEY"},
+        "llm": {"api_key": "${VOXTEST_ABSENT}", "model": "$VOXTEST_BARE_ABSENT"}
+      },
+      "chunking": {"max_seconds": 20}
+    },
+    "env": {"VOXTEST_KEY": "sk-abc"},
+    "expected": {
+      "engines": {
+        "tts": {"baseUrl": "http://127.0.0.1:9999", "model": "voxcpm2", "apiKey": "sk-abc"},
+        "llm": {"apiKey": "", "model": "$VOXTEST_BARE_ABSENT"}
+      },
+      "chunking": {"maxSeconds": 20, "joinPauseMs": 210}
+    }
+  },
+  {
+    "name": "flat environment overrides win",
+    "raw": {"engines": {"tts": {"base_url": "http://from-yaml"}}},
+    "env": {
+      "VOXSTUDIO_TTS_BASE_URL": "http://elsewhere:1234",
+      "VOXSTUDIO_LLM_MAX_TOKENS": "2048",
+      "VOXSTUDIO_CHUNK_MAX_SECONDS": "8"
+    },
+    "expected": {
+      "engines": {
+        "tts": {"baseUrl": "http://elsewhere:1234"},
+        "llm": {"maxTokens": 2048}
+      },
+      "chunking": {"maxSeconds": 8}
+    }
+  },
+  {
+    "name": "custom engine requires a base URL",
+    "raw": {"engines": {"custom": {"model": "custom-model"}}},
+    "env": {},
+    "errorContains": "base_url"
+  },
+  {
+    "name": "stale yaml character budget",
+    "raw": {"chunking": {"max_chars": 160}},
+    "env": {},
+    "errorContains": "chunking.max_seconds"
+  },
+  {
+    "name": "stale environment character budget",
+    "raw": {},
+    "env": {"VOXSTUDIO_CHUNK_FIRST_MAX_CHARS": "80"},
+    "errorContains": "VOXSTUDIO_CHUNK_FIRST_MAX_SECONDS"
+  },
+  {
+    "name": "zero chunk budget",
+    "raw": {"chunking": {"max_seconds": 0}},
+    "env": {},
+    "errorContains": "chunking.max_seconds"
+  },
+  {
+    "name": "nan environment chunk budget",
+    "raw": {},
+    "env": {"VOXSTUDIO_CHUNK_MAX_SECONDS": "nan"},
+    "errorContains": "chunking.max_seconds"
+  },
+  {
+    "name": "infinite growth",
+    "raw": {},
+    "env": {"VOXSTUDIO_CHUNK_GROWTH": "inf"},
+    "errorContains": "chunking.growth"
+  }
+]
