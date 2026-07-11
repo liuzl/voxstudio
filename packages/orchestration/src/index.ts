@@ -30,6 +30,8 @@ export interface SynthesisOptions {
   cfgValue?: number;
   timesteps?: number;
   promptPrefix?: string;
+  seed?: number;
+  prosodyPrompt?: boolean;
   onChunk?: OnChunk;
 }
 
@@ -40,6 +42,8 @@ function speechInput(text: string, options: SynthesisOptions): SpeechInput {
     response_format: options.ttsDefaults.responseFormat,
     cfg_value: options.cfgValue ?? options.ttsDefaults.cfgValue,
     timesteps: options.timesteps ?? options.ttsDefaults.timesteps,
+    ...(options.seed === undefined ? {} : { seed: options.seed }),
+    ...(options.prosodyPrompt ? { prosody_prompt: true } : {}),
   };
 }
 

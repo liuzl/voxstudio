@@ -72,6 +72,18 @@ describe("say command", () => {
     expect(await Bun.file(path).exists()).toBeTrue();
   });
 
+  test("registered voices carry their reference transcript and an explicit seed", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "vox-say-voice-"));
+    const path = join(dir, "speech.wav");
+    const fetch: Fetch = async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body).toMatchObject({ voice: "alice", prosody_prompt: true, seed: 42 });
+      return new Response(tone().buffer as ArrayBuffer);
+    };
+    await runSay(["测试", "--voice", "alice", "--seed", "42", "-o", path, "-q"],
+      config(), output().io, fetch);
+  });
+
   test("empty text and invalid numeric options are rejected", async () => {
     await expect(runSay(["", "-o", "unused.wav"], config(), output().io))
       .rejects.toThrow("no text");

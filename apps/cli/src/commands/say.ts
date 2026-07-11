@@ -24,6 +24,7 @@ interface SayArgs {
   design?: string;
   cfgValue?: number;
   timesteps?: number;
+  seed?: number;
   quiet: boolean;
 }
 
@@ -44,6 +45,7 @@ options:
   --design DESC       English voice description; implies --voice design
   --cfg VALUE         classifier-free guidance value
   --timesteps N       generation timesteps
+  --seed N            reproduce a generation with an integer seed
   -q, --quiet         suppress progress output
   -h, --help          show this help message and exit`;
 
@@ -73,6 +75,12 @@ function parse(args: string[]): SayArgs {
       const raw = required(args, ++index, arg);
       if (!/^[+-]?\d+$/.test(raw)) throw new TypeError("say: --timesteps must be an integer");
       options.timesteps = Number(raw);
+    } else if (arg === "--seed") {
+      const raw = required(args, ++index, arg);
+      if (!/^[+-]?\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+        throw new TypeError("say: --seed must be a safe integer");
+      }
+      options.seed = Number(raw);
     } else if (arg === "-q" || arg === "--quiet") options.quiet = true;
     else if (arg.startsWith("-") && arg !== "-") throw new TypeError(`say: unknown option ${arg}`);
     else if (options.text === undefined) options.text = arg;
@@ -121,6 +129,7 @@ export async function runSay(
     promptPrefix = `(${options.design})`;
     voice = "design";
   }
+  const effectiveVoice = voice ?? config.ttsDefaults.voice;
 
   const toStdout = options.output === "-";
   const sink = new TeeSink(
@@ -135,10 +144,14 @@ export async function runSay(
     for await (const piece of streamLong(tts, text, {
       chunking: config.chunking,
       ttsDefaults: config.ttsDefaults,
-      ...(voice === undefined ? {} : { voice }),
+      voice: effectiveVoice,
       ...(options.cfgValue === undefined ? {} : { cfgValue: options.cfgValue }),
       ...(options.timesteps === undefined ? {} : { timesteps: options.timesteps }),
+      ...(options.seed === undefined ? {} : { seed: options.seed }),
       ...(promptPrefix === undefined ? {} : { promptPrefix }),
+      ...(effectiveVoice === "clone" || effectiveVoice === "design"
+        ? {}
+        : { prosodyPrompt: true }),
       ...(options.quiet ? {} : {
         onChunk: (index: number, total: number, chunk: string) => {
           io.err(`  [${index + 1}/${total}] ${Array.from(chunk).length} chars, ~${estSeconds(chunk).toFixed(1)}s`);

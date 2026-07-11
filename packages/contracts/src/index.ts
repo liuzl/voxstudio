@@ -64,6 +64,8 @@ export interface SpeechRequest {
   response_format: string;
   cfg_value: number;
   timesteps: number;
+  seed?: number;
+  prosody_prompt?: boolean;
 }
 
 export type SpeechInput = Omit<SpeechRequest, "model">;
