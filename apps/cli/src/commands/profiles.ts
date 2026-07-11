@@ -7,9 +7,13 @@ export const profilesUsage = `usage: vox profiles {list,create,show,rm} ...
 
 commands:
   list
-  create ID --description TEXT --anchor-text TEXT --seed N
+  create ID --description TEXT --anchor-text TEXT --seed N [--cfg VALUE] [--timesteps N]
   show ID
-  rm ID`;
+  rm ID
+
+create options:
+  --cfg VALUE         classifier-free guidance value
+  --timesteps N       generation timesteps`;
 
 function requireProfile(voice: Awaited<ReturnType<TtsClient["getVoice"]>>) {
   if (!voice.design_profile) throw new TypeError(`profiles: ${voice.id} is not a design profile`);
@@ -40,15 +44,37 @@ export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, 
   if (operation !== "create") throw new TypeError("profiles: expected list, create, show, or rm");
   const id = args.shift();
   let description: string | undefined, anchorText: string | undefined, seed: number | undefined;
+  let cfgValue: number | undefined, timesteps: number | undefined;
   while (args.length) {
-    const option = args.shift(); const value = args.shift();
+    const option = args.shift();
+    if (option !== "--description" && option !== "--anchor-text" && option !== "--seed"
+      && option !== "--cfg" && option !== "--timesteps") {
+      throw new TypeError(`profiles: unknown option ${option}`);
+    }
+    const value = args.shift();
     if (!value) throw new TypeError(`profiles: ${option} requires a value`);
     if (option === "--description") description = value;
     else if (option === "--anchor-text") anchorText = value;
-    else if (option === "--seed" && /^[+-]?\d+$/.test(value)) seed = Number(value);
-    else throw new TypeError(`profiles: unknown option ${option}`);
+    else if (option === "--seed") {
+      if (!/^[+-]?\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        throw new TypeError("profiles: --seed must be a safe integer");
+      }
+      seed = Number(value);
+    } else if (option === "--cfg") {
+      cfgValue = Number(value);
+      if (!Number.isFinite(cfgValue)) throw new TypeError("profiles: --cfg must be a number");
+    } else {
+      if (!/^[+-]?\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        throw new TypeError("profiles: --timesteps must be a safe integer");
+      }
+      timesteps = Number(value);
+    }
   }
   if (!id || !description || !anchorText || seed === undefined) throw new TypeError("profiles create: ID, --description, --anchor-text, and --seed are required");
-  io.out(JSON.stringify(await new TtsClient(engine(config, "tts"), fetch).createDesignProfile({ id, description, anchor_text: anchorText, seed })));
+  io.out(JSON.stringify(await tts.createDesignProfile({
+    id, description, anchor_text: anchorText, seed,
+    ...(cfgValue === undefined ? {} : { cfg_value: cfgValue }),
+    ...(timesteps === undefined ? {} : { timesteps }),
+  })));
   return 0;
 }

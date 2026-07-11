@@ -13,6 +13,30 @@ test("creates a design profile", async () => {
   expect(out).toEqual(["{\"id\":\"calm\"}"]);
 });
 
+test("forwards explicit design generation parameters", async () => {
+  const fetch = async (_url: Request | URL | string, init?: RequestInit) => {
+    expect(JSON.parse(String(init?.body))).toEqual({
+      id: "tuned", description: "warm voice", anchor_text: "锚点", seed: 43, cfg_value: 2.5, timesteps: 12,
+    });
+    return Response.json({ id: "tuned" });
+  };
+  const io = { out: () => {}, err: () => {} };
+  await runProfiles([
+    "create", "tuned", "--description", "warm voice", "--anchor-text", "锚点", "--seed", "43",
+    "--cfg", "2.5", "--timesteps", "12",
+  ], parseConfig(), io, fetch);
+});
+
+test("validates design generation parameters", async () => {
+  const io = { out: () => {}, err: () => {} };
+  await expect(runProfiles([
+    "create", "bad", "--description", "voice", "--anchor-text", "锚点", "--seed", "1", "--cfg", "NaN",
+  ], parseConfig(), io)).rejects.toThrow("profiles: --cfg must be a number");
+  await expect(runProfiles([
+    "create", "bad", "--description", "voice", "--anchor-text", "锚点", "--seed", "1", "--timesteps", "1.5",
+  ], parseConfig(), io)).rejects.toThrow("profiles: --timesteps must be a safe integer");
+});
+
 test("lists and removes only profile voices", async () => {
   const out: string[] = [];
   const fetch = async (url: Request | URL | string, init?: RequestInit) => {
