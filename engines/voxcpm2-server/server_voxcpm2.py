@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from voxcpm import VoxCPM
 from continuations import ContinuationStore, SESSION_ID_RE
 from fingerprint import audio_fingerprint
+from runtime import model_identity
 
 # Runtime layout is configurable via env (no hard-coded absolute paths):
 #   VOXCPM2_BASE    base dir holding the model + default reference voice (default: ~/tts-eval-voxcpm2)
@@ -42,6 +43,7 @@ app = FastAPI()
 
 _CUDA = torch.cuda.is_available()
 _continuations = ContinuationStore()
+MODEL_ID = model_identity()
 
 
 def _generate(text, ref, cfg, ts, prompt=None, seed=None):
@@ -145,7 +147,7 @@ def health():
     with lock:
         _continuations.prune()
         sessions = _continuations.stats()
-    return {"status": "ok", "sample_rate": SR, "continuations": sessions}
+    return {"status": "ok", "model": MODEL_ID, "sample_rate": SR, "continuations": sessions}
 
 @app.post("/v1/voices", status_code=201)
 def create_voice(id: str = Form(...), text: str = Form(...), audio: UploadFile = File(...)):
@@ -196,7 +198,7 @@ def create_design_profile(r: DesignProfileReq):
                 "sample_rate": info.samplerate, "created_at": _now(), "updated_at": _now(),
                 "design_profile": {"description": r.description, "seed": r.seed,
                                    "cfg_value": r.cfg_value, "timesteps": r.timesteps,
-                                   "model": "voxcpm@616d3d3",
+                                   "model": MODEL_ID,
                                    "audio_sha256": audio_fingerprint(wav)}}
         with open(_vmeta(r.id), "w", encoding="utf-8") as output:
             json.dump(meta, output, ensure_ascii=False)
