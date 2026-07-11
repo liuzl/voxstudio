@@ -6,7 +6,7 @@ FastAPI HTTP wrapper over **OpenBMB VoxCPM2** (48kHz high-fidelity Chinese TTS).
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/health` | `{"status":"ok","sample_rate":48000}` |
+| GET | `/health` | service status, sample rate, and active continuation-session count |
 | POST | `/v1/audio/speech` | OpenAI-compatible: `{input, voice, response_format, seed?}` — `voice=clone` (default ref) / `design` (zero-shot, prefix `input` with `(English description)`) |
 | POST | `/tts` | JSON `{text, voice, ref_path?, cfg_value?, timesteps?}` |
 | POST | `/tts_form` | multipart, upload `ref_file` to clone from an arbitrary reference voice |
@@ -24,6 +24,11 @@ For `design`, pass an integer `seed` to reproduce the same request on the same l
 model/runtime. The service serializes generation while applying that seed, because VoxCPM
 sets Torch's process-global RNG. A seed makes a candidate replayable; it does not make
 independent long-text chunks share a voice identity.
+
+Long-text callers can send one `continuation_id` for every segment and set
+`continuation_end=true` on the final one. The server retains the acoustic cache only for
+that session, removes it on the final segment, expires idle sessions after 15 minutes, and
+caps concurrent sessions at eight.
 
 ```bash
 curl -F id=alice -F 'text=参考音的逐字稿' -F audio=@sample.wav http://<host>:8880/v1/voices

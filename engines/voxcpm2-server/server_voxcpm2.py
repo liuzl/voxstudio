@@ -11,7 +11,7 @@
 voice 取值: clone(默认音) / design(零样本,text 前加 (English 描述)) / <已注册 id>.
 单 GPU 模型, threading.Lock 串行化生成.
 """
-import io, os, re, json, threading, tempfile, subprocess, shutil, time
+import io, os, re, json, threading, tempfile, subprocess, shutil
 from datetime import datetime, timezone
 import soundfile as sf
 import torch
@@ -19,6 +19,7 @@ from fastapi import FastAPI, Response, Form, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from voxcpm import VoxCPM
+from continuations import ContinuationStore, SESSION_ID_RE
 
 # Runtime layout is configurable via env (no hard-coded absolute paths):
 #   VOXCPM2_BASE    base dir holding the model + default reference voice (default: ~/tts-eval-voxcpm2)
@@ -39,16 +40,7 @@ lock = threading.Lock()
 app = FastAPI()
 
 _CUDA = torch.cuda.is_available()
-_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,96}$")
-_SESSION_TTL_SECONDS = 900
-_continuations = {}
-
-
-def _prune_continuations(now=None):
-    now = time.monotonic() if now is None else now
-    for session_id, session in list(_continuations.items()):
-        if now - session["updated_at"] > _SESSION_TTL_SECONDS:
-            del _continuations[session_id]
+_continuations = ContinuationStore()
 
 
 def _generate(text, ref, cfg, ts, prompt=None, seed=None):
@@ -71,14 +63,14 @@ def _generate(text, ref, cfg, ts, prompt=None, seed=None):
 
 
 def _generate_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
-    if not _SESSION_ID_RE.fullmatch(session_id):
+    if not SESSION_ID_RE.fullmatch(session_id):
         raise HTTPException(400, {"error": {"code": "invalid_continuation_id",
             "message": "continuation_id must contain only letters, digits, underscores, or hyphens.",
             "type": "invalid_request_error"}})
     with lock:
-        _prune_continuations()
-        session = _continuations.get(session_id)
-        if session is None:
+        _continuations.prune()
+        cache = _continuations.get(session_id)
+        if cache is None:
             if prompt:
                 cache = model.tts_model.build_prompt_cache(
                     prompt_text=prompt[1], prompt_wav_path=prompt[0], reference_wav_path=ref)
@@ -86,16 +78,14 @@ def _generate_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
                 cache = model.tts_model.build_prompt_cache(reference_wav_path=ref)
             else:
                 cache = None
-        else:
-            cache = session["cache"]
         wav, _, audio_features = model.tts_model.generate_with_prompt_cache(
             target_text=text, prompt_cache=cache, cfg_value=cfg, inference_timesteps=ts,
             retry_badcase=True, seed=seed)
         next_cache = model.tts_model.merge_prompt_cache(cache, text, audio_features)
         if end:
-            _continuations.pop(session_id, None)
+            _continuations.pop(session_id)
         else:
-            _continuations[session_id] = {"cache": next_cache, "updated_at": time.monotonic()}
+            _continuations.put(session_id, next_cache)
         if _CUDA:
             torch.cuda.empty_cache()
     buf = io.BytesIO(); sf.write(buf, wav.squeeze(0).cpu().numpy(), SR, format="WAV"); buf.seek(0)
@@ -151,7 +141,10 @@ def resolve_prompt(voice):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "sample_rate": SR}
+    with lock:
+        _continuations.prune()
+        sessions = _continuations.stats()
+    return {"status": "ok", "sample_rate": SR, "continuations": sessions}
 
 @app.post("/v1/voices", status_code=201)
 def create_voice(id: str = Form(...), text: str = Form(...), audio: UploadFile = File(...)):
