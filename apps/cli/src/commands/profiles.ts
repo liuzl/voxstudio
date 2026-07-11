@@ -3,11 +3,12 @@ import { engine } from "@voxstudio/config";
 import type { VoxConfig } from "@voxstudio/contracts";
 import type { CliIo } from "../io";
 
-export const profilesUsage = `usage: vox profiles {list,create,show,rm} ...
+export const profilesUsage = `usage: vox profiles {list,create,reproduce,show,rm} ...
 
 commands:
   list
   create ID --description TEXT --anchor-text TEXT --seed N [--cfg VALUE] [--timesteps N]
+  reproduce SOURCE_ID NEW_ID
   show ID
   rm ID
 
@@ -41,7 +42,22 @@ export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, 
     io.out(`deleted ${profile.id}`);
     return 0;
   }
-  if (operation !== "create") throw new TypeError("profiles: expected list, create, show, or rm");
+  if (operation === "reproduce") {
+    if (args.length !== 2) throw new TypeError("profiles reproduce: source ID and new ID are required");
+    const source = requireProfile(await tts.getVoice(args[0] as string));
+    if (!source.prompt_text) throw new TypeError(`profiles reproduce: ${source.id} has no anchor text`);
+    const profile = source.design_profile;
+    io.out(JSON.stringify(await tts.createDesignProfile({
+      id: args[1] as string,
+      description: profile.description,
+      anchor_text: source.prompt_text,
+      seed: profile.seed,
+      cfg_value: profile.cfg_value,
+      timesteps: profile.timesteps,
+    })));
+    return 0;
+  }
+  if (operation !== "create") throw new TypeError("profiles: expected list, create, reproduce, show, or rm");
   const id = args.shift();
   let description: string | undefined, anchorText: string | undefined, seed: number | undefined;
   let cfgValue: number | undefined, timesteps: number | undefined;

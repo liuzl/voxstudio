@@ -88,6 +88,7 @@ export interface ChatCompletionRequest {
 
 export interface Voice {
   id: string;
+  prompt_text?: string;
   prompt_audio_length?: number;
   created_at?: string;
   design_profile?: DesignProfile;

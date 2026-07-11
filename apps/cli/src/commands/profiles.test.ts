@@ -37,6 +37,35 @@ test("validates design generation parameters", async () => {
   ], parseConfig(), io)).rejects.toThrow("profiles: --timesteps must be a safe integer");
 });
 
+test("reproduces a profile from its recorded generation settings", async () => {
+  const fetch = async (url: Request | URL | string, init?: RequestInit) => {
+    if (!init?.method) {
+      expect(String(url)).toEndWith("/v1/voices/source");
+      return Response.json({
+        id: "source", prompt_text: "锚点",
+        design_profile: { description: "warm voice", seed: 43, cfg_value: 2.5, timesteps: 12, model: "test" },
+      });
+    }
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual({
+      id: "copy", description: "warm voice", anchor_text: "锚点", seed: 43, cfg_value: 2.5, timesteps: 12,
+    });
+    return Response.json({ id: "copy" });
+  };
+  const out: string[] = [];
+  await runProfiles(["reproduce", "source", "copy"], parseConfig(), { out: line => out.push(line), err: () => {} }, fetch);
+  expect(out).toEqual(["{\"id\":\"copy\"}"]);
+});
+
+test("does not reproduce profiles without a recorded anchor text", async () => {
+  const fetch = async () => Response.json({
+    id: "source", design_profile: { description: "warm voice", seed: 43, cfg_value: 2.5, timesteps: 12, model: "test" },
+  });
+  const io = { out: () => {}, err: () => {} };
+  await expect(runProfiles(["reproduce", "source", "copy"], parseConfig(), io, fetch))
+    .rejects.toThrow("profiles reproduce: source has no anchor text");
+});
+
 test("lists and removes only profile voices", async () => {
   const out: string[] = [];
   const fetch = async (url: Request | URL | string, init?: RequestInit) => {
