@@ -57,4 +57,25 @@ describe("transcribe command", () => {
       segments: [{ speaker: "S01" }],
     });
   });
+
+  test("longform emits speaker-labelled SRT", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "vox-transcribe-"));
+    const path = join(dir, "meeting.wav");
+    await writeFile(path, "wav bytes");
+    const config = parseConfig({
+      engines: { asr_longform: { base_url: "https://moss.example", model: "moss" } },
+    });
+    const fetch: Fetch = async () => Response.json({
+      text: "meeting",
+      segments: [{ start: 1.2, end: 2.345, speaker: "S01", text: "meeting" }],
+    });
+    const captured = output();
+    await runTranscribe([path, "--mode", "longform", "--format", "srt"], config, captured.io, fetch);
+    expect(captured.out).toEqual(["1\n00:00:01,200 --> 00:00:02,345\n[S01] meeting"]);
+  });
+
+  test("rejects SRT outside longform mode", async () => {
+    await expect(runTranscribe(["sample.wav", "--format", "srt"], parseConfig(), output().io))
+      .rejects.toThrow("requires --mode longform");
+  });
 });
