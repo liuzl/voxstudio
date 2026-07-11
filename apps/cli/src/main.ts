@@ -4,13 +4,14 @@ import { probeEngine, type Fetch } from "@voxstudio/clients";
 import type { HealthResult, VoxConfig } from "@voxstudio/contracts";
 import { loadConfig } from "@voxstudio/platform-bun";
 import { runChat } from "./commands/chat";
+import { configUsage, runConfig } from "./commands/config";
 import { profilesUsage, runProfiles } from "./commands/profiles";
 import { runSay, sayUsage } from "./commands/say";
 import { runTranscribe } from "./commands/transcribe";
 import { runVoices, voicesUsage } from "./commands/voices";
 import { consoleIo, type CliIo } from "./io";
 
-const usage = `usage: vox [-h] [--config CONFIG] {health,say,transcribe,chat,voices,profiles} ...
+const usage = `usage: vox [-h] [--config CONFIG] {health,say,transcribe,chat,voices,profiles,config} ...
 
 voxstudio: self-hosted voice I/O
 
@@ -21,6 +22,7 @@ commands:
   chat             one-shot LLM turn
   voices           manage named voices
   profiles         create reusable design profiles
+  config           validate resolved configuration
 
 options:
   -h, --help       show this help message and exit
@@ -66,7 +68,7 @@ export async function run(
     args.splice(0, 2);
   }
   const command = args.shift();
-  if (!command || !["health", "say", "transcribe", "chat", "voices", "profiles"].includes(command)) {
+  if (!command || !["health", "say", "transcribe", "chat", "voices", "profiles", "config"].includes(command)) {
     io.err(usage);
     return 2;
   }
@@ -82,6 +84,10 @@ export async function run(
     io.out(profilesUsage);
     return 0;
   }
+  if (command === "config" && args.length === 1 && ["-h", "--help"].includes(args[0] as string)) {
+    io.out(configUsage);
+    return 0;
+  }
   try {
     const config = explicit === undefined ? await configLoader() : await configLoader({ explicit });
     if (command === "health") {
@@ -92,6 +98,7 @@ export async function run(
     if (command === "say") return await runSay(args, config, io, fetch);
     if (command === "voices") return await runVoices(args, config, io, fetch);
     if (command === "profiles") return await runProfiles(args, config, io, fetch);
+    if (command === "config") return runConfig(args, config, io);
     return await runChat(args, config, io, fetch);
   } catch (error) {
     io.err(error instanceof Error ? error.message : String(error));
