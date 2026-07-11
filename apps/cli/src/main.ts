@@ -3,11 +3,11 @@
 import { probeEngine, type Fetch } from "@voxstudio/clients";
 import type { HealthResult, VoxConfig } from "@voxstudio/contracts";
 import { loadConfig } from "@voxstudio/platform-bun";
-import { runChat } from "./commands/chat";
+import { chatUsage, runChat } from "./commands/chat";
 import { configUsage, runConfig } from "./commands/config";
 import { profilesUsage, runProfiles } from "./commands/profiles";
 import { runSay, sayUsage } from "./commands/say";
-import { runTranscribe } from "./commands/transcribe";
+import { runTranscribe, transcribeUsage } from "./commands/transcribe";
 import { runVoices, voicesUsage } from "./commands/voices";
 import { consoleIo, type CliIo } from "./io";
 
@@ -74,6 +74,14 @@ export async function run(
   }
   if (command === "say" && args.length === 1 && ["-h", "--help"].includes(args[0] as string)) {
     io.out(sayUsage);
+    return 0;
+  }
+  if (command === "transcribe" && args.length === 1 && ["-h", "--help"].includes(args[0] as string)) {
+    io.out(transcribeUsage);
+    return 0;
+  }
+  if (command === "chat" && args.length === 1 && ["-h", "--help"].includes(args[0] as string)) {
+    io.out(chatUsage);
     return 0;
   }
   if (command === "voices" && args.length === 1 && ["-h", "--help"].includes(args[0] as string)) {

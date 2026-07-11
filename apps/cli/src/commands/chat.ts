@@ -6,6 +6,11 @@ import { readStdinText, writeBytes } from "@voxstudio/platform-bun";
 import { sanitizeForTts } from "@voxstudio/text";
 import type { CliIo } from "../io";
 
+export const chatUsage = `usage: vox chat [PROMPT | -] [--system TEXT] [--max-tokens N]
+                [--speak] [--voice VOICE] [-o OUTPUT]
+
+Read a prompt from the argument or standard input, then run one LLM turn.`;
+
 interface ChatArgs {
   prompt?: string;
   system?: string;

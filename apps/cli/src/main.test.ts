@@ -46,6 +46,10 @@ describe("compiled CLI foundation", () => {
     expect(await run(["--help"], output.io, loader)).toBe(0);
     expect(await run(["say", "--help"], output.io, loader)).toBe(0);
     expect(output.out.at(-1)).toContain("usage: vox say");
+    expect(await run(["transcribe", "--help"], output.io, loader)).toBe(0);
+    expect(output.out.at(-1)).toContain("usage: vox transcribe");
+    expect(await run(["chat", "--help"], output.io, loader)).toBe(0);
+    expect(output.out.at(-1)).toContain("usage: vox chat");
     expect(await run(["voices", "--help"], output.io, loader)).toBe(0);
     expect(output.out.at(-1)).toContain("usage: vox voices");
     expect(await run([], output.io, loader)).toBe(2);

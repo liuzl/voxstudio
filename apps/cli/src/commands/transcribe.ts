@@ -4,6 +4,11 @@ import { engine } from "@voxstudio/config";
 import { readFileBlob } from "@voxstudio/platform-bun";
 import type { CliIo } from "../io";
 
+export const transcribeUsage = `usage: vox transcribe AUDIO [--language LANGUAGE] [--mode {realtime,longform}]
+                      [--format {text,json,srt,ass} | --json] [--max-new-tokens N]
+
+Transcribe an audio file. Subtitle formats require --mode longform.`;
+
 interface TranscribeArgs {
   audio: string;
   language: string;
