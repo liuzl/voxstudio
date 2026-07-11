@@ -9,4 +9,5 @@ exclude = ["engines/*"]
 voxcore = { workspace = true }
 
 [tool.pytest.ini_options]
-testpaths = ["core/tests", "apps/cli/tests"]
+testpaths = ["core/tests", "apps/cli/tests", "tools/tests"]
+pythonpath = ["."]
