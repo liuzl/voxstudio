@@ -100,6 +100,7 @@ export interface DesignProfile {
   cfg_value: number;
   timesteps: number;
   model: string;
+  audio_sha256?: string;
 }
 
 export interface DesignProfileRequest {

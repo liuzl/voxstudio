@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from voxcpm import VoxCPM
 from continuations import ContinuationStore, SESSION_ID_RE
+from fingerprint import audio_fingerprint
 
 # Runtime layout is configurable via env (no hard-coded absolute paths):
 #   VOXCPM2_BASE    base dir holding the model + default reference voice (default: ~/tts-eval-voxcpm2)
@@ -195,7 +196,8 @@ def create_design_profile(r: DesignProfileReq):
                 "sample_rate": info.samplerate, "created_at": _now(), "updated_at": _now(),
                 "design_profile": {"description": r.description, "seed": r.seed,
                                    "cfg_value": r.cfg_value, "timesteps": r.timesteps,
-                                   "model": "voxcpm@616d3d3"}}
+                                   "model": "voxcpm@616d3d3",
+                                   "audio_sha256": audio_fingerprint(wav)}}
         with open(_vmeta(r.id), "w", encoding="utf-8") as output:
             json.dump(meta, output, ensure_ascii=False)
         return meta
