@@ -62,6 +62,7 @@ bun run build:cli
 ./apps/cli/dist/vox voices add carol --record 15 --language zh       # record, ASR, register
 ./apps/cli/dist/vox profiles create calm --description "calm clear female voice" --anchor-text "这是锚文本。" --seed 20260711 --cfg 2 --timesteps 10
 ./apps/cli/dist/vox profiles reproduce calm calm-copy
+./apps/cli/dist/vox profiles verify calm calm-copy
 ```
 
 Design profiles retain their description, anchor text, seed, CFG, timesteps, model identity,
