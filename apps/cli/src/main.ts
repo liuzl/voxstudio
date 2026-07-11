@@ -28,6 +28,10 @@ options:
   -h, --help       show this help message and exit
   --config CONFIG  path to config yaml`;
 
+const healthUsage = `usage: vox health
+
+Probe every configured engine and return a non-zero exit code when any probe fails.`;
+
 export type { CliIo } from "./io";
 
 export async function runHealth(
@@ -72,28 +76,17 @@ export async function run(
     io.err(usage);
     return 2;
   }
-  if (command === "say" && args.length === 1 && ["-h", "--help"].includes(args[0] as string)) {
-    io.out(sayUsage);
-    return 0;
-  }
-  if (command === "transcribe" && args.length === 1 && ["-h", "--help"].includes(args[0] as string)) {
-    io.out(transcribeUsage);
-    return 0;
-  }
-  if (command === "chat" && args.length === 1 && ["-h", "--help"].includes(args[0] as string)) {
-    io.out(chatUsage);
-    return 0;
-  }
-  if (command === "voices" && args.length === 1 && ["-h", "--help"].includes(args[0] as string)) {
-    io.out(voicesUsage);
-    return 0;
-  }
-  if (command === "profiles" && args.length === 1 && ["-h", "--help"].includes(args[0] as string)) {
-    io.out(profilesUsage);
-    return 0;
-  }
-  if (command === "config" && args.length === 1 && ["-h", "--help"].includes(args[0] as string)) {
-    io.out(configUsage);
+  if (args.includes("-h") || args.includes("--help")) {
+    const commandUsage = {
+      health: healthUsage,
+      say: sayUsage,
+      transcribe: transcribeUsage,
+      chat: chatUsage,
+      voices: voicesUsage,
+      profiles: profilesUsage,
+      config: configUsage,
+    };
+    io.out(commandUsage[command]);
     return 0;
   }
   try {
