@@ -77,7 +77,7 @@ export async function run(
     return 2;
   }
   if (args.includes("-h") || args.includes("--help")) {
-    const commandUsage = {
+    const commandUsage: Record<string, string> = {
       health: healthUsage,
       say: sayUsage,
       transcribe: transcribeUsage,
@@ -86,7 +86,7 @@ export async function run(
       profiles: profilesUsage,
       config: configUsage,
     };
-    io.out(commandUsage[command]);
+    io.out(commandUsage[command] ?? usage);
     return 0;
   }
   try {

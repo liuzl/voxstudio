@@ -1,6 +1,6 @@
 import { TtsClient, type Fetch } from "@voxstudio/clients";
 import { engine } from "@voxstudio/config";
-import type { VoxConfig } from "@voxstudio/contracts";
+import type { DesignProfile, Voice, VoxConfig } from "@voxstudio/contracts";
 import type { CliIo } from "../io";
 
 export const profilesUsage = `usage: vox profiles {list,create,reproduce,verify,show,rm} ...
@@ -17,12 +17,14 @@ create options:
   --cfg VALUE         classifier-free guidance value
   --timesteps N       generation timesteps`;
 
-function requireProfile(voice: Awaited<ReturnType<TtsClient["getVoice"]>>) {
+type ProfileVoice = Voice & { design_profile: DesignProfile };
+
+function requireProfile(voice: Voice): ProfileVoice {
   if (!voice.design_profile) throw new TypeError(`profiles: ${voice.id} is not a design profile`);
-  return voice;
+  return voice as ProfileVoice;
 }
 
-function reproducibilityRecord(voice: Awaited<ReturnType<TtsClient["getVoice"]>>) {
+function reproducibilityRecord(voice: Voice) {
   const profile = requireProfile(voice);
   if (!profile.prompt_text) throw new TypeError(`profiles: ${profile.id} has no anchor text`);
   if (!profile.design_profile.audio_sha256) throw new TypeError(`profiles: ${profile.id} has no audio fingerprint`);
