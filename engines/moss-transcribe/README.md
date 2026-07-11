@@ -163,6 +163,20 @@ curl -F file=@meeting.wav \
 The included `moss-transcribe.service` is a path-parameterized user-systemd template.
 Adjust its working directory, library, and model paths for the host before enabling it.
 
+For macOS, copy `com.voxstudio.moss-transcribe.plist.example`, replace its
+`@SERVER_DIR@`, `@MOSS_LIBRARY@`, `@MOSS_MODEL@`, and `@LOG_DIR@` placeholders, then install
+it as a user LaunchAgent:
+
+```bash
+plutil -lint com.voxstudio.moss-transcribe.plist
+cp com.voxstudio.moss-transcribe.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.voxstudio.moss-transcribe.plist
+launchctl kickstart -k gui/$(id -u)/com.voxstudio.moss-transcribe
+```
+
+The template binds loopback by default. Change the host only when a trusted network and
+an authentication boundary are already in place.
+
 ## Initial measurements
 
 These are smoke-test measurements, not a general benchmark. They include model loading and

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.voxstudio.moss-transcribe</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>@SERVER_DIR@/.venv/bin/python</string>
+    <string>-m</string>
+    <string>uvicorn</string>
+    <string>server_moss:app</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>18087</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>@SERVER_DIR@</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MOSS_LIBRARY</key>
+    <string>@MOSS_LIBRARY@</string>
+    <key>MOSS_MODEL</key>
+    <string>@MOSS_MODEL@</string>
+    <key>MOSS_MODEL_NAME</key>
+    <string>moss-transcribe-diarize</string>
+    <key>GGML_METAL_NO_RESIDENCY</key>
+    <string>1</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+
+  <key>StandardOutPath</key>
+  <string>@LOG_DIR@/moss-transcribe.log</string>
+  <key>StandardErrorPath</key>
+  <string>@LOG_DIR@/moss-transcribe.error.log</string>
+</dict>
+</plist>
