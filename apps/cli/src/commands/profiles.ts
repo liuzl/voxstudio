@@ -3,12 +3,35 @@ import { engine } from "@voxstudio/config";
 import type { VoxConfig } from "@voxstudio/contracts";
 import type { CliIo } from "../io";
 
-export const profilesUsage = `usage: vox profiles create ID --description TEXT --anchor-text TEXT --seed N
+export const profilesUsage = `usage: vox profiles {list,create,show,rm} ...
 
-Create a reusable Design Profile. Inspect or remove it with vox voices show/rm ID.`;
+commands:
+  list
+  create ID --description TEXT --anchor-text TEXT --seed N
+  show ID
+  rm ID`;
 
 export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, fetch: Fetch = globalThis.fetch): Promise<number> {
-  if (args.shift() !== "create") throw new TypeError("profiles: expected create");
+  const operation = args.shift();
+  const tts = new TtsClient(engine(config, "tts"), fetch);
+  if (operation === "list") {
+    if (args.length) throw new TypeError("profiles list: no arguments expected");
+    const profiles = (await tts.listVoices()).filter(voice => "design_profile" in voice);
+    for (const profile of profiles) io.out(JSON.stringify(profile));
+    return 0;
+  }
+  if (operation === "show") {
+    if (args.length !== 1) throw new TypeError("profiles show: one ID is required");
+    io.out(JSON.stringify(await tts.getVoice(args[0] as string)));
+    return 0;
+  }
+  if (operation === "rm") {
+    if (args.length !== 1) throw new TypeError("profiles rm: one ID is required");
+    await tts.deleteVoice(args[0] as string);
+    io.out(`deleted ${args[0]}`);
+    return 0;
+  }
+  if (operation !== "create") throw new TypeError("profiles: expected list, create, show, or rm");
   const id = args.shift();
   let description: string | undefined, anchorText: string | undefined, seed: number | undefined;
   while (args.length) {

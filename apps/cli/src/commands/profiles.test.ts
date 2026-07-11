@@ -12,3 +12,18 @@ test("creates a design profile", async () => {
     parseConfig(), { out: line => out.push(line), err: () => {} }, fetch);
   expect(out).toEqual(["{\"id\":\"calm\"}"]);
 });
+
+test("lists and removes only profile voices", async () => {
+  const out: string[] = [];
+  const fetch = async (url: Request | URL | string, init?: RequestInit) => {
+    if (String(url).endsWith("/v1/voices") && !init?.method) {
+      return Response.json({ voices: [{ id: "profile", design_profile: {} }, { id: "plain" }] });
+    }
+    expect(init?.method).toBe("DELETE");
+    return Response.json({ id: "profile", deleted: true });
+  };
+  const io = { out: (line: string) => out.push(line), err: () => {} };
+  await runProfiles(["list"], parseConfig(), io, fetch);
+  await runProfiles(["rm", "profile"], parseConfig(), io, fetch);
+  expect(out).toEqual(["{\"id\":\"profile\",\"design_profile\":{}}", "deleted profile"]);
+});
