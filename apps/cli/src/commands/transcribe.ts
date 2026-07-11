@@ -9,6 +9,7 @@ interface TranscribeArgs {
   language: string;
   format: "text" | "json" | "srt" | "ass";
   mode: "realtime" | "longform";
+  maxNewTokens?: number;
 }
 
 function srtTime(seconds: number): string {
@@ -64,6 +65,7 @@ function parse(args: string[]): TranscribeArgs {
   let language = "auto";
   let format: "text" | "json" | "srt" | "ass" = "text";
   let mode: "realtime" | "longform" = "realtime";
+  let maxNewTokens: number | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
     if (arg === "--language") {
@@ -85,6 +87,12 @@ function parse(args: string[]): TranscribeArgs {
         throw new TypeError("transcribe: --mode must be realtime or longform");
       }
       mode = value;
+    } else if (arg === "--max-new-tokens") {
+      const value = Number(args[++index]);
+      if (!Number.isInteger(value) || value <= 0) {
+        throw new TypeError("transcribe: --max-new-tokens must be a positive integer");
+      }
+      maxNewTokens = value;
     } else if (arg.startsWith("-")) {
       throw new TypeError(`transcribe: unknown option ${arg}`);
     } else if (audio === undefined) {
@@ -97,7 +105,16 @@ function parse(args: string[]): TranscribeArgs {
   if ((format === "srt" || format === "ass") && mode !== "longform") {
     throw new TypeError(`transcribe: --format ${format} requires --mode longform`);
   }
-  return { audio, language, format, mode };
+  if (maxNewTokens !== undefined && mode !== "longform") {
+    throw new TypeError("transcribe: --max-new-tokens requires --mode longform");
+  }
+  return {
+    audio,
+    language,
+    format,
+    mode,
+    ...(maxNewTokens === undefined ? {} : { maxNewTokens }),
+  };
 }
 
 export async function runTranscribe(
@@ -114,7 +131,10 @@ export async function runTranscribe(
     audio,
     options.audio.split(/[\\/]/).pop() ?? "audio",
     options.language,
-    { responseFormat: options.mode === "longform" ? "verbose_json" : "json" },
+    {
+      responseFormat: options.mode === "longform" ? "verbose_json" : "json",
+      ...(options.maxNewTokens === undefined ? {} : { maxNewTokens: options.maxNewTokens }),
+    },
   );
   if (options.format === "json") io.out(JSON.stringify(result));
   else if (options.format === "srt" || options.format === "ass") {

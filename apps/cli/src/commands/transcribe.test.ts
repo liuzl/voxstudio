@@ -94,4 +94,30 @@ describe("transcribe command", () => {
     await runTranscribe([path, "--mode", "longform", "--format", "ass"], config, captured.io, fetch);
     expect(captured.out[0]).toContain("Dialogue: 0,0:00:01.20,0:00:02.35,Default,,0,0,0,,[S01] one\\Ntwo");
   });
+
+  test("longform forwards an explicit generation budget", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "vox-transcribe-"));
+    const path = join(dir, "meeting.wav");
+    await writeFile(path, "wav bytes");
+    const config = parseConfig({
+      engines: { asr_longform: { base_url: "https://moss.example", model: "moss" } },
+    });
+    const fetch: Fetch = async (_input, init) => {
+      expect((init?.body as FormData).get("max_new_tokens")).toBe("65536");
+      return Response.json({ text: "meeting", segments: [] });
+    };
+    await runTranscribe(
+      [path, "--mode", "longform", "--max-new-tokens", "65536"],
+      config,
+      output().io,
+      fetch,
+    );
+  });
+
+  test("rejects generation budgets outside longform mode", async () => {
+    await expect(runTranscribe(["sample.wav", "--max-new-tokens", "0"], parseConfig(), output().io))
+      .rejects.toThrow("must be a positive integer");
+    await expect(runTranscribe(["sample.wav", "--max-new-tokens", "100"], parseConfig(), output().io))
+      .rejects.toThrow("requires --mode longform");
+  });
 });

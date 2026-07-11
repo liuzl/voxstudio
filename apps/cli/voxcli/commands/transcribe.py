@@ -56,6 +56,7 @@ def add_parser(sub):
     p.add_argument("--mode", choices=("realtime", "longform"), default="realtime")
     p.add_argument("--json", action="store_true", help="emit structured JSON")
     p.add_argument("--format", choices=("text", "json", "srt", "ass"), help="output format")
+    p.add_argument("--max-new-tokens", type=int, help="longform generation-token limit")
     return p
 
 
@@ -66,8 +67,17 @@ def run(args, cfg) -> int:
         raise SystemExit("transcribe: --json cannot be combined with --format")
     if output_format in ("srt", "ass") and not longform:
         raise SystemExit(f"transcribe: --format {output_format} requires --mode longform")
+    if args.max_new_tokens is not None and args.max_new_tokens <= 0:
+        raise SystemExit("transcribe: --max-new-tokens must be a positive integer")
+    if args.max_new_tokens is not None and not longform:
+        raise SystemExit("transcribe: --max-new-tokens requires --mode longform")
     with ASRClient(cfg.engine("asr_longform" if longform else "asr")) as asr:
-        result = asr.transcribe(args.audio, language=args.language, structured=longform)
+        result = asr.transcribe(
+            args.audio,
+            language=args.language,
+            structured=longform,
+            max_new_tokens=args.max_new_tokens,
+        )
     if output_format == "json":
         payload = {"text": result.text, "lang": result.lang}
         if result.duration is not None:
