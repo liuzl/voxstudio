@@ -1,4 +1,4 @@
-import type { EngineConfig, SpeechInput, SpeechRequest, Voice } from "@voxstudio/contracts";
+import type { DesignProfileRequest, EngineConfig, SpeechInput, SpeechRequest, Voice } from "@voxstudio/contracts";
 import { EngineClient, type Fetch } from "./http";
 
 function isVoice(value: unknown): value is Voice {
@@ -29,6 +29,15 @@ export class TtsClient extends EngineClient {
     const response = await this.request("/v1/voices", { method: "POST", body: form });
     const voice: unknown = await response.json();
     if (!isVoice(voice)) throw new TypeError("voice response has no string id");
+    return voice;
+  }
+
+  async createDesignProfile(profile: DesignProfileRequest): Promise<Voice> {
+    const response = await this.request("/v1/design-profiles", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(profile),
+    });
+    const voice: unknown = await response.json();
+    if (!isVoice(voice)) throw new TypeError("design profile response has no string id");
     return voice;
   }
 

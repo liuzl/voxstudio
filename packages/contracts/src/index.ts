@@ -92,6 +92,15 @@ export interface Voice {
   created_at?: string;
 }
 
+export interface DesignProfileRequest {
+  id: string;
+  description: string;
+  anchor_text: string;
+  seed: number;
+  cfg_value?: number;
+  timesteps?: number;
+}
+
 export interface NormalizedEngineError {
   status: number;
   code: string;
