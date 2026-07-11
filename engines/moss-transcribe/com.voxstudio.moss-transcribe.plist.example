@@ -28,6 +28,18 @@
     <string>@MOSS_MODEL@</string>
     <key>MOSS_MODEL_NAME</key>
     <string>moss-transcribe-diarize</string>
+    <key>MOSS_MAX_UPLOAD_BYTES</key>
+    <string>1073741824</string>
+    <key>MOSS_MAX_DURATION_SECONDS</key>
+    <string>7200</string>
+    <key>MOSS_QUEUE_LIMIT</key>
+    <string>4</string>
+    <key>MOSS_FFMPEG_TIMEOUT_SECONDS</key>
+    <string>300</string>
+    <key>MOSS_FFMPEG</key>
+    <string>@MOSS_FFMPEG@</string>
+    <key>MOSS_FFPROBE</key>
+    <string>@MOSS_FFPROBE@</string>
     <key>GGML_METAL_NO_RESIDENCY</key>
     <string>1</string>
   </dict>

@@ -117,6 +117,10 @@ This directory includes a FastAPI adapter over the upstream C ABI v1. The model 
 once at process startup and reused; inference is serialized because a model context is not
 safe for concurrent calls.
 
+FFmpeg and ffprobe must be on `PATH`. Every upload is probed, then normalized to 16 kHz mono
+PCM WAV before it reaches MOSS. This accepts ordinary audio files and video containers such
+as MP3, M4A, MP4, and WebM when FFmpeg supports their codecs.
+
 Build the upstream shared library:
 
 ```bash
@@ -164,8 +168,9 @@ The included `moss-transcribe.service` is a path-parameterized user-systemd temp
 Adjust its working directory, library, and model paths for the host before enabling it.
 
 For macOS, copy `com.voxstudio.moss-transcribe.plist.example`, replace its
-`@SERVER_DIR@`, `@MOSS_LIBRARY@`, `@MOSS_MODEL@`, and `@LOG_DIR@` placeholders, then install
-it as a user LaunchAgent:
+`@SERVER_DIR@`, `@MOSS_LIBRARY@`, `@MOSS_MODEL@`, `@MOSS_FFMPEG@`, `@MOSS_FFPROBE@`, and
+`@LOG_DIR@` placeholders, then install it as a user LaunchAgent. Use absolute FFmpeg paths:
+launchd does not inherit an interactive shell's Homebrew PATH.
 
 ```bash
 plutil -lint com.voxstudio.moss-transcribe.plist
@@ -176,6 +181,27 @@ launchctl kickstart -k gui/$(id -u)/com.voxstudio.moss-transcribe
 
 The template binds loopback by default. Change the host only when a trusted network and
 an authentication boundary are already in place.
+
+### Admission and ingestion limits
+
+The adapter has conservative defaults to avoid turning long media uploads into unbounded
+memory, disk, or queue pressure:
+
+| Environment variable | Default | Purpose |
+|---|---:|---|
+| `MOSS_MAX_UPLOAD_BYTES` | 1 GiB | Reject an oversized original upload before writing more data |
+| `MOSS_MAX_DURATION_SECONDS` | 7,200 | Reject audio/video longer than two hours after probing |
+| `MOSS_QUEUE_LIMIT` | 4 | Maximum total active and waiting transcription requests |
+| `MOSS_FFMPEG_TIMEOUT_SECONDS` | 300 | Bound FFprobe/FFmpeg preprocessing time |
+| `MOSS_FFMPEG` / `MOSS_FFPROBE` | `ffmpeg` / `ffprobe` | Override executable paths |
+
+When the queue is full the endpoint returns `429` with `Retry-After: 5`. Conversion errors,
+missing audio streams, oversized uploads, and duration violations return a structured engine
+error. Temporary original and normalized files are removed after every request.
+
+The model C API cannot be safely interrupted in-process. Use a gateway timeout and a service
+manager restart policy for an inference that exceeds an operational deadline; do not use a
+thread timeout that leaves native model work running in the background.
 
 ## Initial measurements
 
@@ -216,9 +242,10 @@ hour-long inputs. Short-sample performance must not be extrapolated to long meet
 
 ### Adapter concurrency
 
-The adapter serializes inference through one resident model context. This is deliberate and
-safe for the initial deployment, but it provides no batching. Put a bounded request queue
-and admission control in front of the service before exposing it to multiple tenants.
+The adapter serializes inference through one resident model context. A bounded admission
+queue prevents it from accumulating unlimited waiting requests, but it does not batch model
+work. Put authentication, rate limits, and tenant-specific policy at the gateway before
+exposing the endpoint beyond a trusted network.
 
 ## Integration plan
 
@@ -229,8 +256,8 @@ Completed in the initial integration:
 - OpenAI-compatible resident C-API adapter;
 - `vox transcribe --mode longform --json` in both CLI implementations.
 
-Remaining work is subtitle rendering, streaming progress, production admission control, and
-promotion after the benchmark below passes agreed quality thresholds.
+Remaining work is streaming progress, production gateway policy, and promotion after the
+benchmark below passes agreed quality thresholds.
 
 ## Benchmark before promotion
 
