@@ -78,4 +78,20 @@ describe("transcribe command", () => {
     await expect(runTranscribe(["sample.wav", "--format", "srt"], parseConfig(), output().io))
       .rejects.toThrow("requires --mode longform");
   });
+
+  test("longform emits ASS", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "vox-transcribe-"));
+    const path = join(dir, "meeting.wav");
+    await writeFile(path, "wav bytes");
+    const config = parseConfig({
+      engines: { asr_longform: { base_url: "https://moss.example", model: "moss" } },
+    });
+    const fetch: Fetch = async () => Response.json({
+      text: "meeting",
+      segments: [{ start: 1.2, end: 2.345, speaker: "S01", text: "one\ntwo" }],
+    });
+    const captured = output();
+    await runTranscribe([path, "--mode", "longform", "--format", "ass"], config, captured.io, fetch);
+    expect(captured.out[0]).toContain("Dialogue: 0,0:00:01.20,0:00:02.35,Default,,0,0,0,,[S01] one\\Ntwo");
+  });
 });

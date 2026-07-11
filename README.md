@@ -54,6 +54,7 @@ bun run build:cli
 ./apps/cli/dist/vox transcribe recording.wav
 ./apps/cli/dist/vox transcribe meeting.wav --mode longform --json
 ./apps/cli/dist/vox transcribe meeting.wav --mode longform --format srt
+./apps/cli/dist/vox transcribe meeting.wav --mode longform --format ass
 ./apps/cli/dist/vox chat "用三句话介绍一下你自己" --speak -o reply.wav
 ./apps/cli/dist/vox voices add alice --audio sample.wav --text "参考音的逐字稿"
 ./apps/cli/dist/vox voices add bob --audio sample.wav --language zh  # transcript via ASR
