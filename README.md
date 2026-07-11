@@ -28,6 +28,8 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | Path | What |
 |---|---|
 | `engines/voxcpm2-server/` | Our TTS engine wrapper — FastAPI over OpenBMB VoxCPM2 |
+| `engines/parakeet/` | Deployment and integration notes for the default real-time ASR engine |
+| `engines/moss-transcribe/` | Evaluation notes for long-form ASR and speaker diarization |
 | `packages/` | Shared TypeScript contracts, clients, configuration, text, audio, and orchestration |
 | `platforms/bun/` | Filesystem, process, recording, and playback adapters for Bun apps |
 | `core/` | Transitional Python parity implementation and research-facing core |
