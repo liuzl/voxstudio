@@ -8,12 +8,14 @@ interface TranscribeArgs {
   audio: string;
   language: string;
   json: boolean;
+  mode: "realtime" | "longform";
 }
 
 function parse(args: string[]): TranscribeArgs {
   let audio: string | undefined;
   let language = "auto";
   let json = false;
+  let mode: "realtime" | "longform" = "realtime";
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
     if (arg === "--language") {
@@ -21,6 +23,12 @@ function parse(args: string[]): TranscribeArgs {
       if (!language) throw new TypeError("transcribe: --language requires a value");
     } else if (arg === "--json") {
       json = true;
+    } else if (arg === "--mode") {
+      const value = args[++index];
+      if (value !== "realtime" && value !== "longform") {
+        throw new TypeError("transcribe: --mode must be realtime or longform");
+      }
+      mode = value;
     } else if (arg.startsWith("-")) {
       throw new TypeError(`transcribe: unknown option ${arg}`);
     } else if (audio === undefined) {
@@ -30,7 +38,7 @@ function parse(args: string[]): TranscribeArgs {
     }
   }
   if (!audio) throw new TypeError("transcribe: audio file is required");
-  return { audio, language, json };
+  return { audio, language, json, mode };
 }
 
 export async function runTranscribe(
@@ -41,8 +49,14 @@ export async function runTranscribe(
 ): Promise<number> {
   const options = parse(args);
   const audio = await readFileBlob(options.audio);
-  const asr = new AsrClient(engine(config, "asr"), fetch);
-  const result = await asr.transcribe(audio, options.audio.split(/[\\/]/).pop() ?? "audio", options.language);
+  const profile = options.mode === "longform" ? "asr_longform" : "asr";
+  const asr = new AsrClient(engine(config, profile), fetch);
+  const result = await asr.transcribe(
+    audio,
+    options.audio.split(/[\\/]/).pop() ?? "audio",
+    options.language,
+    { responseFormat: options.mode === "longform" ? "verbose_json" : "json" },
+  );
   io.out(options.json ? JSON.stringify(result) : result.text);
   return 0;
 }

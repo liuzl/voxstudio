@@ -1,0 +1,18 @@
+[Unit]
+Description=voxstudio MOSS long-form transcription service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/services/moss-transcribe-server
+Environment=MOSS_LIBRARY=%h/services/moss-transcribe.cpp/build-shared/libmoss-transcribe.so
+Environment=MOSS_MODEL=%h/models/moss-transcribe-q5_k.gguf
+Environment=MOSS_MODEL_NAME=moss-transcribe-diarize
+# Required on affected macOS/Metal ggml builds; harmless when Metal is not used.
+Environment=GGML_METAL_NO_RESIDENCY=1
+ExecStart=%h/services/moss-transcribe-server/.venv/bin/python -m uvicorn server_moss:app --host 0.0.0.0 --port 18087
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

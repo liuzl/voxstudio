@@ -111,6 +111,58 @@ Example JSON:
 Speaker identifiers are relative to one recording. They do not identify a real person and
 must not be treated as stable identities across files.
 
+## OpenAI-compatible service
+
+This directory includes a FastAPI adapter over the upstream C ABI v1. The model is loaded
+once at process startup and reused; inference is serialized because a model context is not
+safe for concurrent calls.
+
+Build the upstream shared library:
+
+```bash
+cmake -S . -B build-shared \
+  -DMT_SHARED=ON \
+  -DMT_BUILD_CLI=ON
+cmake --build build-shared -j
+```
+
+Install and run the adapter from this directory:
+
+```bash
+uv sync --locked
+
+MOSS_LIBRARY=/path/to/libmoss-transcribe.so \
+MOSS_MODEL=/path/to/moss-transcribe-q5_k.gguf \
+MOSS_MODEL_NAME=moss-transcribe-diarize \
+.venv/bin/python -m uvicorn server_moss:app --host 0.0.0.0 --port 18087
+```
+
+On macOS, use the generated `.dylib` path and retain
+`GGML_METAL_NO_RESIDENCY=1` on affected ggml versions.
+
+Endpoints:
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/health` | Model process readiness |
+| POST | `/v1/audio/transcriptions` | Multipart OpenAI-compatible transcription |
+
+The transcription endpoint supports `json`, `text`, and `verbose_json`. The verbose result
+adds MOSS's `speaker` field to each timestamped segment. `language` is accepted as an
+OpenAI client compatibility hint but MOSS detects language itself. C ABI v1 does not expose
+custom prompts or sampling, so non-empty `prompt` and non-zero `temperature` fail clearly
+instead of being silently ignored.
+
+```bash
+curl -F file=@meeting.wav \
+  -F model=moss-transcribe-diarize \
+  -F response_format=verbose_json \
+  http://127.0.0.1:18087/v1/audio/transcriptions
+```
+
+The included `moss-transcribe.service` is a path-parameterized user-systemd template.
+Adjust its working directory, library, and model paths for the host before enabling it.
+
 ## Initial measurements
 
 These are smoke-test measurements, not a general benchmark. They include model loading and
@@ -148,25 +200,23 @@ The model encodes 30-second audio chunks and performs autoregressive decoding ov
 that grows with the recording and transcript. Real-time factor can therefore worsen on
 hour-long inputs. Short-sample performance must not be extrapolated to long meetings.
 
-### No voxstudio HTTP adapter yet
+### Adapter concurrency
 
-The validated deployment is the upstream CLI, not a resident OpenAI-compatible service.
-Do not point the current voxstudio ASR client at it. An adapter must first provide:
-
-- `POST /v1/audio/transcriptions`
-- `json` and `verbose_json` response formats
-- request serialization or bounded concurrency
-- model residency, timeouts, cancellation, and health reporting
-- conversion of MOSS segments to the shared voxstudio contract
+The adapter serializes inference through one resident model context. This is deliberate and
+safe for the initial deployment, but it provides no batching. Put a bounded request queue
+and admission control in front of the service before exposing it to multiple tenants.
 
 ## Integration plan
 
-1. Extend the shared transcription contract with optional segments:
-   `start`, `end`, `speaker`, and `text`.
-2. Add an `asr_longform` engine profile without changing the default real-time ASR.
-3. Put MOSS behind an OpenAI-compatible adapter; keep apps unaware of the concrete engine.
-4. Add `--mode longform` and structured/SRT output to the CLI.
-5. Promote the engine only after the benchmark below passes agreed quality thresholds.
+Completed in the initial integration:
+
+- shared transcription segments with `start`, `end`, `speaker`, and `text`;
+- optional `asr_longform` profile without changing the default real-time ASR;
+- OpenAI-compatible resident C-API adapter;
+- `vox transcribe --mode longform --json` in both CLI implementations.
+
+Remaining work is subtitle rendering, streaming progress, production admission control, and
+promotion after the benchmark below passes agreed quality thresholds.
 
 ## Benchmark before promotion
 

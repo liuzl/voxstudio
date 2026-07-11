@@ -33,4 +33,28 @@ describe("transcribe command", () => {
     await expect(runTranscribe(["missing.wav"], parseConfig(), output().io, fetch))
       .rejects.toThrow("file not found");
   });
+
+  test("longform selects its profile and requests structured output", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "vox-transcribe-"));
+    const path = join(dir, "meeting.wav");
+    await writeFile(path, "wav bytes");
+    const config = parseConfig({
+      engines: { asr_longform: { base_url: "https://moss.example", model: "moss" } },
+    });
+    const fetch: Fetch = async (input, init) => {
+      expect(String(input)).toBe("https://moss.example/v1/audio/transcriptions");
+      expect((init?.body as FormData).get("response_format")).toBe("verbose_json");
+      return Response.json({
+        text: "meeting",
+        duration: 1.5,
+        segments: [{ start: 0, end: 1.5, speaker: "S01", text: "meeting" }],
+      });
+    };
+    const captured = output();
+    await runTranscribe([path, "--mode", "longform", "--json"], config, captured.io, fetch);
+    expect(JSON.parse(captured.out[0] as string)).toMatchObject({
+      text: "meeting",
+      segments: [{ speaker: "S01" }],
+    });
+  });
 });

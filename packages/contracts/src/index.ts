@@ -40,6 +40,21 @@ export interface VoxConfig {
 export interface Transcription {
   text: string;
   lang: string | null;
+  duration?: number;
+  segments?: TranscriptionSegment[];
+}
+
+export interface TranscriptionSegment {
+  id?: string | number;
+  start: number;
+  end: number;
+  text: string;
+  speaker?: string;
+}
+
+export interface TranscriptionOptions {
+  responseFormat?: "json" | "verbose_json";
+  maxNewTokens?: number;
 }
 
 export interface SpeechRequest {

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from voxcore import normalize_error
-from voxcore.clients.asr import parse_transcript
+from voxcore.clients.asr import parse_response, parse_transcript
 from voxcore.clients.llm import extract_content
 
 
@@ -34,6 +34,20 @@ def test_error_contract(case):
 def test_transcript_contract(case):
     result = parse_transcript(case["raw"])
     assert {"text": result.text, "lang": result.lang} == case["expected"]
+
+
+def test_structured_transcript_response():
+    result = parse_response({
+        "text": "你好 Hello",
+        "duration": 2.3,
+        "segments": [
+            {"id": 0, "start": 0.2, "end": 1.1, "speaker": "S01", "text": "你好"},
+            {"id": 1, "start": 1.2, "end": 2.3, "speaker": "S02", "text": "Hello"},
+        ],
+    })
+    assert result.duration == 2.3
+    assert result.segments is not None
+    assert result.segments[1].speaker == "S02"
 
 
 @pytest.mark.parametrize("case", load_fixture("chat-content.json"), ids=lambda case: case["name"])

@@ -26,6 +26,36 @@ describe("engine HTTP clients", () => {
       .resolves.toEqual({ text: "你好", lang: "zh" });
   });
 
+  test("ASR preserves structured long-form segments", async () => {
+    const fetch: Fetch = async (_input, init) => {
+      const form = init?.body as FormData;
+      expect(form.get("response_format")).toBe("verbose_json");
+      expect(form.get("max_new_tokens")).toBe("8192");
+      return json({
+        text: "你好 Hello",
+        duration: 2.3,
+        segments: [
+          { id: 0, start: 0.2, end: 1.1, speaker: "S01", text: "你好" },
+          { id: 1, start: 1.2, end: 2.3, speaker: "S02", text: "Hello" },
+        ],
+      });
+    };
+    const client = new AsrClient({ baseUrl: "https://voice.example", model: "moss" }, fetch);
+
+    await expect(client.transcribe(new Blob(["wav"]), "sample.wav", "auto", {
+      responseFormat: "verbose_json",
+      maxNewTokens: 8192,
+    })).resolves.toEqual({
+      text: "你好 Hello",
+      lang: null,
+      duration: 2.3,
+      segments: [
+        { id: 0, start: 0.2, end: 1.1, speaker: "S01", text: "你好" },
+        { id: 1, start: 1.2, end: 2.3, speaker: "S02", text: "Hello" },
+      ],
+    });
+  });
+
   test("LLM preserves wire names and authorization", async () => {
     const fetch: Fetch = async (_input, init) => {
       const headers = new Headers(init?.headers);

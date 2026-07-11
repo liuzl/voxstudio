@@ -14,6 +14,13 @@ engines:
     model: nemotron-asr           # required for Mandarin; parakeet-tdt has no Chinese
     api_key: ${VOXSTUDIO_ASR_API_KEY}
 
+  # Optional long-form profile: timestamps + anonymous per-recording speakers.
+  # Keep `asr` above as the default for interactive and short recordings.
+  asr_longform:
+    base_url: http://127.0.0.1:18087
+    model: moss-transcribe-diarize
+    api_key: ${VOXSTUDIO_ASR_LONGFORM_API_KEY}
+
   llm:
     base_url: http://127.0.0.1:8080
     model: gemma

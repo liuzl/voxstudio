@@ -7,3 +7,6 @@ exclude = ["engines/*"]
 
 [tool.uv.sources]
 voxcore = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["core/tests", "apps/cli/tests"]
