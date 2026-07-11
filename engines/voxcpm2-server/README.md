@@ -12,6 +12,7 @@ FastAPI HTTP wrapper over **OpenBMB VoxCPM2** (48kHz high-fidelity Chinese TTS).
 | POST | `/tts_form` | multipart, upload `ref_file` to clone from an arbitrary reference voice |
 | GET | `/` | minimal Web UI |
 | POST | `/v1/voices` | register a reusable voice — multipart `{id, text, audio}` → metadata (201) |
+| POST | `/v1/design-profiles` | materialize `{id, description, anchor_text, seed}` as a reusable registered voice |
 | GET | `/v1/voices` | list registered voices |
 | GET | `/v1/voices/{id}` | voice metadata |
 | DELETE | `/v1/voices/{id}` | remove a voice |

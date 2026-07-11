@@ -166,6 +166,43 @@ def create_voice(id: str = Form(...), text: str = Form(...), audio: UploadFile =
         if os.path.exists(ref16k):
             os.unlink(ref16k)
 
+class DesignProfileReq(BaseModel):
+    id: str
+    description: str
+    anchor_text: str
+    seed: int
+    cfg_value: float = 2.0
+    timesteps: int = 10
+
+@app.post("/v1/design-profiles", status_code=201)
+def create_design_profile(r: DesignProfileReq):
+    _check_id(r.id)
+    if not r.description.strip() or not r.anchor_text.strip():
+        raise HTTPException(400, {"error": {"code": "invalid_design_profile",
+            "message": "description and anchor_text must not be empty.",
+            "type": "invalid_request_error"}})
+    if os.path.exists(_vdir(r.id)):
+        raise HTTPException(409, {"error": {"code": "voice_exists",
+            "message": "A voice with this id already exists.", "type": "invalid_request_error"}})
+    wav = _generate(f"({r.description}){r.anchor_text}", None, r.cfg_value, r.timesteps, seed=r.seed)
+    os.makedirs(_vdir(r.id))
+    try:
+        with open(_vref(r.id), "wb") as output:
+            output.write(wav)
+        info = sf.info(_vref(r.id))
+        meta = {"id": r.id, "prompt_text": r.anchor_text,
+                "prompt_audio_length": round(info.frames / info.samplerate, 3),
+                "sample_rate": info.samplerate, "created_at": _now(), "updated_at": _now(),
+                "design_profile": {"description": r.description, "seed": r.seed,
+                                   "cfg_value": r.cfg_value, "timesteps": r.timesteps,
+                                   "model": "voxcpm@616d3d3"}}
+        with open(_vmeta(r.id), "w", encoding="utf-8") as output:
+            json.dump(meta, output, ensure_ascii=False)
+        return meta
+    except Exception:
+        shutil.rmtree(_vdir(r.id), ignore_errors=True)
+        raise
+
 @app.get("/v1/voices")
 def list_voices():
     out = []
