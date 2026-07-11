@@ -79,6 +79,22 @@ describe("long-text orchestration", () => {
     await stream.return(undefined);
   });
 
+  test("marks one continuation session from its first through final chunk", async () => {
+    const tts = new FakeTts();
+    await collect(tts, "甲。乙。");
+    // Re-run with a session so the final marker can be asserted independently.
+    const calls: SpeechInput[] = [];
+    const session: SpeechEngine = { speech: async (input) => { calls.push(input); return response(); } };
+    for await (const _piece of streamLong(session, "甲。乙。", {
+      ...options,
+      continuationId: "session-1",
+    })) { /* consume */ }
+    expect(calls).toEqual([
+      expect.objectContaining({ continuation_id: "session-1", continuation_end: false }),
+      expect.objectContaining({ continuation_id: "session-1", continuation_end: true }),
+    ]);
+  });
+
   test("puts one pause between chunks and not around them", async () => {
     const pieces = await collect(new FakeTts());
     expect(pieces.length).toBe(fixture.expectedPieces);

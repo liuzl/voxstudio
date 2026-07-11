@@ -11,7 +11,7 @@
 voice 取值: clone(默认音) / design(零样本,text 前加 (English 描述)) / <已注册 id>.
 单 GPU 模型, threading.Lock 串行化生成.
 """
-import io, os, re, json, threading, tempfile, subprocess, shutil
+import io, os, re, json, threading, tempfile, subprocess, shutil, time
 from datetime import datetime, timezone
 import soundfile as sf
 import torch
@@ -39,6 +39,16 @@ lock = threading.Lock()
 app = FastAPI()
 
 _CUDA = torch.cuda.is_available()
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,96}$")
+_SESSION_TTL_SECONDS = 900
+_continuations = {}
+
+
+def _prune_continuations(now=None):
+    now = time.monotonic() if now is None else now
+    for session_id, session in list(_continuations.items()):
+        if now - session["updated_at"] > _SESSION_TTL_SECONDS:
+            del _continuations[session_id]
 
 
 def _generate(text, ref, cfg, ts, prompt=None, seed=None):
@@ -57,6 +67,38 @@ def _generate(text, ref, cfg, ts, prompt=None, seed=None):
             # only expandable segments bound the peak *during* one.
             torch.cuda.empty_cache()
     buf = io.BytesIO(); sf.write(buf, wav, SR, format="WAV"); buf.seek(0)
+    return buf.read()
+
+
+def _generate_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
+    if not _SESSION_ID_RE.fullmatch(session_id):
+        raise HTTPException(400, {"error": {"code": "invalid_continuation_id",
+            "message": "continuation_id must contain only letters, digits, underscores, or hyphens.",
+            "type": "invalid_request_error"}})
+    with lock:
+        _prune_continuations()
+        session = _continuations.get(session_id)
+        if session is None:
+            if prompt:
+                cache = model.tts_model.build_prompt_cache(
+                    prompt_text=prompt[1], prompt_wav_path=prompt[0], reference_wav_path=ref)
+            elif ref:
+                cache = model.tts_model.build_prompt_cache(reference_wav_path=ref)
+            else:
+                cache = None
+        else:
+            cache = session["cache"]
+        wav, _, audio_features = model.tts_model.generate_with_prompt_cache(
+            target_text=text, prompt_cache=cache, cfg_value=cfg, inference_timesteps=ts,
+            retry_badcase=True, seed=seed)
+        next_cache = model.tts_model.merge_prompt_cache(cache, text, audio_features)
+        if end:
+            _continuations.pop(session_id, None)
+        else:
+            _continuations[session_id] = {"cache": next_cache, "updated_at": time.monotonic()}
+        if _CUDA:
+            torch.cuda.empty_cache()
+    buf = io.BytesIO(); sf.write(buf, wav.squeeze(0).cpu().numpy(), SR, format="WAV"); buf.seek(0)
     return buf.read()
 
 def _ref_from_upload(up: UploadFile):
@@ -193,11 +235,16 @@ class OAIReq(BaseModel):
     timesteps: int = 10
     seed: int | None = None
     prosody_prompt: bool = False   # condition on the voice's reference transcript too
+    continuation_id: str | None = None
+    continuation_end: bool = False
 
 @app.post("/v1/audio/speech")
 def oai_speech(r: OAIReq):
     ref = resolve_voice(r.voice)   # clone(默认音) / design(零样本) / <已注册 id>
     prompt = resolve_prompt(r.voice) if r.prosody_prompt else None
+    if r.continuation_id:
+        return Response(_generate_continuation(r.input, ref, r.cfg_value, r.timesteps, prompt,
+                        r.seed, r.continuation_id, r.continuation_end), media_type="audio/wav")
     return Response(_generate(r.input, ref, r.cfg_value, r.timesteps, prompt, seed=r.seed),
                     media_type="audio/wav")
 

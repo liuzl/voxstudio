@@ -152,6 +152,7 @@ export async function runSay(
       ...(effectiveVoice === "clone" || effectiveVoice === "design"
         ? {}
         : { prosodyPrompt: true }),
+      continuationId: crypto.randomUUID(),
       ...(options.quiet ? {} : {
         onChunk: (index: number, total: number, chunk: string) => {
           io.err(`  [${index + 1}/${total}] ${Array.from(chunk).length} chars, ~${estSeconds(chunk).toFixed(1)}s`);

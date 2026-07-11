@@ -32,10 +32,11 @@ export interface SynthesisOptions {
   promptPrefix?: string;
   seed?: number;
   prosodyPrompt?: boolean;
+  continuationId?: string;
   onChunk?: OnChunk;
 }
 
-function speechInput(text: string, options: SynthesisOptions): SpeechInput {
+function speechInput(text: string, options: SynthesisOptions, end: boolean): SpeechInput {
   return {
     input: `${options.promptPrefix ?? ""}${text}`,
     voice: options.voice ?? options.ttsDefaults.voice,
@@ -44,6 +45,10 @@ function speechInput(text: string, options: SynthesisOptions): SpeechInput {
     timesteps: options.timesteps ?? options.ttsDefaults.timesteps,
     ...(options.seed === undefined ? {} : { seed: options.seed }),
     ...(options.prosodyPrompt ? { prosody_prompt: true } : {}),
+    ...(options.continuationId === undefined ? {} : {
+      continuation_id: options.continuationId,
+      continuation_end: end,
+    }),
   };
 }
 
@@ -68,7 +73,7 @@ export async function* streamLong(
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index] as string;
     await options.onChunk?.(index, chunks.length, chunk);
-    const decoded = readWav(await tts.speech(speechInput(chunk, options)));
+    const decoded = readWav(await tts.speech(speechInput(chunk, options, index === chunks.length - 1)));
     if (sampleRate !== null && decoded.sampleRate !== sampleRate) {
       throw new TypeError(`chunks disagree on sample rate: ${sampleRate}, ${decoded.sampleRate}`);
     }

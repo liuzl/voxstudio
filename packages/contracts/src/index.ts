@@ -66,6 +66,8 @@ export interface SpeechRequest {
   timesteps: number;
   seed?: number;
   prosody_prompt?: boolean;
+  continuation_id?: string;
+  continuation_end?: boolean;
 }
 
 export type SpeechInput = Omit<SpeechRequest, "model">;
