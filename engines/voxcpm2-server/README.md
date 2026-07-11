@@ -7,7 +7,7 @@ FastAPI HTTP wrapper over **OpenBMB VoxCPM2** (48kHz high-fidelity Chinese TTS).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health` | `{"status":"ok","sample_rate":48000}` |
-| POST | `/v1/audio/speech` | OpenAI-compatible: `{input, voice, response_format}` — `voice=clone` (default ref) / `design` (zero-shot, prefix `input` with `(English description)`) |
+| POST | `/v1/audio/speech` | OpenAI-compatible: `{input, voice, response_format, seed?}` — `voice=clone` (default ref) / `design` (zero-shot, prefix `input` with `(English description)`) |
 | POST | `/tts` | JSON `{text, voice, ref_path?, cfg_value?, timesteps?}` |
 | POST | `/tts_form` | multipart, upload `ref_file` to clone from an arbitrary reference voice |
 | GET | `/` | minimal Web UI |
@@ -19,6 +19,11 @@ FastAPI HTTP wrapper over **OpenBMB VoxCPM2** (48kHz high-fidelity Chinese TTS).
 ### Named voices
 
 `voice` accepts `clone` (default reference), `design` (zero-shot — prefix `input` with an `(English description)`), or **a registered voice id**. Register once with `POST /v1/voices` (uploads a reference sample, transcoded to 16k mono), then synthesize with `voice="<id>"` — the caller no longer manages reference-audio files. Mirrors the [VoxCPM.cpp `voxcpm-server`](https://github.com/liuzl/VoxCPM.cpp) contract so the two TTS backends are drop-in interchangeable. Registry dir is `VOXCPM2_VOICES` (default `$VOXCPM2_BASE/voices`), one `<id>/{ref.wav,meta.json}` per voice.
+
+For `design`, pass an integer `seed` to reproduce the same request on the same locked
+model/runtime. The service serializes generation while applying that seed, because VoxCPM
+sets Torch's process-global RNG. A seed makes a candidate replayable; it does not make
+independent long-text chunks share a voice identity.
 
 ```bash
 curl -F id=alice -F 'text=参考音的逐字稿' -F audio=@sample.wav http://<host>:8880/v1/voices

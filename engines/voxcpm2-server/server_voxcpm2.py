@@ -41,13 +41,13 @@ app = FastAPI()
 _CUDA = torch.cuda.is_available()
 
 
-def _generate(text, ref, cfg, ts, prompt=None):
+def _generate(text, ref, cfg, ts, prompt=None, seed=None):
     """prompt = (wav_path, transcript). Conditions on an aligned text/audio example, which
     the model follows for tempo; `ref` alone only carries timbre. Output excludes the prompt."""
     kw = {"prompt_wav_path": prompt[0], "prompt_text": prompt[1]} if prompt else {}
     with lock:
         wav = model.generate(text=text, reference_wav_path=ref, cfg_value=cfg,
-                             inference_timesteps=ts, **kw)
+                             inference_timesteps=ts, seed=seed, **kw)
         if _CUDA:
             # Peak VRAM grows with the length of one generation, and the caching allocator
             # keeps that peak forever -- a co-tenant model on the same card never gets it
@@ -160,16 +160,18 @@ class TTSReq(BaseModel):
     ref_path: str | None = None
     cfg_value: float = 2.0
     timesteps: int = 10
+    seed: int | None = None
 
 @app.post("/tts")
 def tts(r: TTSReq):
     # explicit ref_path wins; otherwise resolve clone/design/<registered id>
     ref = r.ref_path if r.ref_path else resolve_voice(r.voice)
-    return Response(_generate(r.text, ref, r.cfg_value, r.timesteps), media_type="audio/wav")
+    return Response(_generate(r.text, ref, r.cfg_value, r.timesteps, seed=r.seed), media_type="audio/wav")
 
 @app.post("/tts_form")
 def tts_form(text: str = Form(...), voice: str = Form("clone"),
              cfg_value: float = Form(2.0), timesteps: int = Form(10),
+             seed: int | None = Form(None),
              ref_file: UploadFile = File(None)):
     tmp = None
     try:
@@ -177,7 +179,7 @@ def tts_form(text: str = Form(...), voice: str = Form("clone"),
             ref = _ref_from_upload(ref_file); tmp = ref     # per-call upload overrides default
         else:
             ref = resolve_voice(voice)                       # clone/design/<registered id>
-        return Response(_generate(text, ref, cfg_value, timesteps), media_type="audio/wav")
+        return Response(_generate(text, ref, cfg_value, timesteps, seed=seed), media_type="audio/wav")
     finally:
         if tmp and os.path.exists(tmp):
             os.unlink(tmp)
@@ -189,13 +191,14 @@ class OAIReq(BaseModel):
     model: str | None = None
     cfg_value: float = 2.0
     timesteps: int = 10
+    seed: int | None = None
     prosody_prompt: bool = False   # condition on the voice's reference transcript too
 
 @app.post("/v1/audio/speech")
 def oai_speech(r: OAIReq):
     ref = resolve_voice(r.voice)   # clone(默认音) / design(零样本) / <已注册 id>
     prompt = resolve_prompt(r.voice) if r.prosody_prompt else None
-    return Response(_generate(r.input, ref, r.cfg_value, r.timesteps, prompt),
+    return Response(_generate(r.input, ref, r.cfg_value, r.timesteps, prompt, seed=r.seed),
                     media_type="audio/wav")
 
 @app.get("/", response_class=HTMLResponse)

@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "OpenAI-compatible HTTP server for VoxCPM2 (PyTorch, 48kHz)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "voxcpm>=2.0.3",
+    # Pin the upstream source that adds per-request seed support. Do not track main:
+    # generated Design Profiles must remain reproducible across deployments.
+    "voxcpm @ git+https://github.com/OpenBMB/VoxCPM.git@616d3d3e630a9c96c2853250eef91b0f39dcd5fa",
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "soundfile>=0.12",
