@@ -60,7 +60,13 @@ bun run build:cli
 ./apps/cli/dist/vox voices add alice --audio sample.wav --text "参考音的逐字稿"
 ./apps/cli/dist/vox voices add bob --audio sample.wav --language zh  # transcript via ASR
 ./apps/cli/dist/vox voices add carol --record 15 --language zh       # record, ASR, register
+./apps/cli/dist/vox profiles create calm --description "calm clear female voice" --anchor-text "这是锚文本。" --seed 20260711 --cfg 2 --timesteps 10
+./apps/cli/dist/vox profiles reproduce calm calm-copy
 ```
+
+Design profiles retain their description, anchor text, seed, CFG, timesteps, model identity,
+and generated WAV SHA-256. `profiles reproduce` recreates the profile from those saved settings;
+matching SHA-256 values verify byte-for-byte output on the same model runtime.
 
 The build produces one standalone executable containing the Bun runtime and TypeScript
 dependencies. Windows writes `apps/cli/dist/vox.exe`. Playback and microphone recording
