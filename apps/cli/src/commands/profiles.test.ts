@@ -66,6 +66,34 @@ test("does not reproduce profiles without a recorded anchor text", async () => {
     .rejects.toThrow("profiles reproduce: source has no anchor text");
 });
 
+test("verifies complete reproducibility metadata and audio fingerprint", async () => {
+  const fetch = async (url: Request | URL | string) => Response.json({
+    id: String(url).endsWith("/source") ? "source" : "target",
+    prompt_text: "锚点",
+    design_profile: {
+      description: "warm voice", seed: 43, cfg_value: 2.5, timesteps: 12, model: "test",
+      audio_sha256: "a".repeat(64),
+    },
+  });
+  const out: string[] = [];
+  await runProfiles(["verify", "source", "target"], parseConfig(), { out: line => out.push(line), err: () => {} }, fetch);
+  expect(out).toEqual([`verified source target ${"a".repeat(64)}`]);
+});
+
+test("reports reproducibility mismatches", async () => {
+  const fetch = async (url: Request | URL | string) => Response.json({
+    id: String(url).endsWith("/source") ? "source" : "target",
+    prompt_text: "锚点",
+    design_profile: {
+      description: "warm voice", seed: 43, cfg_value: 2.5, timesteps: 12, model: "test",
+      audio_sha256: String(url).endsWith("/source") ? "a".repeat(64) : "b".repeat(64),
+    },
+  });
+  const io = { out: () => {}, err: () => {} };
+  await expect(runProfiles(["verify", "source", "target"], parseConfig(), io, fetch))
+    .rejects.toThrow("profiles verify: mismatch in audio_sha256");
+});
+
 test("lists and removes only profile voices", async () => {
   const out: string[] = [];
   const fetch = async (url: Request | URL | string, init?: RequestInit) => {

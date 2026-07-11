@@ -3,12 +3,13 @@ import { engine } from "@voxstudio/config";
 import type { VoxConfig } from "@voxstudio/contracts";
 import type { CliIo } from "../io";
 
-export const profilesUsage = `usage: vox profiles {list,create,reproduce,show,rm} ...
+export const profilesUsage = `usage: vox profiles {list,create,reproduce,verify,show,rm} ...
 
 commands:
   list
   create ID --description TEXT --anchor-text TEXT --seed N [--cfg VALUE] [--timesteps N]
   reproduce SOURCE_ID NEW_ID
+  verify SOURCE_ID TARGET_ID
   show ID
   rm ID
 
@@ -19,6 +20,21 @@ create options:
 function requireProfile(voice: Awaited<ReturnType<TtsClient["getVoice"]>>) {
   if (!voice.design_profile) throw new TypeError(`profiles: ${voice.id} is not a design profile`);
   return voice;
+}
+
+function reproducibilityRecord(voice: Awaited<ReturnType<TtsClient["getVoice"]>>) {
+  const profile = requireProfile(voice);
+  if (!profile.prompt_text) throw new TypeError(`profiles: ${profile.id} has no anchor text`);
+  if (!profile.design_profile.audio_sha256) throw new TypeError(`profiles: ${profile.id} has no audio fingerprint`);
+  return {
+    prompt_text: profile.prompt_text,
+    description: profile.design_profile.description,
+    seed: profile.design_profile.seed,
+    cfg_value: profile.design_profile.cfg_value,
+    timesteps: profile.design_profile.timesteps,
+    model: profile.design_profile.model,
+    audio_sha256: profile.design_profile.audio_sha256,
+  };
 }
 
 export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, fetch: Fetch = globalThis.fetch): Promise<number> {
@@ -57,7 +73,17 @@ export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, 
     })));
     return 0;
   }
-  if (operation !== "create") throw new TypeError("profiles: expected list, create, reproduce, show, or rm");
+  if (operation === "verify") {
+    if (args.length !== 2) throw new TypeError("profiles verify: source ID and target ID are required");
+    const source = reproducibilityRecord(await tts.getVoice(args[0] as string));
+    const target = reproducibilityRecord(await tts.getVoice(args[1] as string));
+    for (const field of Object.keys(source) as Array<keyof typeof source>) {
+      if (source[field] !== target[field]) throw new TypeError(`profiles verify: mismatch in ${field}`);
+    }
+    io.out(`verified ${args[0]} ${args[1]} ${source.audio_sha256}`);
+    return 0;
+  }
+  if (operation !== "create") throw new TypeError("profiles: expected list, create, reproduce, verify, show, or rm");
   const id = args.shift();
   let description: string | undefined, anchorText: string | undefined, seed: number | undefined;
   let cfgValue: number | undefined, timesteps: number | undefined;
