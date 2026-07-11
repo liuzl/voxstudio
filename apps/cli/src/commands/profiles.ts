@@ -11,24 +11,30 @@ commands:
   show ID
   rm ID`;
 
+function requireProfile(voice: Awaited<ReturnType<TtsClient["getVoice"]>>) {
+  if (!voice.design_profile) throw new TypeError(`profiles: ${voice.id} is not a design profile`);
+  return voice;
+}
+
 export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, fetch: Fetch = globalThis.fetch): Promise<number> {
   const operation = args.shift();
   const tts = new TtsClient(engine(config, "tts"), fetch);
   if (operation === "list") {
     if (args.length) throw new TypeError("profiles list: no arguments expected");
-    const profiles = (await tts.listVoices()).filter(voice => "design_profile" in voice);
+    const profiles = (await tts.listVoices()).filter(voice => voice.design_profile !== undefined);
     for (const profile of profiles) io.out(JSON.stringify(profile));
     return 0;
   }
   if (operation === "show") {
     if (args.length !== 1) throw new TypeError("profiles show: one ID is required");
-    io.out(JSON.stringify(await tts.getVoice(args[0] as string)));
+    io.out(JSON.stringify(requireProfile(await tts.getVoice(args[0] as string))));
     return 0;
   }
   if (operation === "rm") {
     if (args.length !== 1) throw new TypeError("profiles rm: one ID is required");
-    await tts.deleteVoice(args[0] as string);
-    io.out(`deleted ${args[0]}`);
+    const profile = requireProfile(await tts.getVoice(args[0] as string));
+    await tts.deleteVoice(profile.id);
+    io.out(`deleted ${profile.id}`);
     return 0;
   }
   if (operation !== "create") throw new TypeError("profiles: expected list, create, show, or rm");

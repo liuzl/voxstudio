@@ -90,6 +90,15 @@ export interface Voice {
   id: string;
   prompt_audio_length?: number;
   created_at?: string;
+  design_profile?: DesignProfile;
+}
+
+export interface DesignProfile {
+  description: string;
+  seed: number;
+  cfg_value: number;
+  timesteps: number;
+  model: string;
 }
 
 export interface DesignProfileRequest {

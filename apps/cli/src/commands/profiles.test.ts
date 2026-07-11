@@ -17,7 +17,10 @@ test("lists and removes only profile voices", async () => {
   const out: string[] = [];
   const fetch = async (url: Request | URL | string, init?: RequestInit) => {
     if (String(url).endsWith("/v1/voices") && !init?.method) {
-      return Response.json({ voices: [{ id: "profile", design_profile: {} }, { id: "plain" }] });
+      return Response.json({ voices: [{ id: "profile", design_profile: { description: "calm", seed: 42, cfg_value: 2, timesteps: 10, model: "test" } }, { id: "plain" }] });
+    }
+    if (String(url).endsWith("/v1/voices/profile") && !init?.method) {
+      return Response.json({ id: "profile", design_profile: { description: "calm", seed: 42, cfg_value: 2, timesteps: 10, model: "test" } });
     }
     expect(init?.method).toBe("DELETE");
     return Response.json({ id: "profile", deleted: true });
@@ -25,5 +28,19 @@ test("lists and removes only profile voices", async () => {
   const io = { out: (line: string) => out.push(line), err: () => {} };
   await runProfiles(["list"], parseConfig(), io, fetch);
   await runProfiles(["rm", "profile"], parseConfig(), io, fetch);
-  expect(out).toEqual(["{\"id\":\"profile\",\"design_profile\":{}}", "deleted profile"]);
+  expect(out).toEqual(["{\"id\":\"profile\",\"design_profile\":{\"description\":\"calm\",\"seed\":42,\"cfg_value\":2,\"timesteps\":10,\"model\":\"test\"}}", "deleted profile"]);
+});
+
+test("refuses to show or remove a non-profile voice", async () => {
+  let deletes = 0;
+  const fetch = async (_url: Request | URL | string, init?: RequestInit) => {
+    if (init?.method === "DELETE") deletes += 1;
+    return Response.json({ id: "plain" });
+  };
+  const io = { out: () => {}, err: () => {} };
+  await expect(runProfiles(["show", "plain"], parseConfig(), io, fetch))
+    .rejects.toThrow("profiles: plain is not a design profile");
+  await expect(runProfiles(["rm", "plain"], parseConfig(), io, fetch))
+    .rejects.toThrow("profiles: plain is not a design profile");
+  expect(deletes).toBe(0);
 });
