@@ -6,6 +6,9 @@ After=network-online.target
 # Adjust WorkingDirectory and VOXCPM2_* env to your host.
 WorkingDirectory=%h/voxstudio/engines/voxcpm2-server
 Environment=VOXCPM2_BASE=%h/tts-eval-voxcpm2
+# Set this to the deployment-generated manifest SHA-256 to make design profiles
+# reproducible across model artifact changes.
+# Environment=VOXCPM2_MODEL_MANIFEST_SHA256=<64 lowercase hex characters>
 Environment=PYTHONUNBUFFERED=1
 # The caching allocator's reserved pool ratchets up with the length of one generation and
 # never comes back down, which a co-tenant model on the same card pays for. Expandable

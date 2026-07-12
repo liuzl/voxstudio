@@ -26,6 +26,9 @@ function reproducibilityRecord(voice: Awaited<ReturnType<TtsClient["getVoice"]>>
   const profile = requireProfile(voice);
   if (!profile.prompt_text) throw new TypeError(`profiles: ${profile.id} has no anchor text`);
   if (!profile.design_profile.audio_sha256) throw new TypeError(`profiles: ${profile.id} has no audio fingerprint`);
+  if (!profile.design_profile.model_manifest_sha256) {
+    throw new TypeError(`profiles: ${profile.id} has no model manifest fingerprint`);
+  }
   return {
     prompt_text: profile.prompt_text,
     description: profile.design_profile.description,
@@ -33,6 +36,7 @@ function reproducibilityRecord(voice: Awaited<ReturnType<TtsClient["getVoice"]>>
     cfg_value: profile.design_profile.cfg_value,
     timesteps: profile.design_profile.timesteps,
     model: profile.design_profile.model,
+    model_manifest_sha256: profile.design_profile.model_manifest_sha256,
     audio_sha256: profile.design_profile.audio_sha256,
   };
 }

@@ -72,6 +72,7 @@ test("verifies complete reproducibility metadata and audio fingerprint", async (
     prompt_text: "锚点",
     design_profile: {
       description: "warm voice", seed: 43, cfg_value: 2.5, timesteps: 12, model: "test",
+      model_manifest_sha256: "c".repeat(64),
       audio_sha256: "a".repeat(64),
     },
   });
@@ -86,6 +87,7 @@ test("reports reproducibility mismatches", async () => {
     prompt_text: "锚点",
     design_profile: {
       description: "warm voice", seed: 43, cfg_value: 2.5, timesteps: 12, model: "test",
+      model_manifest_sha256: "c".repeat(64),
       audio_sha256: String(url).endsWith("/source") ? "a".repeat(64) : "b".repeat(64),
     },
   });

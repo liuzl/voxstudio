@@ -12,7 +12,7 @@ FastAPI HTTP wrapper over **OpenBMB VoxCPM2** (48kHz high-fidelity Chinese TTS).
 | POST | `/tts_form` | multipart, upload `ref_file` to clone from an arbitrary reference voice |
 | GET | `/` | minimal Web UI |
 | POST | `/v1/voices` | register a reusable voice — multipart `{id, text, audio}` → metadata (201) |
-| POST | `/v1/design-profiles` | materialize `{id, description, anchor_text, seed, cfg_value?, timesteps?}` as a reusable registered voice; metadata includes its WAV SHA-256 |
+| POST | `/v1/design-profiles` | materialize `{id, description, anchor_text, seed, cfg_value?, timesteps?}` as a reusable registered voice; metadata includes its WAV and model-manifest SHA-256 |
 | GET | `/v1/voices` | list registered voices |
 | GET | `/v1/voices/{id}` | voice metadata |
 | DELETE | `/v1/voices/{id}` | remove a voice |
@@ -44,6 +44,7 @@ curl http://<host>:8880/v1/audio/speech -H 'Content-Type: application/json' \
 | `VOXCPM2_BASE` | `~/tts-eval-voxcpm2` |
 | `VOXCPM2_MODEL` | `$VOXCPM2_BASE/pretrained_models/VoxCPM2` |
 | `VOXCPM2_REF` | `$VOXCPM2_BASE/voice.wav` (default clone voice) |
+| `VOXCPM2_MODEL_MANIFEST_SHA256` | unset; deployment-pinned SHA-256 of the full model directory manifest |
 
 ## Run
 
