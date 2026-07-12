@@ -26,10 +26,15 @@ contract for batch ASR, LLM, or TTS requests.
    but is not an AEC implementation.
 4. The browser uses `getUserMedia` echo cancellation and a WebRTC transport.
    LiveKit is the preferred WebRTC room and media adapter, not a dependency of
-   the session workflow or model-engine contract.
+   the session workflow or model-engine contract. Requested browser constraints
+   are verified from the acquired track's settings; they are not treated as a
+   guarantee.
 5. Every audio, transcript, generation, and playback event carries a session
    and turn identifier. A newer valid user turn cancels all work and buffered
    playback for the previous turn.
+6. Turn detection and interruption are policy plug-ins. Manual push-to-talk,
+   VAD endpointing, semantic end-of-turn detection, and adaptive interruption
+   share the same session state and cancellation contract.
 
 ## Non-goals
 
@@ -113,6 +118,12 @@ The helper is deliberately narrow:
   `shutdown`;
 - never calls ASR, LLM, TTS, stores transcripts, or handles credentials.
 
+Voice processing is configured before the engine starts. A device or route
+change that requires reconfiguration moves the endpoint through an explicit
+`reconfiguring` state: stop playback/capture safely, rebuild the graph, verify
+voice processing, then resume listening. It must not try to toggle voice
+processing on a running engine.
+
 For the first CLI release, a wired or USB headset is the supported duplex
 baseline. Speaker mode is enabled only after the native helper passes the AEC
 test suite. Bluetooth routes are supported as best effort because profile
@@ -126,6 +137,14 @@ track and renders agent audio through the browser's WebRTC audio path. The
 browser and operating system retain control over the exact AEC implementation;
 the UI exposes the selected device, active route, and a headset recommendation
 when AEC capabilities are unavailable.
+
+After capture starts, the browser reads `MediaStreamTrack.getSettings()` and
+records the negotiated AEC/NS/AGC state as an endpoint capability snapshot. A
+browser may accept a constraint without providing the desired quality on a
+particular route. When AEC is unavailable or fails the route-specific smoke
+test, speaker-mode auto-barge-in is disabled and the user can use a headset,
+push-to-talk, or explicit stop control. Browser audio requires HTTPS; microphone
+permission denial is a first-class recoverable state, not a generic failure.
 
 The browser must not bypass this route by independently capturing with
 `MediaRecorder` while playing the agent through an unrelated element. That
@@ -153,9 +172,12 @@ idle -> listening -> speech_started -> finalizing -> thinking -> speaking
  +--------------------------- shutdown -----------------------+
 ```
 
-While `speaking`, capture continues. A barge-in requires post-AEC VAD speech
-for a configurable minimum duration and level. The threshold is calibrated by
-test data; it is not a fixed product constant. On confirmation:
+While `speaking`, capture continues. The initial policy requires post-AEC VAD
+speech for a configurable minimum duration and level. The threshold is
+calibrated by test data; it is not a fixed product constant. It is deliberately
+replaceable by a semantic end-of-turn detector or an adaptive interruption
+model, which can distinguish a real interruption from short acknowledgements.
+On confirmation:
 
 1. mark the active turn `interrupted`;
 2. abort streaming ASR/LLM/TTS requests with an `AbortSignal`;
@@ -167,6 +189,13 @@ test data; it is not a fixed product constant. On confirmation:
 
 The user can also explicitly mute, stop, or switch back to push-to-talk. These
 controls are distinct from VAD and always take precedence.
+
+An interruption is provisional until a policy confirms it. If a VAD-only
+interruption later has no usable speech, the session records `false_barge_in`.
+The initial CLI does not resume partially played audio because that can be more
+confusing than restarting the reply; it offers an explicit replay action. A
+future endpoint may resume only from a recorded, timestamped playback
+checkpoint after usability tests demonstrate that behavior is preferable.
 
 ## Realtime gateway and events
 
@@ -182,7 +211,10 @@ apps/realtime-gateway
 
 The gateway exposes a versioned session event schema over local IPC and, for
 remote clients, a WebSocket/data-track control channel. Media is carried as
-endpoint PCM or WebRTC tracks, not base64 JSON.
+endpoint PCM or WebRTC tracks, not base64 JSON. Every control message has a
+monotonic `sequence`, `sessionId`, and schema version. On reconnect, a client
+requests a state snapshot and must not replay stale `stop` or `commit-turn`
+commands; commands use an idempotency key.
 
 Minimum event types:
 
@@ -196,13 +228,17 @@ playback.started|ended|interrupted { turnId }
 timing              { turnId, captureMs, vadEndMs, asrMs, llmFirstMs,
                        ttsFirstMs, playbackFirstMs }
 error               { code, recoverable, turnId? }
+endpoint.capability { aec, ns, agc, route, sampleRate }
+session.snapshot    { state, currentTurnId, lastSequence }
 ```
 
 The gateway initially adapts the current file-based ASR and one-shot LLM/TTS
 clients: VAD closes a short temporary utterance, ASR transcribes it, then the
 reply is generated and played. Streaming ASR, LLM token streaming, and TTS
 audio streaming are independent adapter upgrades. The session contract stays
-unchanged as those engines improve.
+unchanged as those engines improve. The fallback has a maximum utterance
+duration and explicit overflow behavior; it never retains an unbounded live
+recording while waiting for an engine response.
 
 ## Provider requirements
 
@@ -232,6 +268,10 @@ gateway applies backpressure rather than generating unbounded audio.
   IDs and aggregate counters, not transcript text or raw audio.
 - Web session tokens are short-lived and scoped to one room/session. Engine
   credentials never reach the browser.
+- WebRTC media and control traffic use TLS/DTLS/SRTP. End-to-end encryption is
+  an explicit deployment mode: a server-side agent can process E2EE media only
+  when it is admitted as a participant with the required key. It is not claimed
+  merely because the LiveKit transport supports E2EE.
 - Voice registration keeps consent/provenance as a separate future workflow;
   duplex audio does not loosen that requirement.
 
@@ -251,6 +291,8 @@ Required measurements per supported endpoint:
   playback latency (p50/p95);
 - queue overflow, device-route change, permission-denied, and cancellation
   recovery tests.
+- negotiated AEC/NS/AGC capability coverage by browser, operating system, and
+  audio route, with the chosen fallback recorded.
 
 The first release target is deterministic cancellation and no self-interruption
 with a wired headset. Speaker-mode AEC requires a separate empirical gate on
@@ -259,8 +301,8 @@ supported macOS hardware. Browser and CLI metrics are reported separately.
 ## Delivery phases
 
 1. **Session contract and test harness**: add `packages/duplex-session`, event
-   fixtures, fake endpoint, cancellation tests, and timing schema. No device
-   behavior changes.
+   fixtures, fake endpoint, cancellation/reconnect/idempotency tests, timing
+   schema, and bounded-queue tests. No device behavior changes.
 2. **CLI headset duplex**: add `vox listen` using continuous capture, VAD
    segmentation, cancellation, bounded playback, and clear headset mode. This
    establishes the user workflow without claiming speaker AEC.
@@ -283,3 +325,5 @@ with its first tested owned module.
 - Apple, [What's new in voice processing](https://developer.apple.com/videos/play/wwdc2023/10235/): macOS 14 availability, AEC/NS/AGC behavior, and `AVAudioEngine` versus `AUVoiceIO` options.
 - WebRTC, [Audio Processing Module](https://webrtc.googlesource.com/src/%2B/refs/heads/main/modules/audio_processing/g3doc/audio_processing_module.md): capture and reverse-render streams for AEC, NS, and AGC.
 - LiveKit, [Realtime media and data](https://docs.livekit.io/frontends/build/media-data/): WebRTC media tracks and data/state channels for agent clients.
+- W3C, [Media Capture and Streams](https://www.w3.org/TR/mediacapture-streams/): browser AEC constraint semantics and route-dependent negotiated settings.
+- LiveKit, [Turns overview](https://docs.livekit.io/agents/logic/turns/): turn detection, interruption, false-interruption recovery, and manual control patterns.
