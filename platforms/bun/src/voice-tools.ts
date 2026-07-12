@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
+import { readWav } from "@voxstudio/audio";
 
 export type HostSystem = "Darwin" | "Linux" | "Windows";
 
@@ -20,7 +21,7 @@ export function recordCommand(
 ): string[] {
   const command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"];
   if (system === "Darwin") {
-    command.push("-f", "avfoundation", "-i", `:${(device ?? "0").replace(/^:/, "")}`);
+    command.push("-f", "avfoundation", "-i", `:${(device ?? "default").replace(/^:/, "")}`);
   } else if (system === "Linux") {
     command.push("-f", "pulse", "-i", device ?? "default");
   } else {
@@ -29,6 +30,10 @@ export function recordCommand(
   if (duration > 0) command.push("-t", String(duration));
   command.push("-ac", "1", "-ar", "16000", output);
   return command;
+}
+
+export function hasAudibleAudio(samples: Float32Array, threshold = 0.001): boolean {
+  return samples.some(sample => Math.abs(sample) >= threshold);
 }
 
 export async function recordAudio(
@@ -69,6 +74,9 @@ export async function recordAudio(
     const exitCode = await child.exited;
     if (exitCode !== 0) throw new TypeError(`ffmpeg exited with status ${exitCode}`);
     if ((await stat(output)).size <= 44) throw new TypeError("recording produced no audio");
+    if (!hasAudibleAudio(readWav(await readFile(output)).samples)) {
+      throw new TypeError("recording is silent; select a microphone with --device");
+    }
     status(`recorded ${output}`);
     return output;
   } catch (error) {

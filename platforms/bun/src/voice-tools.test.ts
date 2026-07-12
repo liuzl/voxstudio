@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { recordCommand, splitCommand } from "./voice-tools";
+import { hasAudibleAudio, recordCommand, splitCommand } from "./voice-tools";
 
 describe("voice platform tools", () => {
   test.each([
-    ["Darwin", undefined, ["-f", "avfoundation", "-i", ":0"]],
+    ["Darwin", undefined, ["-f", "avfoundation", "-i", ":default"]],
     ["Darwin", "2", ["-f", "avfoundation", "-i", ":2"]],
     ["Linux", undefined, ["-f", "pulse", "-i", "default"]],
     ["Windows", "Microphone", ["-f", "dshow", "-i", "audio=Microphone"]],
@@ -17,6 +17,13 @@ describe("voice platform tools", () => {
 
   test("manual recording has no duration flag", () => {
     expect(recordCommand("voice.wav", 0, undefined, "Linux")).not.toContain("-t");
+  });
+
+  test("detects audible recordings without treating silence as speech", () => {
+    expect(hasAudibleAudio(new Float32Array(480))).toBe(false);
+    expect(hasAudibleAudio(new Float32Array([0.0009, -0.001]))).toBe(true);
+    expect(hasAudibleAudio(new Float32Array([0.01]))).toBe(true);
+    expect(hasAudibleAudio(new Float32Array([0.0009]), 0.01)).toBe(false);
   });
 
   test("splits quoted editor commands without invoking a shell", () => {
