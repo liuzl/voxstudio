@@ -4,6 +4,7 @@ import { ConfigError, parseConfig } from "@voxstudio/config";
 import type { VoxConfig } from "@voxstudio/contracts";
 
 export { FfplaySink, TeeSink, WavFileSink, type PcmSink } from "./audio-sinks";
+export { startMacosAudioHost, type MacosAudioHost } from "./macos-audio";
 export {
   editText,
   captureCommand,

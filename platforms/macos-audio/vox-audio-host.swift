@@ -1,0 +1,106 @@
+import AVFoundation
+import Dispatch
+import Foundation
+
+let captureRate = 16_000.0
+let playbackRate = 48_000.0
+let playbackFrames: AVAudioFrameCount = 960
+
+final class AudioHost {
+  private let engine = AVAudioEngine()
+  private let player = AVAudioPlayerNode()
+  private let captureFormat = AVAudioFormat(standardFormatWithSampleRate: captureRate, channels: 1)!
+  private let playbackFormat = AVAudioFormat(standardFormatWithSampleRate: playbackRate, channels: 1)!
+  private let stdout = FileHandle.standardOutput
+  private let stdoutQueue = DispatchQueue(label: "voxstudio.audio.stdout")
+  private var converter: AVAudioConverter?
+  private var pendingPlayback = Data()
+
+  func start() throws {
+    // Voice processing must be configured before the engine starts.
+    try engine.inputNode.setVoiceProcessingEnabled(true)
+    engine.attach(player)
+    engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
+    let input = engine.inputNode
+    converter = AVAudioConverter(from: input.inputFormat(forBus: 0), to: captureFormat)
+    input.installTap(onBus: 0, bufferSize: 960, format: nil) { [weak self] buffer, _ in
+      self?.capture(buffer)
+    }
+    engine.prepare()
+    try engine.start()
+    player.play()
+    fputs("vox-audio-host ready voice-processing=\(input.isVoiceProcessingEnabled)\n", stderr)
+  }
+
+  func appendPlayback(_ data: Data) {
+    pendingPlayback.append(data)
+    let bytesPerBuffer = Int(playbackFrames) * MemoryLayout<Float>.size
+    while pendingPlayback.count >= bytesPerBuffer {
+      let chunk = pendingPlayback.prefix(bytesPerBuffer)
+      pendingPlayback.removeFirst(bytesPerBuffer)
+      guard let buffer = AVAudioPCMBuffer(pcmFormat: playbackFormat, frameCapacity: playbackFrames),
+            let destination = buffer.floatChannelData?[0] else { return }
+      buffer.frameLength = playbackFrames
+      chunk.withUnsafeBytes { source in
+        destination.update(from: source.baseAddress!.assumingMemoryBound(to: Float.self), count: Int(playbackFrames))
+      }
+      player.scheduleBuffer(buffer)
+    }
+  }
+
+  func clearPlayback() {
+    pendingPlayback.removeAll(keepingCapacity: true)
+    player.stop()
+    player.play()
+  }
+
+  func stop() {
+    engine.inputNode.removeTap(onBus: 0)
+    player.stop()
+    engine.stop()
+  }
+
+  private func capture(_ input: AVAudioPCMBuffer) {
+    guard let converter else { return }
+    let capacity = AVAudioFrameCount(Double(input.frameLength) * captureRate / input.format.sampleRate) + 8
+    guard let output = AVAudioPCMBuffer(pcmFormat: captureFormat, frameCapacity: capacity) else { return }
+    var supplied = false
+    var error: NSError?
+    let status = converter.convert(to: output, error: &error) { _, status in
+      if supplied {
+        status.pointee = .noDataNow
+        return nil
+      }
+      supplied = true
+      status.pointee = .haveData
+      return input
+    }
+    guard status != .error, error == nil, output.frameLength > 0, let samples = output.floatChannelData?[0] else { return }
+    let data = Data(bytes: samples, count: Int(output.frameLength) * MemoryLayout<Float>.size)
+    stdoutQueue.async { self.stdout.write(data) }
+  }
+}
+
+let host = AudioHost()
+let signalQueue = DispatchQueue.main
+signal(SIGUSR1, SIG_IGN)
+let clearSignal = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: signalQueue)
+clearSignal.setEventHandler { host.clearPlayback() }
+clearSignal.resume()
+
+do {
+  try host.start()
+  FileHandle.standardInput.readabilityHandler = { handle in
+    let data = handle.availableData
+    if data.isEmpty {
+      handle.readabilityHandler = nil
+      host.stop()
+      exit(0)
+    }
+    signalQueue.async { host.appendPlayback(data) }
+  }
+  RunLoop.main.run()
+} catch {
+  fputs("vox-audio-host error: \(error)\n", stderr)
+  exit(1)
+}

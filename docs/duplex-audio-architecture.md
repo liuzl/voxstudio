@@ -330,8 +330,11 @@ supported macOS hardware. Browser and CLI metrics are reported separately.
    current turn's `AbortSignal`, and `streamLong` stops requesting chunks after
    cancellation. Add token-streaming LLM/ASR/TTS adapters and sentence-level
    LLM-to-TTS pipelining while keeping one-shot fallbacks.
-4. **macOS audio helper**: build and test the `AVAudioEngine` endpoint with
-   Voice Processing, route changes, capability detection, and speaker-mode AEC.
+4. **macOS audio helper**: `platforms/macos-audio/vox-audio-host.swift` now
+   builds a narrow stdin/stdout PCM helper using `AVAudioEngine` Voice
+   Processing; `vox listen --speaker-duplex` selects it. Real-device AEC,
+   route changes, capability reporting, and release packaging remain required
+   before speaker duplex is declared supported.
 5. **Web Studio realtime**: add a browser endpoint and LiveKit room/gateway,
    reusing the same session events, policy, and provider adapters.
 6. **Cross-platform endpoints**: evaluate native platform voice-processing APIs

@@ -63,6 +63,8 @@ bun run build:cli
 ./apps/cli/dist/vox reply --record 5 --language zh --voice design-calm-clear -o answer.wav
 ./apps/cli/dist/vox devices
 ./apps/cli/dist/vox listen --device "MacBook Pro microphone" --language zh --voice design-calm-clear
+./platforms/macos-audio/build.sh
+./apps/cli/dist/vox listen --speaker-duplex --language zh --voice design-calm-clear
 ./apps/cli/dist/vox voices add alice --audio sample.wav --text "参考音的逐字稿"
 ./apps/cli/dist/vox voices add bob --audio sample.wav --language zh  # transcript via ASR
 ./apps/cli/dist/vox voices add carol --record 15 --language zh       # record, ASR, register

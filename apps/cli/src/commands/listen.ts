@@ -4,16 +4,17 @@ import { engine } from "@voxstudio/config";
 import type { VoxConfig } from "@voxstudio/contracts";
 import { EnergyVadSegmenter, DuplexSession, type DuplexTurn } from "@voxstudio/duplex-session";
 import { streamLong } from "@voxstudio/orchestration";
-import { capturePcm, FfplaySink, type PcmCapture, type PcmSink } from "@voxstudio/platform-bun";
+import { capturePcm, FfplaySink, startMacosAudioHost, type MacosAudioHost, type PcmCapture, type PcmSink } from "@voxstudio/platform-bun";
 import { sanitizeForTts } from "@voxstudio/text";
 import type { CliIo } from "../io";
 
 export const listenUsage = `usage: vox listen [--device NAME] [--language LANG] [--system TEXT] [--max-tokens N]
-                 [--voice VOICE] [--barge-in] [--threshold N] [--silence-ms N] [--min-speech-ms N]
+                 [--voice VOICE] [--barge-in | --speaker-duplex] [--threshold N] [--silence-ms N] [--min-speech-ms N]
 
 Run a continuous voice conversation. Press Ctrl-C to stop.
 Without --barge-in, microphone input is suppressed while the agent speaks so external speakers
-cannot interrupt playback. Use --barge-in only with headphones or a headset; speaker AEC is not built yet.`;
+cannot interrupt playback. Use --barge-in only with headphones or a headset. --speaker-duplex uses
+the macOS Voice Processing helper for external-speaker AEC.`;
 
 interface ListenOptions {
   device?: string;
@@ -22,6 +23,7 @@ interface ListenOptions {
   maxTokens?: number;
   voice?: string;
   bargeIn: boolean;
+  speakerDuplex: boolean;
   threshold: number;
   silenceMs: number;
   minSpeechMs: number;
@@ -34,11 +36,13 @@ export interface ListenPlayer extends PcmSink {
 export interface ListenPlatform {
   capture(device: string | undefined): Promise<PcmCapture>;
   createPlayer(): ListenPlayer;
+  startSpeakerDuplex?(): Promise<MacosAudioHost>;
 }
 
 const defaultPlatform: ListenPlatform = {
   capture: device => capturePcm(device),
   createPlayer: () => new FfplaySink(),
+  startSpeakerDuplex: startMacosAudioHost,
 };
 
 function required(args: string[], index: number, option: string): string {
@@ -55,7 +59,7 @@ function numberOption(args: string[], index: number, option: string): number {
 
 function parse(args: string[]): ListenOptions {
   const options: ListenOptions = {
-    language: "auto", bargeIn: false, threshold: 0.01, silenceMs: 650, minSpeechMs: 250,
+    language: "auto", bargeIn: false, speakerDuplex: false, threshold: 0.01, silenceMs: 650, minSpeechMs: 250,
   };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
@@ -64,6 +68,7 @@ function parse(args: string[]): ListenOptions {
     else if (arg === "--system") options.system = required(args, ++index, arg);
     else if (arg === "--voice") options.voice = required(args, ++index, arg);
     else if (arg === "--barge-in") options.bargeIn = true;
+    else if (arg === "--speaker-duplex") options.speakerDuplex = true;
     else if (arg === "--max-tokens") {
       const value = numberOption(args, ++index, arg);
       if (!Number.isInteger(value) || value === 0) throw new TypeError("listen: --max-tokens must be a positive integer");
@@ -103,7 +108,12 @@ export async function runListen(
     silenceMs: options.silenceMs,
     minSpeechMs: options.minSpeechMs,
   });
-  const capture = await platform.capture(options.device);
+  if (options.speakerDuplex && !platform.startSpeakerDuplex) {
+    throw new TypeError("speaker duplex is not available on this platform");
+  }
+  const speakerHost = options.speakerDuplex ? await platform.startSpeakerDuplex?.() : undefined;
+  const capture = speakerHost?.capture ?? await platform.capture(options.device);
+  const allowBargeIn = options.bargeIn || options.speakerDuplex;
   const asr = new AsrClient(engine(config, "asr"), fetch);
   const llm = new LlmClient(engine(config, "llm"), fetch);
   const tts = new TtsClient(engine(config, "tts"), fetch);
@@ -141,8 +151,8 @@ export async function runListen(
       }
       io.out(`reply: ${reply}`);
       if (!session.startSpeaking(turn.id)) return;
-      if (!options.bargeIn) suppressInputUntil = Number.POSITIVE_INFINITY;
-      const player = platform.createPlayer();
+      if (!allowBargeIn) suppressInputUntil = Number.POSITIVE_INFINITY;
+      const player = speakerHost?.player ?? platform.createPlayer();
       activePlayer = player;
       const abort = () => { void stopPlayer(player); };
       turn.signal.addEventListener("abort", abort, { once: true });
@@ -168,7 +178,7 @@ export async function runListen(
         turn.signal.removeEventListener("abort", abort);
         if (activePlayer === player) activePlayer = undefined;
         if (!turn.signal.aborted) await player.close();
-        if (!options.bargeIn) suppressInputUntil = Date.now() + 750;
+        if (!allowBargeIn) suppressInputUntil = Date.now() + 750;
       }
     } catch (error) {
       if (!turn.signal.aborted) {
@@ -194,11 +204,11 @@ export async function runListen(
 
   process.once("SIGINT", stop);
   session.start();
-  io.err("listening with headset mode; press Ctrl-C to stop");
+  io.err(options.speakerDuplex ? "listening with macOS speaker duplex; press Ctrl-C to stop" : "listening with protected speaker mode; press Ctrl-C to stop");
   try {
     for await (const frame of capture.frames) {
       if (stopping) break;
-      if (!options.bargeIn && (session.state === "speaking" || frame.timestampMs < suppressInputUntil)) {
+      if (!allowBargeIn && (session.state === "speaking" || frame.timestampMs < suppressInputUntil)) {
         vad.reset();
         continue;
       }
@@ -217,6 +227,7 @@ export async function runListen(
   } finally {
     process.removeListener("SIGINT", stop);
     stop();
+    await speakerHost?.close();
     await Promise.allSettled([...work]);
   }
 }
