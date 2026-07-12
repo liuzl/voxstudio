@@ -69,6 +69,7 @@ bun run build:cli
 ./apps/cli/dist/vox profiles audition auditions --text "固定评测文本。" --seed 20260712 candidate-a candidate-b
 ./apps/cli/dist/vox profiles select auditions/manifest.json candidate-b --note "试听结果"
 ./apps/cli/dist/vox profiles audit design-calm-clear
+./apps/cli/dist/vox profiles audit --all
 ```
 
 Design profiles retain their description, anchor text, seed, CFG, timesteps, model identity,
@@ -80,7 +81,8 @@ created by that invocation when a later candidate fails.
 `profiles audition` renders a fixed-text, fixed-seed WAV for each candidate and writes an auditable
 `manifest.json` beside the WAV files for listening and human scoring. `profiles select` writes a
 hash-bound `selection.json` without deleting any candidate. `profiles audit` compares a profile's
-saved model identity and manifest to the current TTS runtime before use.
+saved model identity and manifest to the current TTS runtime before use; `--all` reports drift
+across the complete design-profile registry.
 
 The build produces one standalone executable containing the Bun runtime and TypeScript
 dependencies. Windows writes `apps/cli/dist/vox.exe`. Playback and microphone recording

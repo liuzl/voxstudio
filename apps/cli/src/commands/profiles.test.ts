@@ -208,6 +208,28 @@ test("rejects a profile whose model manifest has drifted", async () => {
     .rejects.toThrow("profiles audit: model manifest differs from current TTS runtime");
 });
 
+test("audits every profile and reports drift without stopping", async () => {
+  const profile = (id: string, manifest: string) => ({
+    id, prompt_text: "锚点",
+    design_profile: {
+      description: "calm voice", seed: 42, cfg_value: 2, timesteps: 10, model: "voxcpm@test",
+      model_manifest_sha256: manifest, audio_sha256: "a".repeat(64),
+    },
+  });
+  const fetch = async (url: Request | URL | string) => {
+    if (String(url).endsWith("/health")) {
+      return Response.json({ status: "ok", model: "voxcpm@test", model_manifest_sha256: "c".repeat(64) });
+    }
+    return Response.json({ voices: [profile("good", "c".repeat(64)), profile("drifted", "d".repeat(64))] });
+  };
+  const out: string[] = [];
+  expect(await runProfiles(["audit", "--all"], parseConfig(), { out: line => out.push(line), err: () => {} }, fetch)).toBe(1);
+  expect(out.map(line => JSON.parse(line))).toEqual([
+    expect.objectContaining({ id: "good", status: "ok" }),
+    expect.objectContaining({ id: "drifted", status: "fail", detail: "model manifest differs from current TTS runtime" }),
+  ]);
+});
+
 test("reproduces a profile from its recorded generation settings", async () => {
   const fetch = async (url: Request | URL | string, init?: RequestInit) => {
     if (!init?.method) {

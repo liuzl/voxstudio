@@ -17,7 +17,7 @@ commands:
   batch MANIFEST [--dry-run] [--rollback-on-error]
   audition OUT_DIR --text TEXT --seed N ID [ID ...]
   select AUDITION_MANIFEST WINNER_ID [--note TEXT]
-  audit ID
+  audit ID | --all
   reproduce SOURCE_ID NEW_ID
   verify SOURCE_ID TARGET_ID
   show ID
@@ -40,7 +40,7 @@ select:
   Record a human-selected winner in selection.json beside an audition manifest.
 
 audit:
-  Check one design profile against the current TTS runtime model and manifest.`;
+  Check one or all design profiles against the current TTS runtime model and manifest.`;
 
 type ProfileVoice = Voice & { design_profile: DesignProfile };
 
@@ -66,6 +66,19 @@ function reproducibilityRecord(voice: Voice) {
     model_manifest_sha256: profile.design_profile.model_manifest_sha256,
     audio_sha256: profile.design_profile.audio_sha256,
   };
+}
+
+function auditResult(
+  id: string,
+  profile: ReturnType<typeof reproducibilityRecord>,
+  runtime: Awaited<ReturnType<TtsClient["runtimeIdentity"]>>,
+) {
+  if (profile.model !== runtime.model) throw new TypeError("model differs from current TTS runtime");
+  if (profile.model_manifest_sha256 !== runtime.model_manifest_sha256) {
+    throw new TypeError("model manifest differs from current TTS runtime");
+  }
+  return { id, status: "ok", model: runtime.model,
+    model_manifest_sha256: runtime.model_manifest_sha256, audio_sha256: profile.audio_sha256 };
 }
 
 const profileFields = new Set(["id", "description", "anchor_text", "seed", "cfg_value", "timesteps"]);
@@ -346,14 +359,27 @@ export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, 
   }
   if (operation === "audit") {
     if (args.length !== 1) throw new TypeError("profiles audit: one profile ID is required");
-    const profile = reproducibilityRecord(await tts.getVoice(args[0] as string));
     const runtime = await tts.runtimeIdentity();
-    if (profile.model !== runtime.model) throw new TypeError("profiles audit: model differs from current TTS runtime");
-    if (profile.model_manifest_sha256 !== runtime.model_manifest_sha256) {
-      throw new TypeError("profiles audit: model manifest differs from current TTS runtime");
+    if (args[0] === "--all") {
+      let failed = false;
+      const profiles = (await tts.listVoices()).filter(voice => voice.design_profile !== undefined);
+      for (const voice of profiles) {
+        try {
+          io.out(JSON.stringify(auditResult(voice.id, reproducibilityRecord(voice), runtime)));
+        } catch (error) {
+          failed = true;
+          io.out(JSON.stringify({ id: voice.id, status: "fail", detail: error instanceof Error ? error.message : String(error) }));
+        }
+      }
+      return failed ? 1 : 0;
     }
-    io.out(JSON.stringify({ id: args[0], status: "ok", model: runtime.model,
-      model_manifest_sha256: runtime.model_manifest_sha256, audio_sha256: profile.audio_sha256 }));
+    try {
+      const profile = reproducibilityRecord(await tts.getVoice(args[0] as string));
+      io.out(JSON.stringify(auditResult(args[0] as string, profile, runtime)));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new TypeError(`profiles audit: ${detail}`);
+    }
     return 0;
   }
   if (operation === "verify") {
