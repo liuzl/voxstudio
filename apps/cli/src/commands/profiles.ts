@@ -1,15 +1,21 @@
+import { createHash } from "node:crypto";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { TtsClient, type Fetch } from "@voxstudio/clients";
 import { engine } from "@voxstudio/config";
 import type { DesignProfile, DesignProfileRequest, Voice, VoxConfig } from "@voxstudio/contracts";
-import { readTextFile } from "@voxstudio/platform-bun";
+import { synthesizeLong } from "@voxstudio/orchestration";
+import { readTextFile, writeBytes } from "@voxstudio/platform-bun";
+import { sanitizeForTts } from "@voxstudio/text";
 import type { CliIo } from "../io";
 
-export const profilesUsage = `usage: vox profiles {list,create,batch,reproduce,verify,show,rm} ...
+export const profilesUsage = `usage: vox profiles {list,create,batch,audition,reproduce,verify,show,rm} ...
 
 commands:
   list
   create ID --description TEXT --anchor-text TEXT --seed N [--cfg VALUE] [--timesteps N]
   batch MANIFEST [--dry-run] [--rollback-on-error]
+  audition OUT_DIR --text TEXT --seed N ID [ID ...]
   reproduce SOURCE_ID NEW_ID
   verify SOURCE_ID TARGET_ID
   show ID
@@ -22,7 +28,11 @@ create options:
 batch manifest:
   JSONL: one candidate per line with id, description, anchor_text, seed,
   and optional cfg_value and timesteps. Use --dry-run to validate without generation.
-  Use --rollback-on-error to delete candidates created before a request failure.`;
+  Use --rollback-on-error to delete candidates created before a request failure.
+
+audition:
+  Generate one WAV per profile with fixed text and synthesis seed. OUT_DIR must
+  not already contain candidate WAVs or manifest.json.`;
 
 type ProfileVoice = Voice & { design_profile: DesignProfile };
 
@@ -108,6 +118,47 @@ export function parseProfileBatch(text: string): DesignProfileRequest[] {
   return candidates;
 }
 
+interface AuditionOptions {
+  outputDir: string;
+  text: string;
+  seed: number;
+  ids: string[];
+}
+
+function parseAudition(args: string[]): AuditionOptions {
+  const outputDir = args.shift();
+  let text: string | undefined;
+  let seed: number | undefined;
+  const ids: string[] = [];
+  while (args.length) {
+    const arg = args.shift() as string;
+    if (arg === "--text") {
+      text = args.shift();
+      if (!text) throw new TypeError("profiles audition: --text requires a value");
+    } else if (arg === "--seed") {
+      const raw = args.shift();
+      if (!raw) throw new TypeError("profiles audition: --seed requires a value");
+      if (!/^[+-]?\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+        throw new TypeError("profiles audition: --seed must be a safe integer");
+      }
+      seed = Number(raw);
+    } else if (arg.startsWith("-")) {
+      throw new TypeError(`profiles audition: unknown option ${arg}`);
+    } else {
+      ids.push(arg);
+    }
+  }
+  if (!outputDir) throw new TypeError("profiles audition: output directory is required");
+  if (!text?.trim()) throw new TypeError("profiles audition: --text is required");
+  if (seed === undefined) throw new TypeError("profiles audition: --seed is required");
+  if (!ids.length) throw new TypeError("profiles audition: at least one profile ID is required");
+  for (const id of ids) {
+    if (!voiceId.test(id)) throw new TypeError(`profiles audition: invalid profile ID ${id}`);
+  }
+  if (new Set(ids).size !== ids.length) throw new TypeError("profiles audition: profile IDs must be unique");
+  return { outputDir, text, seed, ids };
+}
+
 export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, fetch: Fetch = globalThis.fetch): Promise<number> {
   const operation = args.shift();
   const tts = new TtsClient(engine(config, "tts"), fetch);
@@ -184,6 +235,45 @@ export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, 
     }
     return 0;
   }
+  if (operation === "audition") {
+    const options = parseAudition(args);
+    const sanitized = sanitizeForTts(options.text);
+    if (!sanitized.text.trim()) throw new TypeError("profiles audition: text has no speakable content");
+    const candidates = await Promise.all(options.ids.map(async (id) => ({
+      id,
+      profile: reproducibilityRecord(await tts.getVoice(id)),
+    })));
+    const outputs = candidates.map(({ id }) => join(options.outputDir, `${id}.wav`));
+    const manifestPath = join(options.outputDir, "manifest.json");
+    for (const path of [...outputs, manifestPath]) {
+      if (await Bun.file(path).exists()) throw new TypeError(`profiles audition: output already exists: ${path}`);
+    }
+    await mkdir(options.outputDir, { recursive: true });
+    const results: Array<{ id: string; wav_sha256: string; profile: ReturnType<typeof reproducibilityRecord> }> = [];
+    for (const [index, candidate] of candidates.entries()) {
+      const wav = await synthesizeLong(tts, sanitized.text, {
+        chunking: config.chunking,
+        ttsDefaults: config.ttsDefaults,
+        voice: candidate.id,
+        seed: options.seed,
+        prosodyPrompt: true,
+        continuationId: crypto.randomUUID(),
+      });
+      const wavSha256 = createHash("sha256").update(wav).digest("hex");
+      await writeBytes(outputs[index] as string, wav);
+      results.push({ id: candidate.id, wav_sha256: wavSha256, profile: candidate.profile });
+      io.out(JSON.stringify({ id: candidate.id, output: outputs[index], wav_sha256: wavSha256 }));
+    }
+    const manifest = {
+      text: sanitized.text,
+      seed: options.seed,
+      tts: { cfg_value: config.ttsDefaults.cfgValue, timesteps: config.ttsDefaults.timesteps },
+      candidates: results,
+    };
+    await writeBytes(manifestPath, new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`));
+    io.out(JSON.stringify({ manifest: manifestPath }));
+    return 0;
+  }
   if (operation === "verify") {
     if (args.length !== 2) throw new TypeError("profiles verify: source ID and target ID are required");
     const source = reproducibilityRecord(await tts.getVoice(args[0] as string));
@@ -194,7 +284,7 @@ export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, 
     io.out(`verified ${args[0]} ${args[1]} ${source.audio_sha256}`);
     return 0;
   }
-  if (operation !== "create") throw new TypeError("profiles: expected list, create, batch, reproduce, verify, show, or rm");
+  if (operation !== "create") throw new TypeError("profiles: expected list, create, batch, audition, reproduce, verify, show, or rm");
   const id = args.shift();
   let description: string | undefined, anchorText: string | undefined, seed: number | undefined;
   let cfgValue: number | undefined, timesteps: number | undefined;

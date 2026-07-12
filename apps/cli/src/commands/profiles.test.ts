@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { writeWav } from "@voxstudio/audio";
 import { parseConfig } from "@voxstudio/config";
 import { parseProfileBatch, runProfiles } from "./profiles";
 
@@ -100,6 +101,43 @@ test("rolls back only profiles created by a failed batch", async () => {
     await expect(runProfiles(["batch", manifest, "--rollback-on-error"], parseConfig(), io, fetch))
       .rejects.toThrow("generation failed");
     expect(deleted).toEqual(["candidate-a"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("writes controlled audition WAVs and a manifest", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "vox-audition-"));
+  const outputDir = join(directory, "out");
+  const profile = (id: string) => ({
+    id, prompt_text: "锚点",
+    design_profile: {
+      description: "calm voice", seed: 42, cfg_value: 2, timesteps: 10, model: "test",
+      model_manifest_sha256: "c".repeat(64), audio_sha256: "a".repeat(64),
+    },
+  });
+  const requests: unknown[] = [];
+  const fetch = async (url: Request | URL | string, init?: RequestInit) => {
+    if (String(url).includes("/v1/voices/")) return Response.json(profile(String(url).split("/").at(-1) as string));
+    requests.push(JSON.parse(String(init?.body)));
+    return new Response(writeWav(new Float32Array(4_800).fill(0.1), 48_000).slice().buffer);
+  };
+  try {
+    const out: string[] = [];
+    await runProfiles([
+      "audition", outputDir, "--text", "固定评测文本。", "--seed", "99", "candidate-a", "candidate-b",
+    ], parseConfig(), { out: line => out.push(line), err: () => {} }, fetch);
+    expect(requests).toEqual([
+      expect.objectContaining({ input: "固定评测文本。", voice: "candidate-a", seed: 99 }),
+      expect.objectContaining({ input: "固定评测文本。", voice: "candidate-b", seed: 99 }),
+    ]);
+    expect(await Bun.file(join(outputDir, "candidate-a.wav")).exists()).toBe(true);
+    expect(await Bun.file(join(outputDir, "candidate-b.wav")).exists()).toBe(true);
+    const manifest = await Bun.file(join(outputDir, "manifest.json")).json() as { seed: number; candidates: Array<{ id: string; wav_sha256: string }> };
+    expect(manifest.seed).toBe(99);
+    expect(manifest.candidates.map(candidate => candidate.id)).toEqual(["candidate-a", "candidate-b"]);
+    expect(manifest.candidates.every(candidate => candidate.wav_sha256.length === 64)).toBe(true);
+    expect(out.at(-1)).toContain("manifest.json");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
