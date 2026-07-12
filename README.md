@@ -63,11 +63,15 @@ bun run build:cli
 ./apps/cli/dist/vox profiles create calm --description "calm clear female voice" --anchor-text "这是锚文本。" --seed 20260711 --cfg 2 --timesteps 10
 ./apps/cli/dist/vox profiles reproduce calm calm-copy
 ./apps/cli/dist/vox profiles verify calm calm-copy
+./apps/cli/dist/vox profiles batch candidates.jsonl --dry-run
+./apps/cli/dist/vox profiles batch candidates.jsonl
 ```
 
 Design profiles retain their description, anchor text, seed, CFG, timesteps, model identity,
 and generated WAV SHA-256. `profiles reproduce` recreates the profile from those saved settings;
 matching SHA-256 values verify byte-for-byte output on the same model runtime.
+`profiles batch` accepts a JSONL candidate manifest, validates all candidates before generation,
+and makes controlled design experiments repeatable.
 
 The build produces one standalone executable containing the Bun runtime and TypeScript
 dependencies. Windows writes `apps/cli/dist/vox.exe`. Playback and microphone recording

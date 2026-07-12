@@ -1,13 +1,15 @@
 import { TtsClient, type Fetch } from "@voxstudio/clients";
 import { engine } from "@voxstudio/config";
-import type { DesignProfile, Voice, VoxConfig } from "@voxstudio/contracts";
+import type { DesignProfile, DesignProfileRequest, Voice, VoxConfig } from "@voxstudio/contracts";
+import { readTextFile } from "@voxstudio/platform-bun";
 import type { CliIo } from "../io";
 
-export const profilesUsage = `usage: vox profiles {list,create,reproduce,verify,show,rm} ...
+export const profilesUsage = `usage: vox profiles {list,create,batch,reproduce,verify,show,rm} ...
 
 commands:
   list
   create ID --description TEXT --anchor-text TEXT --seed N [--cfg VALUE] [--timesteps N]
+  batch MANIFEST [--dry-run]
   reproduce SOURCE_ID NEW_ID
   verify SOURCE_ID TARGET_ID
   show ID
@@ -15,7 +17,11 @@ commands:
 
 create options:
   --cfg VALUE         classifier-free guidance value
-  --timesteps N       generation timesteps`;
+  --timesteps N       generation timesteps
+
+batch manifest:
+  JSONL: one candidate per line with id, description, anchor_text, seed,
+  and optional cfg_value and timesteps. Use --dry-run to validate without generation.`;
 
 type ProfileVoice = Voice & { design_profile: DesignProfile };
 
@@ -41,6 +47,64 @@ function reproducibilityRecord(voice: Voice) {
     model_manifest_sha256: profile.design_profile.model_manifest_sha256,
     audio_sha256: profile.design_profile.audio_sha256,
   };
+}
+
+const profileFields = new Set(["id", "description", "anchor_text", "seed", "cfg_value", "timesteps"]);
+const voiceId = /^[A-Za-z0-9._-]{1,64}$/;
+
+function parseBatchCandidate(value: unknown, location: string): DesignProfileRequest {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(`profiles batch: ${location} must be an object`);
+  }
+  const record = value as Record<string, unknown>;
+  for (const field of Object.keys(record)) {
+    if (!profileFields.has(field)) throw new TypeError(`profiles batch: ${location} has unknown field ${field}`);
+  }
+  const { id, description, anchor_text: anchorText, seed, cfg_value: cfgValue, timesteps } = record;
+  if (typeof id !== "string" || !voiceId.test(id)) {
+    throw new TypeError(`profiles batch: ${location}.id must match [A-Za-z0-9._-]{1,64}`);
+  }
+  if (typeof description !== "string" || !description.trim()) {
+    throw new TypeError(`profiles batch: ${location}.description must be non-empty`);
+  }
+  if (typeof anchorText !== "string" || !anchorText.trim()) {
+    throw new TypeError(`profiles batch: ${location}.anchor_text must be non-empty`);
+  }
+  if (typeof seed !== "number" || !Number.isSafeInteger(seed)) {
+    throw new TypeError(`profiles batch: ${location}.seed must be a safe integer`);
+  }
+  if (cfgValue !== undefined && (typeof cfgValue !== "number" || !Number.isFinite(cfgValue))) {
+    throw new TypeError(`profiles batch: ${location}.cfg_value must be a number`);
+  }
+  if (timesteps !== undefined && (typeof timesteps !== "number" || !Number.isSafeInteger(timesteps))) {
+    throw new TypeError(`profiles batch: ${location}.timesteps must be a safe integer`);
+  }
+  return {
+    id, description, anchor_text: anchorText, seed,
+    ...(cfgValue === undefined ? {} : { cfg_value: cfgValue }),
+    ...(timesteps === undefined ? {} : { timesteps }),
+  };
+}
+
+export function parseProfileBatch(text: string): DesignProfileRequest[] {
+  const candidates: DesignProfileRequest[] = [];
+  const ids = new Set<string>();
+  for (const [index, line] of text.split(/\r?\n/).entries()) {
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    const location = `line ${index + 1}`;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      throw new TypeError(`profiles batch: ${location} is not valid JSON`);
+    }
+    const candidate = parseBatchCandidate(value, location);
+    if (ids.has(candidate.id)) throw new TypeError(`profiles batch: duplicate id ${candidate.id}`);
+    ids.add(candidate.id);
+    candidates.push(candidate);
+  }
+  if (!candidates.length) throw new TypeError("profiles batch: manifest contains no candidates");
+  return candidates;
 }
 
 export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, fetch: Fetch = globalThis.fetch): Promise<number> {
@@ -79,6 +143,20 @@ export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, 
     })));
     return 0;
   }
+  if (operation === "batch") {
+    const manifest = args.shift();
+    let dryRun = false;
+    for (const option of args) {
+      if (option !== "--dry-run") throw new TypeError(`profiles batch: unknown option ${option}`);
+      dryRun = true;
+    }
+    if (!manifest) throw new TypeError("profiles batch: manifest path is required");
+    const candidates = parseProfileBatch(await readTextFile(manifest));
+    for (const candidate of candidates) {
+      io.out(JSON.stringify(dryRun ? candidate : await tts.createDesignProfile(candidate)));
+    }
+    return 0;
+  }
   if (operation === "verify") {
     if (args.length !== 2) throw new TypeError("profiles verify: source ID and target ID are required");
     const source = reproducibilityRecord(await tts.getVoice(args[0] as string));
@@ -89,7 +167,7 @@ export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, 
     io.out(`verified ${args[0]} ${args[1]} ${source.audio_sha256}`);
     return 0;
   }
-  if (operation !== "create") throw new TypeError("profiles: expected list, create, reproduce, verify, show, or rm");
+  if (operation !== "create") throw new TypeError("profiles: expected list, create, batch, reproduce, verify, show, or rm");
   const id = args.shift();
   let description: string | undefined, anchorText: string | undefined, seed: number | undefined;
   let cfgValue: number | undefined, timesteps: number | undefined;

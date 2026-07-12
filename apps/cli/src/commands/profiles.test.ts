@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseConfig } from "@voxstudio/config";
-import { runProfiles } from "./profiles";
+import { parseProfileBatch, runProfiles } from "./profiles";
 
 test("creates a design profile", async () => {
   const out: string[] = [];
@@ -35,6 +38,43 @@ test("validates design generation parameters", async () => {
   await expect(runProfiles([
     "create", "bad", "--description", "voice", "--anchor-text", "锚点", "--seed", "1", "--timesteps", "1.5",
   ], parseConfig(), io)).rejects.toThrow("profiles: --timesteps must be a safe integer");
+});
+
+test("parses batch manifests before making requests", () => {
+  expect(parseProfileBatch([
+    "# fixed anchor text; vary one parameter at a time",
+    '{"id":"cfg-2","description":"calm voice","anchor_text":"锚点","seed":42,"cfg_value":2}',
+    '{"id":"cfg-3","description":"calm voice","anchor_text":"锚点","seed":42,"cfg_value":3,"timesteps":12}',
+  ].join("\n"))).toEqual([
+    { id: "cfg-2", description: "calm voice", anchor_text: "锚点", seed: 42, cfg_value: 2 },
+    { id: "cfg-3", description: "calm voice", anchor_text: "锚点", seed: 42, cfg_value: 3, timesteps: 12 },
+  ]);
+  expect(() => parseProfileBatch('{"id":"same","description":"voice","anchor_text":"锚","seed":1}\n{"id":"same","description":"voice","anchor_text":"锚","seed":2}'))
+    .toThrow("profiles batch: duplicate id same");
+});
+
+test("dry-runs and creates a validated profile batch", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "vox-profiles-"));
+  const manifest = join(directory, "candidates.jsonl");
+  await writeFile(manifest, '{"id":"candidate-a","description":"calm voice","anchor_text":"锚点","seed":42}\n');
+  try {
+    const dryOut: string[] = [];
+    const noFetch = async (): Promise<Response> => { throw new Error("must not request"); };
+    await runProfiles(["batch", manifest, "--dry-run"], parseConfig(), { out: line => dryOut.push(line), err: () => {} }, noFetch);
+    expect(dryOut).toEqual(['{"id":"candidate-a","description":"calm voice","anchor_text":"锚点","seed":42}']);
+
+    const created: unknown[] = [];
+    const fetch = async (_url: Request | URL | string, init?: RequestInit) => {
+      created.push(JSON.parse(String(init?.body)));
+      return Response.json({ id: "candidate-a" });
+    };
+    const out: string[] = [];
+    await runProfiles(["batch", manifest], parseConfig(), { out: line => out.push(line), err: () => {} }, fetch);
+    expect(created).toEqual([{ id: "candidate-a", description: "calm voice", anchor_text: "锚点", seed: 42 }]);
+    expect(out).toEqual(['{"id":"candidate-a"}']);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("reproduces a profile from its recorded generation settings", async () => {
