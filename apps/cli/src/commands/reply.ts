@@ -9,7 +9,8 @@ import type { CliIo } from "../io";
 export const replyUsage = `usage: vox reply (AUDIO | --record [SECONDS]) [--device NAME] [--language LANG]
                  [--system TEXT] [--max-tokens N] [--voice VOICE] [--play] [-o OUTPUT]
 
-Transcribe one audio file or microphone recording, generate one LLM reply, and synthesize the reply to WAV.`;
+Transcribe one audio file or microphone recording, generate one LLM reply, and synthesize the reply to WAV.
+--play streams the reply to ffplay while writing the WAV output.`;
 
 export interface ReplyPlatform {
   recordAudio(duration: number, device: string | undefined, status: (message: string) => void): Promise<string>;

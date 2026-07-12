@@ -1,16 +1,16 @@
 import { LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
 import { engine } from "@voxstudio/config";
 import type { ChatMessage, VoxConfig } from "@voxstudio/contracts";
-import { readWav } from "@voxstudio/audio";
-import { synthesizeLong } from "@voxstudio/orchestration";
-import { FfplaySink, readStdinText, writeBytes } from "@voxstudio/platform-bun";
+import { streamLong, synthesizeLong } from "@voxstudio/orchestration";
+import { FfplaySink, readStdinText, TeeSink, WavFileSink, writeBytes } from "@voxstudio/platform-bun";
 import { sanitizeForTts } from "@voxstudio/text";
 import type { CliIo } from "../io";
 
 export const chatUsage = `usage: vox chat [PROMPT | -] [--system TEXT] [--max-tokens N]
                 [--speak] [--play] [--voice VOICE] [-o OUTPUT]
 
-Read a prompt from the argument or standard input, then run one LLM turn.`;
+Read a prompt from the argument or standard input, then run one LLM turn.
+--play streams TTS audio to ffplay while also writing the WAV output.`;
 
 interface ChatArgs {
   prompt?: string;
@@ -95,22 +95,30 @@ async function completeChat(
     }
     const tts = new TtsClient(engine(config, "tts"), fetch);
     const voice = options.voice ?? config.ttsDefaults.voice;
-    const wav = await synthesizeLong(tts, sanitized.text, {
+    const synthesis = {
       chunking: config.chunking,
       ttsDefaults: config.ttsDefaults,
       voice,
       ...(voice === "clone" || voice === "design" ? {} : { prosodyPrompt: true }),
       continuationId: crypto.randomUUID(),
-    });
-    await writeBytes(options.output, wav);
-    io.err(`wrote ${options.output} (${(wav.byteLength / 1e6).toFixed(1)} MB)`);
+    };
     if (options.play) {
-      const player = new FfplaySink();
+      if (options.output === "-") throw new TypeError("chat: --play cannot write WAV to stdout");
+      const sink = new TeeSink(new FfplaySink(), new WavFileSink(options.output));
+      let bytes = 44;
       try {
-        await player.write(readWav(wav));
+        for await (const piece of streamLong(tts, sanitized.text, synthesis)) {
+          await sink.write(piece);
+          bytes += piece.samples.length * 2;
+        }
       } finally {
-        await player.close();
+        await sink.close();
       }
+      io.err(`wrote ${options.output} (${(bytes / 1e6).toFixed(1)} MB)`);
+    } else {
+      const wav = await synthesizeLong(tts, sanitized.text, synthesis);
+      await writeBytes(options.output, wav);
+      io.err(`wrote ${options.output} (${(wav.byteLength / 1e6).toFixed(1)} MB)`);
     }
   }
   return 0;
