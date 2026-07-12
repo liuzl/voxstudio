@@ -112,6 +112,10 @@ produces seams of wildly uneven length. The estimate comes from a per-script spe
 table measured against the engine, so the budget means the same thing in every language
 it speaks. See `docs/chunking.md`.
 
+The duplex conversation architecture, including CLI speaker-mode AEC, browser
+WebRTC/LiveKit transport, cancellation semantics, privacy boundaries, and
+quality gates, is specified in [docs/duplex-audio-architecture.md](./docs/duplex-audio-architecture.md).
+
 ## Model stack
 
 | Layer | Engine |
@@ -127,6 +131,10 @@ engines. Long-text synthesis streams, and named voices support file input, micro
 recording, automatic ASR, and transcript editing. Native CI builds and executes the CLI on
 macOS arm64, Linux x64, and Windows x64. Signed release artifacts, Web, MCP, desktop, persona
 rewriting, and a duplex conversation loop are not built yet.
+
+The duplex conversation loop is designed but not implemented. The first delivery is a
+headset-oriented CLI mode; native speaker-mode AEC and the Web Studio are separate measured
+delivery phases.
 
 ## Related
 
