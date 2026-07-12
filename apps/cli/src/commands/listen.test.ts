@@ -13,7 +13,7 @@ function frames(): AsyncIterable<{ samples: Float32Array; sampleRate: number; ti
 }
 
 function response(): Uint8Array {
-  return writeWav(new Float32Array(2_400).fill(0.1), 24_000);
+  return writeWav(new Float32Array(72_000).fill(0.1), 24_000);
 }
 
 describe("listen command", () => {
@@ -57,7 +57,7 @@ describe("listen command", () => {
 
     expect(output).toEqual(["transcript: 你好", "reply: 你好，欢迎使用语音对话。"]);
     expect(errors[0]).toContain("headset mode");
-    expect(played).toEqual([2_400]);
+    expect(played).toEqual([72_000]);
     expect(playerClosed).toBe(true);
     expect(captureClosed).toBe(true);
   });

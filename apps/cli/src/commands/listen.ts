@@ -153,9 +153,10 @@ export async function runListen(
           signal: turn.signal,
         })) {
           if (turn.signal.aborted) return;
-          if (!session.queueOutput(turn.id, { ...piece, timestampMs: Date.now() })) return;
-          const queued = session.output.shift();
-          if (queued) await player.write(queued.audio);
+          // `streamLong` yields synthesis pieces, not low-latency PCM frames. A
+          // single piece can exceed the session queue duration, so this direct
+          // headset path writes it to ffplay immediately instead of dropping it.
+          await player.write(piece);
         }
         if (!turn.signal.aborted) session.complete(turn.id);
       } finally {
