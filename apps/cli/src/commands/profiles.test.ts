@@ -77,6 +77,34 @@ test("dry-runs and creates a validated profile batch", async () => {
   }
 });
 
+test("rolls back only profiles created by a failed batch", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "vox-profiles-"));
+  const manifest = join(directory, "candidates.jsonl");
+  await writeFile(manifest, [
+    '{"id":"candidate-a","description":"calm voice","anchor_text":"锚点","seed":42}',
+    '{"id":"candidate-b","description":"calm voice","anchor_text":"锚点","seed":42}',
+  ].join("\n"));
+  const deleted: string[] = [];
+  let requests = 0;
+  const fetch = async (url: Request | URL | string, init?: RequestInit) => {
+    if (init?.method === "DELETE") {
+      deleted.push(String(url).split("/").at(-1) as string);
+      return Response.json({});
+    }
+    requests += 1;
+    if (requests === 1) return Response.json({ id: "candidate-a" });
+    throw new Error("generation failed");
+  };
+  try {
+    const io = { out: () => {}, err: () => {} };
+    await expect(runProfiles(["batch", manifest, "--rollback-on-error"], parseConfig(), io, fetch))
+      .rejects.toThrow("generation failed");
+    expect(deleted).toEqual(["candidate-a"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("reproduces a profile from its recorded generation settings", async () => {
   const fetch = async (url: Request | URL | string, init?: RequestInit) => {
     if (!init?.method) {

@@ -65,13 +65,15 @@ bun run build:cli
 ./apps/cli/dist/vox profiles verify calm calm-copy
 ./apps/cli/dist/vox profiles batch candidates.jsonl --dry-run
 ./apps/cli/dist/vox profiles batch candidates.jsonl
+./apps/cli/dist/vox profiles batch candidates.jsonl --rollback-on-error
 ```
 
 Design profiles retain their description, anchor text, seed, CFG, timesteps, model identity,
 and generated WAV SHA-256. `profiles reproduce` recreates the profile from those saved settings;
 matching SHA-256 values verify byte-for-byte output on the same model runtime.
 `profiles batch` accepts a JSONL candidate manifest, validates all candidates before generation,
-and makes controlled design experiments repeatable.
+and makes controlled design experiments repeatable. `--rollback-on-error` removes only profiles
+created by that invocation when a later candidate fails.
 
 The build produces one standalone executable containing the Bun runtime and TypeScript
 dependencies. Windows writes `apps/cli/dist/vox.exe`. Playback and microphone recording

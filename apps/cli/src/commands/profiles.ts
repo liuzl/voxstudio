@@ -9,7 +9,7 @@ export const profilesUsage = `usage: vox profiles {list,create,batch,reproduce,v
 commands:
   list
   create ID --description TEXT --anchor-text TEXT --seed N [--cfg VALUE] [--timesteps N]
-  batch MANIFEST [--dry-run]
+  batch MANIFEST [--dry-run] [--rollback-on-error]
   reproduce SOURCE_ID NEW_ID
   verify SOURCE_ID TARGET_ID
   show ID
@@ -21,7 +21,8 @@ create options:
 
 batch manifest:
   JSONL: one candidate per line with id, description, anchor_text, seed,
-  and optional cfg_value and timesteps. Use --dry-run to validate without generation.`;
+  and optional cfg_value and timesteps. Use --dry-run to validate without generation.
+  Use --rollback-on-error to delete candidates created before a request failure.`;
 
 type ProfileVoice = Voice & { design_profile: DesignProfile };
 
@@ -146,14 +147,40 @@ export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, 
   if (operation === "batch") {
     const manifest = args.shift();
     let dryRun = false;
+    let rollbackOnError = false;
     for (const option of args) {
-      if (option !== "--dry-run") throw new TypeError(`profiles batch: unknown option ${option}`);
-      dryRun = true;
+      if (option === "--dry-run") dryRun = true;
+      else if (option === "--rollback-on-error") rollbackOnError = true;
+      else throw new TypeError(`profiles batch: unknown option ${option}`);
     }
     if (!manifest) throw new TypeError("profiles batch: manifest path is required");
     const candidates = parseProfileBatch(await readTextFile(manifest));
-    for (const candidate of candidates) {
-      io.out(JSON.stringify(dryRun ? candidate : await tts.createDesignProfile(candidate)));
+    if (dryRun) {
+      for (const candidate of candidates) io.out(JSON.stringify(candidate));
+      return 0;
+    }
+    const created: string[] = [];
+    try {
+      for (const candidate of candidates) {
+        const profile = await tts.createDesignProfile(candidate);
+        created.push(profile.id);
+        io.out(JSON.stringify(profile));
+      }
+    } catch (error) {
+      if (rollbackOnError) {
+        const failedDeletes: string[] = [];
+        for (const id of [...created].reverse()) {
+          try {
+            await tts.deleteVoice(id);
+          } catch {
+            failedDeletes.push(id);
+          }
+        }
+        if (failedDeletes.length) {
+          throw new Error(`${error instanceof Error ? error.message : String(error)}; rollback failed for ${failedDeletes.join(", ")}`);
+        }
+      }
+      throw error;
     }
     return 0;
   }
