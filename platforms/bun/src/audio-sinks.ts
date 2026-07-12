@@ -85,7 +85,7 @@ export class FfplaySink implements PcmSink {
       this.process = process;
       this.stdin = process.stdin;
     }
-    this.stdin?.write(new Uint8Array(
+    await this.stdin?.write(new Uint8Array(
       audio.samples.buffer,
       audio.samples.byteOffset,
       audio.samples.byteLength,
