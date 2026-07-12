@@ -61,6 +61,7 @@ bun run build:cli
 ./apps/cli/dist/vox reply question.wav --language zh --system "请简短回答" --voice design-calm-clear -o answer.wav
 ./apps/cli/dist/vox reply question.wav --voice design-calm-clear --play -o answer.wav
 ./apps/cli/dist/vox reply --record 5 --language zh --voice design-calm-clear -o answer.wav
+./apps/cli/dist/vox listen --device "MacBook Pro microphone" --language zh --voice design-calm-clear
 ./apps/cli/dist/vox voices add alice --audio sample.wav --text "参考音的逐字稿"
 ./apps/cli/dist/vox voices add bob --audio sample.wav --language zh  # transcript via ASR
 ./apps/cli/dist/vox voices add carol --record 15 --language zh       # record, ASR, register
@@ -133,9 +134,10 @@ recording, automatic ASR, and transcript editing. Native CI builds and executes 
 macOS arm64, Linux x64, and Windows x64. Signed release artifacts, Web, MCP, desktop, persona
 rewriting, and a duplex conversation loop are not built yet.
 
-The duplex conversation session kernel is implemented and tested; the headset-oriented CLI mode
-is the next delivery. Native speaker-mode AEC and the Web Studio remain separate measured
-delivery phases.
+The duplex conversation session kernel and the headset-oriented `vox listen` command are
+implemented and tested with simulated audio. `listen` currently uses an energy-VAD fallback and
+has no speaker AEC, so use headphones or a headset. Native speaker-mode AEC, Silero ONNX VAD,
+and the Web Studio remain separate measured delivery phases.
 
 ## Related
 

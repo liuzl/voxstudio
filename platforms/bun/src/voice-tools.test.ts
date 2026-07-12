@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { hasAudibleAudio, recordCommand, splitCommand } from "./voice-tools";
+import { captureCommand, decodePcm16le, hasAudibleAudio, recordCommand, splitCommand } from "./voice-tools";
 
 describe("voice platform tools", () => {
   test.each([
@@ -17,6 +17,21 @@ describe("voice platform tools", () => {
 
   test("manual recording has no duration flag", () => {
     expect(recordCommand("voice.wav", 0, undefined, "Linux")).not.toContain("-t");
+  });
+
+  test("builds continuous mono PCM capture commands", () => {
+    expect(captureCommand(undefined, 16_000, "Darwin")).toEqual([
+      "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "avfoundation", "-i", ":default",
+      "-ac", "1", "-ar", "16000", "-f", "s16le", "pipe:1",
+    ]);
+    expect(captureCommand("Mic", 8_000, "Linux")).toContain("Mic");
+    expect(() => captureCommand(undefined, 0, "Darwin")).toThrow("sampleRate");
+  });
+
+  test("decodes signed little-endian PCM without alignment assumptions", () => {
+    const samples = decodePcm16le(new Uint8Array([0, 128, 0, 0, 255, 127]));
+    expect([...samples]).toEqual([-1, 0, 32_767 / 32_768]);
+    expect(() => decodePcm16le(new Uint8Array([0]))).toThrow("even byte");
   });
 
   test("detects audible recordings without treating silence as speech", () => {

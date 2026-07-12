@@ -6,11 +6,16 @@ import type { VoxConfig } from "@voxstudio/contracts";
 export { FfplaySink, TeeSink, WavFileSink, type PcmSink } from "./audio-sinks";
 export {
   editText,
+  captureCommand,
+  capturePcm,
+  decodePcm16le,
   recordAudio,
   recordCommand,
   removeRecording,
   splitCommand,
   type HostSystem,
+  type CapturedAudioFrame,
+  type PcmCapture,
 } from "./voice-tools";
 
 type Environment = Readonly<Record<string, string | undefined>>;

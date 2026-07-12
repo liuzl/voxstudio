@@ -62,7 +62,7 @@ export class WavFileSink implements PcmSink {
 
 export class FfplaySink implements PcmSink {
   private readonly player: string;
-  private process: { exited: Promise<number> } | null = null;
+  private process: ReturnType<typeof Bun.spawn> | null = null;
   private stdin: BunFileSink | null = null;
   private sampleRate: number | null = null;
 
@@ -99,6 +99,15 @@ export class FfplaySink implements PcmSink {
     this.process = null;
     this.stdin = null;
     if (exitCode !== 0) throw new TypeError(`${this.player} exited with status ${exitCode}`);
+  }
+
+  async abort(): Promise<void> {
+    if (this.process === null) return;
+    const process = this.process;
+    this.process = null;
+    this.stdin = null;
+    process.kill();
+    await process.exited;
   }
 }
 

@@ -16,15 +16,14 @@
         "vox-ts": "./src/main.ts",
       },
       "dependencies": {
+        "@voxstudio/audio": "workspace:*",
         "@voxstudio/clients": "workspace:*",
         "@voxstudio/config": "workspace:*",
         "@voxstudio/contracts": "workspace:*",
+        "@voxstudio/duplex-session": "workspace:*",
         "@voxstudio/orchestration": "workspace:*",
         "@voxstudio/platform-bun": "workspace:*",
         "@voxstudio/text": "workspace:*",
-      },
-      "devDependencies": {
-        "@voxstudio/audio": "workspace:*",
       },
     },
     "packages/audio": {
@@ -48,6 +47,10 @@
     },
     "packages/contracts": {
       "name": "@voxstudio/contracts",
+      "version": "0.1.0",
+    },
+    "packages/duplex-session": {
+      "name": "@voxstudio/duplex-session",
       "version": "0.1.0",
     },
     "packages/orchestration": {
@@ -87,6 +90,8 @@
     "@voxstudio/config": ["@voxstudio/config@workspace:packages/config"],
 
     "@voxstudio/contracts": ["@voxstudio/contracts@workspace:packages/contracts"],
+
+    "@voxstudio/duplex-session": ["@voxstudio/duplex-session@workspace:packages/duplex-session"],
 
     "@voxstudio/orchestration": ["@voxstudio/orchestration@workspace:packages/orchestration"],
 

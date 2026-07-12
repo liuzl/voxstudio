@@ -197,6 +197,19 @@ confusing than restarting the reply; it offers an explicit replay action. A
 future endpoint may resume only from a recorded, timestamped playback
 checkpoint after usability tests demonstrate that behavior is preferable.
 
+## VAD policy
+
+`EnergyVadSegmenter` is the tested fallback used by the first headset CLI loop.
+It exists for diagnostics, deterministic fixtures, and operation where a model
+artifact cannot be loaded; it is not the production-default quality target.
+
+The production VAD target is the 16 kHz ONNX Silero VAD model. It is chosen for
+low CPU latency, multilingual use, permissive licensing, and deployment through
+native ONNX Runtime or ONNX Runtime Web. The model artifact is fetched into a
+verified local cache rather than committed to this repository. A VAD adapter
+must expose the same frame/segment contract as `EnergyVadSegmenter`, so the CLI
+and Web do not take a dependency on a particular detector.
+
 ## Realtime gateway and events
 
 Existing OpenAI-compatible engine endpoints remain valid for one-shot work.
@@ -304,9 +317,10 @@ supported macOS hardware. Browser and CLI metrics are reported separately.
    strict turn transitions, per-turn `AbortSignal`, sequence-numbered events,
    and bounded playback queues, with focused unit tests. Endpoint fixtures,
    reconnect/idempotency transport tests, and timing schema integration remain.
-2. **CLI headset duplex**: add `vox listen` using continuous capture, VAD
-   segmentation, cancellation, bounded playback, and clear headset mode. This
-   establishes the user workflow without claiming speaker AEC.
+2. **CLI headset duplex**: `vox listen` now uses continuous FFmpeg PCM capture,
+   fallback VAD segmentation, cancellation, bounded playback, and explicit
+   headset mode. It has simulated end-to-end coverage; real-device validation
+   and the Silero ONNX adapter remain before declaring it supported.
 3. **Streaming adapters**: add abortable ASR/LLM/TTS adapters and sentence-level
    LLM-to-TTS pipelining. Keep one-shot engine fallbacks.
 4. **macOS audio helper**: build and test the `AVAudioEngine` endpoint with

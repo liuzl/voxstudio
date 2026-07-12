@@ -69,6 +69,31 @@ export interface DuplexSessionOptions {
   onEvent?: (event: DuplexEvent) => void;
 }
 
+export interface VadSegmenterOptions {
+  sampleRate: number;
+  threshold?: number;
+  minSpeechMs?: number;
+  silenceMs?: number;
+  maxSpeechMs?: number;
+  preRollMs?: number;
+}
+
+export interface SpeechStarted {
+  type: "speech.start";
+  timestampMs: number;
+  rms: number;
+}
+
+export interface SpeechEnded {
+  type: "speech.end";
+  timestampMs: number;
+  startedAtMs: number;
+  reason: "silence" | "max_duration";
+  samples: Float32Array;
+}
+
+export type VadSegmentEvent = SpeechStarted | SpeechEnded;
+
 function durationMs(audio: OutputAudioFrame): number {
   if (!Number.isFinite(audio.sampleRate) || audio.sampleRate <= 0) {
     throw new TypeError("audio sampleRate must be a positive finite number");
@@ -118,6 +143,132 @@ export class BoundedAudioQueue {
   clear(): void {
     this.values.length = 0;
     this.duration = 0;
+  }
+}
+
+function rms(samples: Float32Array): number {
+  if (samples.length === 0) return 0;
+  let sum = 0;
+  for (const sample of samples) sum += sample * sample;
+  return Math.sqrt(sum / samples.length);
+}
+
+function joinSamples(parts: Float32Array[]): Float32Array {
+  const length = parts.reduce((total, part) => total + part.length, 0);
+  const output = new Float32Array(length);
+  let offset = 0;
+  for (const part of parts) {
+    output.set(part, offset);
+    offset += part.length;
+  }
+  return output;
+}
+
+export class EnergyVadSegmenter {
+  private readonly sampleRate: number;
+  private readonly threshold: number;
+  private readonly minSpeechSamples: number;
+  private readonly silenceSamples: number;
+  private readonly maxSpeechSamples: number;
+  private readonly preRollSamples: number;
+  private readonly preRoll: Float32Array[] = [];
+  private readonly speech: Float32Array[] = [];
+  private speaking = false;
+  private speechSamples = 0;
+  private voicedSamples = 0;
+  private silenceSamplesSeen = 0;
+  private startedAtMs = 0;
+
+  constructor(options: VadSegmenterOptions) {
+    if (!Number.isFinite(options.sampleRate) || options.sampleRate <= 0) {
+      throw new TypeError("VAD sampleRate must be a positive finite number");
+    }
+    const threshold = options.threshold ?? 0.01;
+    if (!Number.isFinite(threshold) || threshold < 0) {
+      throw new TypeError("VAD threshold must be a non-negative finite number");
+    }
+    const milliseconds = (value: number | undefined, fallback: number, name: string): number => {
+      const resolved = value ?? fallback;
+      if (!Number.isFinite(resolved) || resolved < 0) throw new TypeError(`VAD ${name} must be a non-negative finite number`);
+      return Math.round(options.sampleRate * resolved / 1_000);
+    };
+    this.sampleRate = options.sampleRate;
+    this.threshold = threshold;
+    this.minSpeechSamples = milliseconds(options.minSpeechMs, 250, "minSpeechMs");
+    this.silenceSamples = milliseconds(options.silenceMs, 650, "silenceMs");
+    this.maxSpeechSamples = milliseconds(options.maxSpeechMs, 15_000, "maxSpeechMs");
+    this.preRollSamples = milliseconds(options.preRollMs, 250, "preRollMs");
+    if (this.maxSpeechSamples === 0) throw new TypeError("VAD maxSpeechMs must be greater than zero");
+  }
+
+  push(samples: Float32Array, timestampMs: number): VadSegmentEvent[] {
+    if (samples.length === 0) return [];
+    const level = rms(samples);
+    const voiced = level >= this.threshold;
+    if (!this.speaking) {
+      this.pushPreRoll(samples);
+      if (!voiced) return [];
+      this.speaking = true;
+      this.startedAtMs = timestampMs;
+      this.speech.push(...this.preRoll);
+      this.speechSamples = this.preRoll.reduce((total, frame) => total + frame.length, 0);
+      this.voicedSamples = 0;
+      this.silenceSamplesSeen = 0;
+      this.preRoll.length = 0;
+      return [
+        { type: "speech.start", timestampMs, rms: level },
+        ...this.append(samples, timestampMs, true),
+      ];
+    }
+    return this.append(samples, timestampMs, voiced);
+  }
+
+  reset(): void {
+    this.preRoll.length = 0;
+    this.speech.length = 0;
+    this.speaking = false;
+    this.speechSamples = 0;
+    this.voicedSamples = 0;
+    this.silenceSamplesSeen = 0;
+    this.startedAtMs = 0;
+  }
+
+  private append(samples: Float32Array, timestampMs: number, voiced: boolean): VadSegmentEvent[] {
+    this.speech.push(samples);
+    this.speechSamples += samples.length;
+    if (voiced) {
+      this.voicedSamples += samples.length;
+      this.silenceSamplesSeen = 0;
+    } else {
+      this.silenceSamplesSeen += samples.length;
+    }
+    const events: VadSegmentEvent[] = [];
+    const reason = this.speechSamples >= this.maxSpeechSamples
+      ? "max_duration"
+      : this.silenceSamplesSeen >= this.silenceSamples ? "silence" : undefined;
+    if (!reason) return events;
+    if (this.voicedSamples >= this.minSpeechSamples) {
+      events.push({
+        type: "speech.end",
+        timestampMs,
+        startedAtMs: this.startedAtMs,
+        reason,
+        samples: joinSamples(this.speech),
+      });
+    }
+    this.reset();
+    return events;
+  }
+
+  private pushPreRoll(samples: Float32Array): void {
+    if (this.preRollSamples === 0) return;
+    this.preRoll.push(samples);
+    let total = this.preRoll.reduce((sum, frame) => sum + frame.length, 0);
+    while (total > this.preRollSamples) {
+      const first = this.preRoll.shift();
+      if (!first) break;
+      total -= first.length;
+    }
   }
 }
 

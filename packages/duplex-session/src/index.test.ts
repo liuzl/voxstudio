@@ -3,6 +3,7 @@ import {
   BoundedAudioQueue,
   DuplexSession,
   type DuplexEvent,
+  EnergyVadSegmenter,
   type OutputAudioFrame,
 } from "./index";
 
@@ -25,6 +26,39 @@ describe("bounded audio queue", () => {
     expect(() => new BoundedAudioQueue(0)).toThrow("maxQueuedAudioMs");
     const queue = new BoundedAudioQueue(100);
     expect(() => queue.push({ turnId: "turn", audio: { ...audio(10), sampleRate: 0 } })).toThrow("sampleRate");
+  });
+});
+
+describe("energy VAD segmentation", () => {
+  test("keeps pre-roll, ends after silence, and bounds short noise", () => {
+    const vad = new EnergyVadSegmenter({
+      sampleRate: 1_000, threshold: 0.1, preRollMs: 20, minSpeechMs: 20, silenceMs: 30, maxSpeechMs: 200,
+    });
+    expect(vad.push(new Float32Array(20), 0)).toEqual([]);
+    const started = vad.push(new Float32Array(20).fill(0.2), 20);
+    expect(started).toEqual([{ type: "speech.start", timestampMs: 20, rms: expect.any(Number) }]);
+    expect(vad.push(new Float32Array(20).fill(0.2), 40)).toEqual([]);
+    expect(vad.push(new Float32Array(20), 60)).toEqual([]);
+    const ended = vad.push(new Float32Array(20), 80);
+    expect(ended).toHaveLength(1);
+    const event = ended[0];
+    expect(event).toMatchObject({ type: "speech.end", reason: "silence", startedAtMs: 20 });
+    if (event?.type === "speech.end") expect(event.samples.length).toBe(100);
+  });
+
+  test("ends a continuous utterance at its maximum duration", () => {
+    const vad = new EnergyVadSegmenter({
+      sampleRate: 1_000, threshold: 0.1, minSpeechMs: 10, silenceMs: 100, maxSpeechMs: 40, preRollMs: 0,
+    });
+    vad.push(new Float32Array(20).fill(0.2), 0);
+    const ended = vad.push(new Float32Array(20).fill(0.2), 20);
+    expect(ended).toMatchObject([expect.objectContaining({ type: "speech.end", reason: "max_duration" })]);
+  });
+
+  test("validates its configuration", () => {
+    expect(() => new EnergyVadSegmenter({ sampleRate: 0 })).toThrow("sampleRate");
+    expect(() => new EnergyVadSegmenter({ sampleRate: 1_000, threshold: -1 })).toThrow("threshold");
+    expect(() => new EnergyVadSegmenter({ sampleRate: 1_000, maxSpeechMs: 0 })).toThrow("maxSpeechMs");
   });
 });
 

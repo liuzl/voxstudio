@@ -8,14 +8,14 @@
     "build": "bun build --compile ./src/main.ts --outfile ./dist/vox"
   },
   "dependencies": {
+    "@voxstudio/audio": "workspace:*",
     "@voxstudio/clients": "workspace:*",
     "@voxstudio/config": "workspace:*",
     "@voxstudio/contracts": "workspace:*",
+    "@voxstudio/duplex-session": "workspace:*",
     "@voxstudio/orchestration": "workspace:*",
     "@voxstudio/platform-bun": "workspace:*",
     "@voxstudio/text": "workspace:*"
   },
-  "devDependencies": {
-    "@voxstudio/audio": "workspace:*"
-  }
+  "devDependencies": {}
 }
