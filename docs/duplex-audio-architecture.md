@@ -1,6 +1,6 @@
 # Duplex audio architecture
 
-Status: Proposed, 2026-07-12
+Status: Accepted, 2026-07-12. Phase 1 session kernel implemented.
 
 ## Scope
 
@@ -300,9 +300,10 @@ supported macOS hardware. Browser and CLI metrics are reported separately.
 
 ## Delivery phases
 
-1. **Session contract and test harness**: add `packages/duplex-session`, event
-   fixtures, fake endpoint, cancellation/reconnect/idempotency tests, timing
-   schema, and bounded-queue tests. No device behavior changes.
+1. **Session contract and test harness**: `packages/duplex-session` now owns
+   strict turn transitions, per-turn `AbortSignal`, sequence-numbered events,
+   and bounded playback queues, with focused unit tests. Endpoint fixtures,
+   reconnect/idempotency transport tests, and timing schema integration remain.
 2. **CLI headset duplex**: add `vox listen` using continuous capture, VAD
    segmentation, cancellation, bounded playback, and clear headset mode. This
    establishes the user workflow without claiming speaker AEC.

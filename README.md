@@ -31,6 +31,7 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | `engines/parakeet/` | Deployment and integration notes for the default real-time ASR engine |
 | `engines/moss-transcribe/` | Evaluation notes for long-form ASR and speaker diarization |
 | `packages/` | Shared TypeScript contracts, clients, configuration, text, audio, and orchestration |
+| `packages/duplex-session/` | Platform-neutral realtime turn state, cancellation, events, and bounded playback queue |
 | `platforms/bun/` | Filesystem, process, recording, and playback adapters for Bun apps |
 | `core/` | Transitional Python parity implementation and research-facing core |
 | `apps/cli/` | Compiled TypeScript `vox` CLI plus the transitional Python fallback |
@@ -132,8 +133,8 @@ recording, automatic ASR, and transcript editing. Native CI builds and executes 
 macOS arm64, Linux x64, and Windows x64. Signed release artifacts, Web, MCP, desktop, persona
 rewriting, and a duplex conversation loop are not built yet.
 
-The duplex conversation loop is designed but not implemented. The first delivery is a
-headset-oriented CLI mode; native speaker-mode AEC and the Web Studio are separate measured
+The duplex conversation session kernel is implemented and tested; the headset-oriented CLI mode
+is the next delivery. Native speaker-mode AEC and the Web Studio remain separate measured
 delivery phases.
 
 ## Related
