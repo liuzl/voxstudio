@@ -321,8 +321,10 @@ supported macOS hardware. Browser and CLI metrics are reported separately.
    fallback VAD segmentation, cancellation, bounded playback, and explicit
    headset mode. It has simulated end-to-end coverage; real-device validation
    and the Silero ONNX adapter remain before declaring it supported.
-3. **Streaming adapters**: add abortable ASR/LLM/TTS adapters and sentence-level
-   LLM-to-TTS pipelining. Keep one-shot engine fallbacks.
+3. **Streaming adapters**: batch ASR, LLM, and TTS clients now accept the
+   current turn's `AbortSignal`, and `streamLong` stops requesting chunks after
+   cancellation. Add token-streaming LLM/ASR/TTS adapters and sentence-level
+   LLM-to-TTS pipelining while keeping one-shot fallbacks.
 4. **macOS audio helper**: build and test the `AVAudioEngine` endpoint with
    Voice Processing, route changes, capability detection, and speaker-mode AEC.
 5. **Web Studio realtime**: add a browser endpoint and LiveKit room/gateway,

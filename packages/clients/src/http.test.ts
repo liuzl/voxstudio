@@ -96,6 +96,17 @@ describe("engine HTTP clients", () => {
     expect(new Uint8Array(await client.speech(input))).toEqual(new Uint8Array([1, 2, 3]));
   });
 
+  test("forwards caller cancellation signals to realtime-capable requests", async () => {
+    const controller = new AbortController();
+    const fetch: Fetch = async (_input, init) => {
+      expect(init?.signal).toBe(controller.signal);
+      return json({ choices: [{ message: { content: "reply" } }] });
+    };
+    const client = new LlmClient({ baseUrl: "https://voice.example", model: "gemma" }, fetch);
+    await expect(client.chat([{ role: "user", content: "hello" }], undefined, undefined, controller.signal))
+      .resolves.toBe("reply");
+  });
+
   test("non-success responses throw normalized errors", async () => {
     const fetch: Fetch = async () => json({
       detail: { error: { code: "busy", message: "Try later", type: "capacity" } },

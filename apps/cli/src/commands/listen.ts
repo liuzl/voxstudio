@@ -114,7 +114,8 @@ export async function runListen(
       if (!session.startThinking(turn.id)) return;
       const wav = writeWav(samples, 16_000);
       const transcription = await asr.transcribe(
-        new File([new Uint8Array(wav)], "utterance.wav", { type: "audio/wav" }), "utterance.wav", options.language,
+        new File([new Uint8Array(wav)], "utterance.wav", { type: "audio/wav" }),
+        "utterance.wav", options.language, {}, turn.signal,
       );
       const transcript = transcription.text.trim();
       if (turn.signal.aborted) return;
@@ -127,7 +128,7 @@ export async function runListen(
       const reply = await llm.chat([
         ...(options.system === undefined ? [] : [{ role: "system" as const, content: options.system }]),
         { role: "user", content: transcript },
-      ], options.maxTokens);
+      ], options.maxTokens, undefined, turn.signal);
       if (turn.signal.aborted) return;
       if (!reply.trim()) {
         io.err("listen: model returned empty content");
@@ -149,6 +150,7 @@ export async function runListen(
           voice,
           ...(voice === "clone" || voice === "design" ? {} : { prosodyPrompt: true }),
           continuationId: crypto.randomUUID(),
+          signal: turn.signal,
         })) {
           if (turn.signal.aborted) return;
           if (!session.queueOutput(turn.id, { ...piece, timestampMs: Date.now() })) return;

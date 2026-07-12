@@ -17,6 +17,7 @@ export class AsrClient extends EngineClient {
     filename: string,
     language = "auto",
     options: TranscriptionOptions = {},
+    signal?: AbortSignal,
   ): Promise<Transcription> {
     const form = new FormData();
     form.set("model", this.config.model);
@@ -29,6 +30,7 @@ export class AsrClient extends EngineClient {
     const response = await this.request("/v1/audio/transcriptions", {
       method: "POST",
       body: form,
+      ...(signal === undefined ? {} : { signal }),
     });
     const payload: unknown = await response.json();
     const raw = typeof payload === "object" && payload !== null && "text" in payload

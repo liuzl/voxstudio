@@ -14,7 +14,7 @@ import type {
 import { chunkText } from "@voxstudio/text";
 
 export interface SpeechEngine {
-  speech(input: SpeechInput): Promise<ArrayBuffer | Uint8Array>;
+  speech(input: SpeechInput, signal?: AbortSignal): Promise<ArrayBuffer | Uint8Array>;
 }
 
 export type OnChunk = (
@@ -34,6 +34,7 @@ export interface SynthesisOptions {
   prosodyPrompt?: boolean;
   continuationId?: string;
   onChunk?: OnChunk;
+  signal?: AbortSignal;
 }
 
 function speechInput(text: string, options: SynthesisOptions, end: boolean): SpeechInput {
@@ -71,9 +72,14 @@ export async function* streamLong(
   let sampleRate: number | null = null;
 
   for (let index = 0; index < chunks.length; index += 1) {
+    options.signal?.throwIfAborted();
     const chunk = chunks[index] as string;
     await options.onChunk?.(index, chunks.length, chunk);
-    const decoded = readWav(await tts.speech(speechInput(chunk, options, index === chunks.length - 1)));
+    options.signal?.throwIfAborted();
+    const decoded = readWav(await tts.speech(
+      speechInput(chunk, options, index === chunks.length - 1), options.signal,
+    ));
+    options.signal?.throwIfAborted();
     if (sampleRate !== null && decoded.sampleRate !== sampleRate) {
       throw new TypeError(`chunks disagree on sample rate: ${sampleRate}, ${decoded.sampleRate}`);
     }

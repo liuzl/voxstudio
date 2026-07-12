@@ -52,9 +52,13 @@ class FakeTts implements SpeechEngine {
   }
 }
 
-async function collect(tts: SpeechEngine, text = fixture.text): Promise<Float32Array[]> {
+async function collect(
+  tts: SpeechEngine,
+  text = fixture.text,
+  synthesis: SynthesisOptions = options,
+): Promise<Float32Array[]> {
   const pieces: Float32Array[] = [];
-  for await (const piece of streamLong(tts, text, options)) pieces.push(piece.samples);
+  for await (const piece of streamLong(tts, text, synthesis)) pieces.push(piece.samples);
   return pieces;
 }
 
@@ -122,5 +126,20 @@ describe("long-text orchestration", () => {
       speech: async () => response(call++ === 0 ? 8_000 : 16_000),
     };
     await expect(collect(changing, "甲。乙。")).rejects.toThrow("sample rate");
+  });
+
+  test("does not request another TTS chunk after cancellation", async () => {
+    const controller = new AbortController();
+    const calls: SpeechInput[] = [];
+    const engine: SpeechEngine = {
+      speech: async input => {
+        calls.push(input);
+        controller.abort("barge_in");
+        return response();
+      },
+    };
+    await expect(collect(engine, "甲。乙。", { ...options, signal: controller.signal }))
+      .rejects.toThrow("barge_in");
+    expect(calls).toHaveLength(1);
   });
 });

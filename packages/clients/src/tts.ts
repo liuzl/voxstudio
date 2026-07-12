@@ -19,12 +19,13 @@ export class TtsClient extends EngineClient {
     super(config, fetch);
   }
 
-  async speech(input: SpeechInput): Promise<ArrayBuffer> {
+  async speech(input: SpeechInput, signal?: AbortSignal): Promise<ArrayBuffer> {
     const body: SpeechRequest = { ...input, model: this.config.model };
     const response = await this.request("/v1/audio/speech", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      ...(signal === undefined ? {} : { signal }),
     });
     return response.arrayBuffer();
   }

@@ -11,7 +11,12 @@ export class LlmClient extends EngineClient {
     super(config, fetch);
   }
 
-  async chat(messages: ChatMessage[], maxTokens?: number, temperature?: number): Promise<string> {
+  async chat(
+    messages: ChatMessage[],
+    maxTokens?: number,
+    temperature?: number,
+    signal?: AbortSignal,
+  ): Promise<string> {
     const body: ChatCompletionRequest = {
       model: this.config.model,
       messages,
@@ -22,6 +27,7 @@ export class LlmClient extends EngineClient {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      ...(signal === undefined ? {} : { signal }),
     });
     return extractChatContent(await response.json());
   }
