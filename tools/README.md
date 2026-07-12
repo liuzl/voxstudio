@@ -9,6 +9,7 @@ re-derived rather than trusted.
 | `measure_speech_rates.py` | `voxcore.text._CPS`, the per-script chars/sec table | you change the default reference voice, or the TTS model |
 | `measure_timbre_drift.py` | `chunking.max_seconds` — how fast the voice drifts within one generation | same |
 | `probe_spelled_out.py` | nothing — it documents a rule deliberately left unimplemented | same, if you want to re-check that decision |
+| `benchmark_longform_asr.py` | private long-form ASR quality/performance report | before promoting or changing MOSS |
 
 All three read `voxstudio.yaml` like the CLI does, and all three send their requests
 serially: the engine's peak VRAM grows with the length of a single generation, so
@@ -30,6 +31,39 @@ CUDA_VISIBLE_DEVICES= uv run --with speechbrain --with torch --with torchaudio \
   python tools/measure_timbre_drift.py --reference ref.wav --voice alice
 uv run python tools/measure_timbre_drift.py --out drift.jsonl --report-only  # re-analyse
 ```
+
+## Long-form ASR benchmark
+
+`benchmark_longform_asr.py` posts every fixture to a live OpenAI-compatible MOSS endpoint
+with `response_format=verbose_json`. It records end-to-end wall time, RTF, normalized CER,
+predicted speaker/segment counts, and—when reference segments have the same cardinality—the
+ordinal timestamp-boundary MAE. The latter is deliberately not reported across different
+segmentations, where it would be misleading.
+
+Keep the manifest, audio, reference transcripts, and report outside this public repository.
+The manifest is JSONL; audio paths are relative to the manifest:
+
+```json
+{"id":"meeting-02","audio":"audio/meeting-02.m4a","reference_text":"人工核对全文","reference_segments":[{"start":0.3,"end":2.1,"speaker":"A","text":"人工核对片段"}]}
+```
+
+Run it serially against a protected endpoint:
+
+```bash
+uv run python tools/benchmark_longform_asr.py \
+  /private/benchmark/manifest.jsonl \
+  --base-url http://127.0.0.1:18087 \
+  --out /private/benchmark/moss-q5k-report.json
+```
+
+Use `--dry-run` to validate the manifest and FFprobe duration discovery without sending
+audio. The output contains fixture ids and metrics but never copies media or transcripts;
+still treat it as private because ids and quality data can be sensitive.
+
+The report's `summary` aggregates CER, RTF, timestamp-boundary MAE, and speaker-count
+delta as mean/median/p95 where the applicable reference data exists. Compare like with like:
+the same private manifest, token budget, endpoint, and cold/warm policy must be used for
+every quantization or backend under comparison.
 
 Its `whole` arm — one unchunked generation of the whole passage — used to 500 partway
 through its repeats, because one long generation raised the engine's peak VRAM permanently
