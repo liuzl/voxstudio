@@ -51,3 +51,52 @@ test("runs one ASR to LLM to TTS voice reply", async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("records microphone input and removes it after a successful reply", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "vox-reply-record-"));
+  const recording = join(directory, "recording.wav");
+  const outputPath = join(directory, "answer.wav");
+  await writeFile(recording, writeWav(new Float32Array(4_800).fill(0.1), 48_000));
+  const fetch: Fetch = async (url) => {
+    if (String(url).endsWith("/v1/audio/transcriptions")) return Response.json({ text: "你好" });
+    if (String(url).endsWith("/v1/chat/completions")) {
+      return Response.json({ choices: [{ message: { content: "你好！" } }] });
+    }
+    return new Response(writeWav(new Float32Array(4_800).fill(0.1), 48_000).slice().buffer);
+  };
+  const calls: string[] = [];
+  const platform = {
+    recordAudio: async (duration: number, device: string | undefined) => {
+      calls.push(`record ${duration} ${device}`);
+      return recording;
+    },
+    removeRecording: async (path: string) => { calls.push(`remove ${path}`); },
+  };
+  try {
+    expect(await runReply(["--record", "5", "--device", "Built-in Mic", "-o", outputPath],
+      parseConfig(), { out: () => {}, err: () => {} }, fetch, platform)).toBe(0);
+    expect(calls).toEqual([`record 5 Built-in Mic`, `remove ${recording}`]);
+    expect(readWav(await readFile(outputPath)).sampleRate).toBe(48_000);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("keeps a recording when the reply fails", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "vox-reply-failure-"));
+  const recording = join(directory, "recording.wav");
+  await writeFile(recording, writeWav(new Float32Array(4_800).fill(0.1), 48_000));
+  const platform = {
+    recordAudio: async () => recording,
+    removeRecording: async () => { throw new Error("must not remove"); },
+  };
+  const err: string[] = [];
+  const fetch: Fetch = async () => Response.json({ text: "" });
+  try {
+    await expect(runReply(["--record"], parseConfig(), { out: () => {}, err: line => err.push(line) }, fetch, platform))
+      .rejects.toThrow("ASR returned empty text");
+    expect(err).toEqual([`recording kept at ${recording}`]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
