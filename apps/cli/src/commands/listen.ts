@@ -9,10 +9,11 @@ import { sanitizeForTts } from "@voxstudio/text";
 import type { CliIo } from "../io";
 
 export const listenUsage = `usage: vox listen [--device NAME] [--language LANG] [--system TEXT] [--max-tokens N]
-                 [--voice VOICE] [--threshold N] [--silence-ms N] [--min-speech-ms N]
+                 [--voice VOICE] [--barge-in] [--threshold N] [--silence-ms N] [--min-speech-ms N]
 
-Run a continuous headset-oriented voice conversation. Press Ctrl-C to stop.
-This mode has no speaker echo cancellation; use headphones or a headset.`;
+Run a continuous voice conversation. Press Ctrl-C to stop.
+Without --barge-in, microphone input is suppressed while the agent speaks so external speakers
+cannot interrupt playback. Use --barge-in only with headphones or a headset; speaker AEC is not built yet.`;
 
 interface ListenOptions {
   device?: string;
@@ -20,6 +21,7 @@ interface ListenOptions {
   system?: string;
   maxTokens?: number;
   voice?: string;
+  bargeIn: boolean;
   threshold: number;
   silenceMs: number;
   minSpeechMs: number;
@@ -53,7 +55,7 @@ function numberOption(args: string[], index: number, option: string): number {
 
 function parse(args: string[]): ListenOptions {
   const options: ListenOptions = {
-    language: "auto", threshold: 0.01, silenceMs: 650, minSpeechMs: 250,
+    language: "auto", bargeIn: false, threshold: 0.01, silenceMs: 650, minSpeechMs: 250,
   };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
@@ -61,6 +63,7 @@ function parse(args: string[]): ListenOptions {
     else if (arg === "--language") options.language = required(args, ++index, arg);
     else if (arg === "--system") options.system = required(args, ++index, arg);
     else if (arg === "--voice") options.voice = required(args, ++index, arg);
+    else if (arg === "--barge-in") options.bargeIn = true;
     else if (arg === "--max-tokens") {
       const value = numberOption(args, ++index, arg);
       if (!Number.isInteger(value) || value === 0) throw new TypeError("listen: --max-tokens must be a positive integer");
@@ -108,6 +111,7 @@ export async function runListen(
   let activeTurn: DuplexTurn | undefined;
   let activePlayer: ListenPlayer | undefined;
   let stopping = false;
+  let suppressInputUntil = 0;
 
   const processTurn = async (turn: DuplexTurn, samples: Float32Array): Promise<void> => {
     try {
@@ -137,6 +141,7 @@ export async function runListen(
       }
       io.out(`reply: ${reply}`);
       if (!session.startSpeaking(turn.id)) return;
+      if (!options.bargeIn) suppressInputUntil = Number.POSITIVE_INFINITY;
       const player = platform.createPlayer();
       activePlayer = player;
       const abort = () => { void stopPlayer(player); };
@@ -163,6 +168,7 @@ export async function runListen(
         turn.signal.removeEventListener("abort", abort);
         if (activePlayer === player) activePlayer = undefined;
         if (!turn.signal.aborted) await player.close();
+        if (!options.bargeIn) suppressInputUntil = Date.now() + 750;
       }
     } catch (error) {
       if (!turn.signal.aborted) {
@@ -192,6 +198,10 @@ export async function runListen(
   try {
     for await (const frame of capture.frames) {
       if (stopping) break;
+      if (!options.bargeIn && (session.state === "speaking" || frame.timestampMs < suppressInputUntil)) {
+        vad.reset();
+        continue;
+      }
       for (const event of vad.push(frame.samples, frame.timestampMs)) {
         if (event.type === "speech.start") {
           activeTurn = session.startUserSpeech();

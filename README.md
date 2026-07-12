@@ -137,8 +137,9 @@ rewriting, and a duplex conversation loop are not built yet.
 
 The duplex conversation session kernel and the headset-oriented `vox listen` command are
 implemented and tested with simulated audio. `listen` currently uses an energy-VAD fallback and
-has no speaker AEC, so use headphones or a headset. Native speaker-mode AEC, Silero ONNX VAD,
-and the Web Studio remain separate measured delivery phases.
+has no speaker AEC. It suppresses microphone input during playback by default; `--barge-in`
+requires headphones or a headset. Native speaker-mode AEC, Silero ONNX VAD, and the Web Studio
+remain separate measured delivery phases.
 
 ## Related
 

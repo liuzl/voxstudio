@@ -52,7 +52,7 @@ describe("listen command", () => {
     });
 
     await expect(runListen([
-      "--threshold", "0.1", "--min-speech-ms", "20", "--silence-ms", "20", "--voice", "demo",
+      "--barge-in", "--threshold", "0.1", "--min-speech-ms", "20", "--silence-ms", "20", "--voice", "demo",
     ], config, { out: line => output.push(line), err: line => errors.push(line) }, fetch, platform)).resolves.toBe(0);
 
     expect(output).toEqual(["transcript: 你好", "reply: 你好，欢迎使用语音对话。"]);

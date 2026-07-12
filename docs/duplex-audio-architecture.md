@@ -129,6 +129,11 @@ baseline. Speaker mode is enabled only after the native helper passes the AEC
 test suite. Bluetooth routes are supported as best effort because profile
 switching can alter sample rate, latency, and microphone quality.
 
+Until speaker-mode AEC is available, `vox listen` defaults to half-duplex
+playback: it suppresses microphone frames while agent speech is playing and for
+a short post-playback guard interval. `--barge-in` is an explicit headphone/
+headset-only opt-in; it is never silently enabled for an external-speaker route.
+
 ### Browser endpoint
 
 The Web app requests microphone access with `echoCancellation`,
