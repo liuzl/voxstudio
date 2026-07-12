@@ -43,8 +43,10 @@ final class AudioHost {
       guard let buffer = AVAudioPCMBuffer(pcmFormat: playbackFormat, frameCapacity: playbackFrames),
             let destination = buffer.floatChannelData?[0] else { return }
       buffer.frameLength = playbackFrames
-      chunk.withUnsafeBytes { source in
-        destination.update(from: source.baseAddress!.assumingMemoryBound(to: Float.self), count: Int(playbackFrames))
+      _ = chunk.withUnsafeBytes { source in
+        // Data slices are not guaranteed to be Float-aligned on Apple Silicon.
+        // Copy raw bytes rather than binding an unaligned pointer to Float.
+        memcpy(destination, source.baseAddress!, bytesPerBuffer)
       }
       player.scheduleBuffer(buffer)
     }
