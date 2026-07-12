@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "build:cli": "bun run --cwd apps/cli build",
+    "test:macos-audio": "./platforms/macos-audio/build.sh && bun run platforms/macos-audio/smoke-test.ts",
     "test:ts": "bun test packages platforms apps/cli/src",
     "typecheck": "tsc --noEmit"
   },

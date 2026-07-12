@@ -11,5 +11,13 @@ Build locally:
 ./platforms/macos-audio/build.sh
 ```
 
+Run the local hardware smoke test after changes to this host. It verifies voice
+processing startup, five seconds of playback, queue clearing, capture output,
+and clean shutdown. It needs microphone permission and may emit a short tone.
+
+```sh
+bun run test:macos-audio
+```
+
 The binary is intentionally not committed. Release packaging must bundle the
 matching signed helper beside the compiled CLI.
