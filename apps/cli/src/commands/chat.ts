@@ -1,13 +1,14 @@
 import { LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
 import { engine } from "@voxstudio/config";
 import type { ChatMessage, VoxConfig } from "@voxstudio/contracts";
+import { readWav } from "@voxstudio/audio";
 import { synthesizeLong } from "@voxstudio/orchestration";
-import { readStdinText, writeBytes } from "@voxstudio/platform-bun";
+import { FfplaySink, readStdinText, writeBytes } from "@voxstudio/platform-bun";
 import { sanitizeForTts } from "@voxstudio/text";
 import type { CliIo } from "../io";
 
 export const chatUsage = `usage: vox chat [PROMPT | -] [--system TEXT] [--max-tokens N]
-                [--speak] [--voice VOICE] [-o OUTPUT]
+                [--speak] [--play] [--voice VOICE] [-o OUTPUT]
 
 Read a prompt from the argument or standard input, then run one LLM turn.`;
 
@@ -16,6 +17,7 @@ interface ChatArgs {
   system?: string;
   maxTokens?: number;
   speak: boolean;
+  play: boolean;
   output: string;
   voice?: string;
 }
@@ -27,7 +29,7 @@ function required(args: string[], index: number, option: string): string {
 }
 
 function parse(args: string[]): ChatArgs {
-  const options: ChatArgs = { speak: false, output: "reply.wav" };
+  const options: ChatArgs = { speak: false, play: false, output: "reply.wav" };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
     if (arg === "--system") options.system = required(args, ++index, arg);
@@ -36,6 +38,7 @@ function parse(args: string[]): ChatArgs {
       if (!/^[+-]?\d+$/.test(raw)) throw new TypeError("chat: --max-tokens must be an integer");
       options.maxTokens = Number(raw);
     } else if (arg === "--speak") options.speak = true;
+    else if (arg === "--play") options.play = true;
     else if (arg === "-o" || arg === "--output") options.output = required(args, ++index, arg);
     else if (arg === "--voice") options.voice = required(args, ++index, arg);
     else if (arg.startsWith("-") && arg !== "-") throw new TypeError(`chat: unknown option ${arg}`);
@@ -101,6 +104,14 @@ async function completeChat(
     });
     await writeBytes(options.output, wav);
     io.err(`wrote ${options.output} (${(wav.byteLength / 1e6).toFixed(1)} MB)`);
+    if (options.play) {
+      const player = new FfplaySink();
+      try {
+        await player.write(readWav(wav));
+      } finally {
+        await player.close();
+      }
+    }
   }
   return 0;
 }

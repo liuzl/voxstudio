@@ -7,7 +7,7 @@ import { runChatPrompt } from "./chat";
 import type { CliIo } from "../io";
 
 export const replyUsage = `usage: vox reply (AUDIO | --record [SECONDS]) [--device NAME] [--language LANG]
-                 [--system TEXT] [--max-tokens N] [--voice VOICE] [-o OUTPUT]
+                 [--system TEXT] [--max-tokens N] [--voice VOICE] [--play] [-o OUTPUT]
 
 Transcribe one audio file or microphone recording, generate one LLM reply, and synthesize the reply to WAV.`;
 
@@ -41,6 +41,7 @@ function parse(args: string[]): { audio?: string; record?: number; device?: stri
         index += 1;
       } else record = 0;
     } else if (arg === "--device") device = required(args, ++index, arg);
+    else if (arg === "--play") chatArgs.push(arg);
     else if (["--system", "--max-tokens", "--voice", "-o", "--output"].includes(arg)) {
       chatArgs.push(arg, required(args, ++index, arg));
     } else if (arg.startsWith("-")) throw new TypeError(`reply: unknown option ${arg}`);
