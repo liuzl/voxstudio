@@ -113,6 +113,12 @@ export interface DesignProfileRequest {
   timesteps?: number;
 }
 
+export interface TtsRuntimeIdentity {
+  status: string;
+  model: string;
+  model_manifest_sha256: string | null;
+}
+
 export interface NormalizedEngineError {
   status: number;
   code: string;

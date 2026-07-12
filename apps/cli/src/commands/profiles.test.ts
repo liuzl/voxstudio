@@ -169,6 +169,45 @@ test("records a human selection bound to an audition manifest", async () => {
   }
 });
 
+test("audits a profile against the current TTS runtime", async () => {
+  const profile = {
+    id: "candidate", prompt_text: "锚点",
+    design_profile: {
+      description: "calm voice", seed: 42, cfg_value: 2, timesteps: 10, model: "voxcpm@test",
+      model_manifest_sha256: "c".repeat(64), audio_sha256: "a".repeat(64),
+    },
+  };
+  const fetch = async (url: Request | URL | string) => {
+    if (String(url).endsWith("/health")) {
+      return Response.json({ status: "ok", model: "voxcpm@test", model_manifest_sha256: "c".repeat(64) });
+    }
+    return Response.json(profile);
+  };
+  const out: string[] = [];
+  await runProfiles(["audit", "candidate"], parseConfig(), { out: line => out.push(line), err: () => {} }, fetch);
+  expect(JSON.parse(out[0] as string)).toEqual({
+    id: "candidate", status: "ok", model: "voxcpm@test", model_manifest_sha256: "c".repeat(64), audio_sha256: "a".repeat(64),
+  });
+});
+
+test("rejects a profile whose model manifest has drifted", async () => {
+  const fetch = async (url: Request | URL | string) => {
+    if (String(url).endsWith("/health")) {
+      return Response.json({ status: "ok", model: "voxcpm@test", model_manifest_sha256: "d".repeat(64) });
+    }
+    return Response.json({
+      id: "candidate", prompt_text: "锚点",
+      design_profile: {
+        description: "calm voice", seed: 42, cfg_value: 2, timesteps: 10, model: "voxcpm@test",
+        model_manifest_sha256: "c".repeat(64), audio_sha256: "a".repeat(64),
+      },
+    });
+  };
+  const io = { out: () => {}, err: () => {} };
+  await expect(runProfiles(["audit", "candidate"], parseConfig(), io, fetch))
+    .rejects.toThrow("profiles audit: model manifest differs from current TTS runtime");
+});
+
 test("reproduces a profile from its recorded generation settings", async () => {
   const fetch = async (url: Request | URL | string, init?: RequestInit) => {
     if (!init?.method) {

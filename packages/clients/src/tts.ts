@@ -1,9 +1,17 @@
-import type { DesignProfileRequest, EngineConfig, SpeechInput, SpeechRequest, Voice } from "@voxstudio/contracts";
+import type { DesignProfileRequest, EngineConfig, SpeechInput, SpeechRequest, TtsRuntimeIdentity, Voice } from "@voxstudio/contracts";
 import { EngineClient, type Fetch } from "./http";
 
 function isVoice(value: unknown): value is Voice {
   return typeof value === "object" && value !== null && "id" in value
     && typeof value.id === "string";
+}
+
+function isRuntimeIdentity(value: unknown): value is TtsRuntimeIdentity {
+  return typeof value === "object" && value !== null
+    && "status" in value && typeof value.status === "string"
+    && "model" in value && typeof value.model === "string"
+    && "model_manifest_sha256" in value
+    && (typeof value.model_manifest_sha256 === "string" || value.model_manifest_sha256 === null);
 }
 
 export class TtsClient extends EngineClient {
@@ -60,5 +68,12 @@ export class TtsClient extends EngineClient {
 
   async deleteVoice(id: string): Promise<void> {
     await this.request(`/v1/voices/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  async runtimeIdentity(): Promise<TtsRuntimeIdentity> {
+    const response = await this.request("/health");
+    const identity: unknown = await response.json();
+    if (!isRuntimeIdentity(identity)) throw new TypeError("TTS health response has no runtime identity");
+    return identity;
   }
 }

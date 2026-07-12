@@ -9,7 +9,7 @@ import { readTextFile, writeBytes } from "@voxstudio/platform-bun";
 import { sanitizeForTts } from "@voxstudio/text";
 import type { CliIo } from "../io";
 
-export const profilesUsage = `usage: vox profiles {list,create,batch,audition,select,reproduce,verify,show,rm} ...
+export const profilesUsage = `usage: vox profiles {list,create,batch,audition,select,audit,reproduce,verify,show,rm} ...
 
 commands:
   list
@@ -17,6 +17,7 @@ commands:
   batch MANIFEST [--dry-run] [--rollback-on-error]
   audition OUT_DIR --text TEXT --seed N ID [ID ...]
   select AUDITION_MANIFEST WINNER_ID [--note TEXT]
+  audit ID
   reproduce SOURCE_ID NEW_ID
   verify SOURCE_ID TARGET_ID
   show ID
@@ -36,7 +37,10 @@ audition:
   not already contain candidate WAVs or manifest.json.
 
 select:
-  Record a human-selected winner in selection.json beside an audition manifest.`;
+  Record a human-selected winner in selection.json beside an audition manifest.
+
+audit:
+  Check one design profile against the current TTS runtime model and manifest.`;
 
 type ProfileVoice = Voice & { design_profile: DesignProfile };
 
@@ -340,6 +344,18 @@ export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, 
     io.out(JSON.stringify({ selection: selectionPath, winner: winner.id }));
     return 0;
   }
+  if (operation === "audit") {
+    if (args.length !== 1) throw new TypeError("profiles audit: one profile ID is required");
+    const profile = reproducibilityRecord(await tts.getVoice(args[0] as string));
+    const runtime = await tts.runtimeIdentity();
+    if (profile.model !== runtime.model) throw new TypeError("profiles audit: model differs from current TTS runtime");
+    if (profile.model_manifest_sha256 !== runtime.model_manifest_sha256) {
+      throw new TypeError("profiles audit: model manifest differs from current TTS runtime");
+    }
+    io.out(JSON.stringify({ id: args[0], status: "ok", model: runtime.model,
+      model_manifest_sha256: runtime.model_manifest_sha256, audio_sha256: profile.audio_sha256 }));
+    return 0;
+  }
   if (operation === "verify") {
     if (args.length !== 2) throw new TypeError("profiles verify: source ID and target ID are required");
     const source = reproducibilityRecord(await tts.getVoice(args[0] as string));
@@ -350,7 +366,7 @@ export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, 
     io.out(`verified ${args[0]} ${args[1]} ${source.audio_sha256}`);
     return 0;
   }
-  if (operation !== "create") throw new TypeError("profiles: expected list, create, batch, audition, select, reproduce, verify, show, or rm");
+  if (operation !== "create") throw new TypeError("profiles: expected list, create, batch, audition, select, audit, reproduce, verify, show, or rm");
   const id = args.shift();
   let description: string | undefined, anchorText: string | undefined, seed: number | undefined;
   let cfgValue: number | undefined, timesteps: number | undefined;
