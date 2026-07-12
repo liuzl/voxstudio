@@ -20,7 +20,10 @@ final class AudioHost {
     // Voice processing must be configured before the engine starts.
     try engine.inputNode.setVoiceProcessingEnabled(true)
     engine.attach(player)
-    engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
+    // Do not route through the default stereo mixer. Voice Processing I/O
+    // aggregates capture and render devices and fails initialization when the
+    // render graph advertises a different channel count than the mono mic.
+    engine.connect(player, to: engine.outputNode, format: playbackFormat)
     let input = engine.inputNode
     converter = AVAudioConverter(from: input.inputFormat(forBus: 0), to: captureFormat)
     input.installTap(onBus: 0, bufferSize: 960, format: nil) { [weak self] buffer, _ in
