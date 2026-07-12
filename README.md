@@ -67,6 +67,7 @@ bun run build:cli
 ./apps/cli/dist/vox profiles batch candidates.jsonl
 ./apps/cli/dist/vox profiles batch candidates.jsonl --rollback-on-error
 ./apps/cli/dist/vox profiles audition auditions --text "固定评测文本。" --seed 20260712 candidate-a candidate-b
+./apps/cli/dist/vox profiles select auditions/manifest.json candidate-b --note "试听结果"
 ```
 
 Design profiles retain their description, anchor text, seed, CFG, timesteps, model identity,
@@ -76,7 +77,8 @@ matching SHA-256 values verify byte-for-byte output on the same model runtime.
 and makes controlled design experiments repeatable. `--rollback-on-error` removes only profiles
 created by that invocation when a later candidate fails.
 `profiles audition` renders a fixed-text, fixed-seed WAV for each candidate and writes an auditable
-`manifest.json` beside the WAV files for listening and human scoring.
+`manifest.json` beside the WAV files for listening and human scoring. `profiles select` writes a
+hash-bound `selection.json` without deleting any candidate.
 
 The build produces one standalone executable containing the Bun runtime and TypeScript
 dependencies. Windows writes `apps/cli/dist/vox.exe`. Playback and microphone recording

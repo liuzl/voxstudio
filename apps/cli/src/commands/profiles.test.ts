@@ -143,6 +143,32 @@ test("writes controlled audition WAVs and a manifest", async () => {
   }
 });
 
+test("records a human selection bound to an audition manifest", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "vox-selection-"));
+  const manifestPath = join(directory, "manifest.json");
+  await writeFile(manifestPath, JSON.stringify({
+    candidates: [
+      { id: "candidate-a", wav_sha256: "a".repeat(64) },
+      { id: "candidate-b", wav_sha256: "b".repeat(64) },
+    ],
+  }));
+  try {
+    const out: string[] = [];
+    await runProfiles([
+      "select", manifestPath, "candidate-b", "--note", "More natural",
+    ], parseConfig(), { out: line => out.push(line), err: () => {} });
+    const selection = await Bun.file(join(directory, "selection.json")).json() as {
+      audition_manifest_sha256: string; winner: { id: string }; note: string;
+    };
+    expect(selection.audition_manifest_sha256.length).toBe(64);
+    expect(selection.winner.id).toBe("candidate-b");
+    expect(selection.note).toBe("More natural");
+    expect(out.at(-1)).toContain("candidate-b");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("reproduces a profile from its recorded generation settings", async () => {
   const fetch = async (url: Request | URL | string, init?: RequestInit) => {
     if (!init?.method) {

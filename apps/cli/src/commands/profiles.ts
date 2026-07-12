@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { TtsClient, type Fetch } from "@voxstudio/clients";
 import { engine } from "@voxstudio/config";
 import type { DesignProfile, DesignProfileRequest, Voice, VoxConfig } from "@voxstudio/contracts";
@@ -9,13 +9,14 @@ import { readTextFile, writeBytes } from "@voxstudio/platform-bun";
 import { sanitizeForTts } from "@voxstudio/text";
 import type { CliIo } from "../io";
 
-export const profilesUsage = `usage: vox profiles {list,create,batch,audition,reproduce,verify,show,rm} ...
+export const profilesUsage = `usage: vox profiles {list,create,batch,audition,select,reproduce,verify,show,rm} ...
 
 commands:
   list
   create ID --description TEXT --anchor-text TEXT --seed N [--cfg VALUE] [--timesteps N]
   batch MANIFEST [--dry-run] [--rollback-on-error]
   audition OUT_DIR --text TEXT --seed N ID [ID ...]
+  select AUDITION_MANIFEST WINNER_ID [--note TEXT]
   reproduce SOURCE_ID NEW_ID
   verify SOURCE_ID TARGET_ID
   show ID
@@ -32,7 +33,10 @@ batch manifest:
 
 audition:
   Generate one WAV per profile with fixed text and synthesis seed. OUT_DIR must
-  not already contain candidate WAVs or manifest.json.`;
+  not already contain candidate WAVs or manifest.json.
+
+select:
+  Record a human-selected winner in selection.json beside an audition manifest.`;
 
 type ProfileVoice = Voice & { design_profile: DesignProfile };
 
@@ -159,6 +163,48 @@ function parseAudition(args: string[]): AuditionOptions {
   return { outputDir, text, seed, ids };
 }
 
+interface AuditionCandidate {
+  id: string;
+  wav_sha256: string;
+}
+
+function parseAuditionSelection(args: string[]): { manifestPath: string; winnerId: string; note?: string } {
+  const manifestPath = args.shift();
+  const winnerId = args.shift();
+  let note: string | undefined;
+  while (args.length) {
+    const option = args.shift();
+    if (option !== "--note") throw new TypeError(`profiles select: unknown option ${option}`);
+    note = args.shift();
+    if (!note) throw new TypeError("profiles select: --note requires a value");
+  }
+  if (!manifestPath) throw new TypeError("profiles select: audition manifest path is required");
+  if (!winnerId) throw new TypeError("profiles select: winner ID is required");
+  return { manifestPath, winnerId, ...(note === undefined ? {} : { note }) };
+}
+
+function parseAuditionCandidates(raw: string): AuditionCandidate[] {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new TypeError("profiles select: audition manifest is not valid JSON");
+  }
+  if (typeof value !== "object" || value === null || !Array.isArray((value as { candidates?: unknown }).candidates)) {
+    throw new TypeError("profiles select: audition manifest has no candidates");
+  }
+  const candidates = (value as { candidates: unknown[] }).candidates.map((candidate, index) => {
+    if (typeof candidate !== "object" || candidate === null
+      || typeof (candidate as { id?: unknown }).id !== "string"
+      || typeof (candidate as { wav_sha256?: unknown }).wav_sha256 !== "string") {
+      throw new TypeError(`profiles select: invalid candidate at index ${index}`);
+    }
+    return candidate as AuditionCandidate;
+  });
+  if (!candidates.length) throw new TypeError("profiles select: audition manifest has no candidates");
+  return candidates;
+}
+
 export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, fetch: Fetch = globalThis.fetch): Promise<number> {
   const operation = args.shift();
   const tts = new TtsClient(engine(config, "tts"), fetch);
@@ -274,6 +320,26 @@ export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, 
     io.out(JSON.stringify({ manifest: manifestPath }));
     return 0;
   }
+  if (operation === "select") {
+    const options = parseAuditionSelection(args);
+    const raw = await readTextFile(options.manifestPath);
+    const candidates = parseAuditionCandidates(raw);
+    const winner = candidates.find(candidate => candidate.id === options.winnerId);
+    if (!winner) throw new TypeError(`profiles select: ${options.winnerId} is not in the audition manifest`);
+    const selectionPath = join(dirname(options.manifestPath), "selection.json");
+    if (await Bun.file(selectionPath).exists()) {
+      throw new TypeError(`profiles select: selection already exists: ${selectionPath}`);
+    }
+    const selection = {
+      audition_manifest_sha256: createHash("sha256").update(raw).digest("hex"),
+      selected_at: new Date().toISOString(),
+      winner,
+      ...(options.note === undefined ? {} : { note: options.note }),
+    };
+    await writeBytes(selectionPath, new TextEncoder().encode(`${JSON.stringify(selection, null, 2)}\n`));
+    io.out(JSON.stringify({ selection: selectionPath, winner: winner.id }));
+    return 0;
+  }
   if (operation === "verify") {
     if (args.length !== 2) throw new TypeError("profiles verify: source ID and target ID are required");
     const source = reproducibilityRecord(await tts.getVoice(args[0] as string));
@@ -284,7 +350,7 @@ export async function runProfiles(args: string[], config: VoxConfig, io: CliIo, 
     io.out(`verified ${args[0]} ${args[1]} ${source.audio_sha256}`);
     return 0;
   }
-  if (operation !== "create") throw new TypeError("profiles: expected list, create, batch, audition, reproduce, verify, show, or rm");
+  if (operation !== "create") throw new TypeError("profiles: expected list, create, batch, audition, select, reproduce, verify, show, or rm");
   const id = args.shift();
   let description: string | undefined, anchorText: string | undefined, seed: number | undefined;
   let cfgValue: number | undefined, timesteps: number | undefined;
