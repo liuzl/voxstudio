@@ -6,6 +6,9 @@ import type { CapturedAudioFrame, PcmCapture } from "./voice-tools";
 
 const captureRate = 16_000;
 const playbackRate = 48_000;
+// Bun.spawn().kill() accepts a numeric POSIX signal. Passing the string
+// "SIGUSR1" in Bun 1.3.2 sends signal 10 (SIGBUS) on macOS instead.
+const clearPlaybackSignal = 30;
 
 function hostPath(): string {
   return process.env.VOXSTUDIO_MACOS_AUDIO_HOST
@@ -80,7 +83,7 @@ export async function startMacosAudioHost(): Promise<MacosAudioHost> {
       await stdin.write(new Uint8Array(audio.samples.buffer, audio.samples.byteOffset, audio.samples.byteLength));
     },
     close: async () => {},
-    abort: async () => { child.kill("SIGUSR1"); },
+    abort: async () => { child.kill(clearPlaybackSignal); },
   };
   return { capture: { frames, close }, player, close };
 }
