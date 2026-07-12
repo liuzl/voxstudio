@@ -43,7 +43,11 @@ export async function startMacosAudioHost(): Promise<MacosAudioHost> {
     closed = true;
     await stdin.end();
     const exitCode = await child.exited;
-    if (exitCode !== 0) throw new TypeError(`macOS audio host exited with status ${exitCode}`);
+    // SIGINT from the terminal reaches both the CLI and its child process.
+    // Treat the conventional signal exit code as a normal user shutdown.
+    if (exitCode !== 0 && exitCode !== 130) {
+      throw new TypeError(`macOS audio host exited with status ${exitCode}`);
+    }
   };
   const frames = (async function* (): AsyncGenerator<CapturedAudioFrame> {
     const reader = stdout.getReader();

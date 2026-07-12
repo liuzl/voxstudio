@@ -15,6 +15,7 @@ final class AudioHost {
   private let stdoutQueue = DispatchQueue(label: "voxstudio.audio.stdout")
   private var converter: AVAudioConverter?
   private var pendingPlayback = Data()
+  private var captureDiagnostics = 0
 
   func start() throws {
     // Voice processing must be configured before the engine starts.
@@ -25,14 +26,15 @@ final class AudioHost {
     // render graph advertises a different channel count than the mono mic.
     engine.connect(player, to: engine.outputNode, format: playbackFormat)
     let input = engine.inputNode
-    converter = AVAudioConverter(from: input.inputFormat(forBus: 0), to: captureFormat)
-    input.installTap(onBus: 0, bufferSize: 960, format: nil) { [weak self] buffer, _ in
+    let sourceFormat = input.outputFormat(forBus: 0)
+    converter = AVAudioConverter(from: sourceFormat, to: captureFormat)
+    input.installTap(onBus: 0, bufferSize: 960, format: sourceFormat) { [weak self] buffer, _ in
       self?.capture(buffer)
     }
     engine.prepare()
     try engine.start()
     player.play()
-    fputs("vox-audio-host ready voice-processing=\(input.isVoiceProcessingEnabled)\n", stderr)
+    fputs("vox-audio-host ready voice-processing=\(input.isVoiceProcessingEnabled) capture=\(sourceFormat.sampleRate)Hz/\(sourceFormat.channelCount)ch\n", stderr)
   }
 
   func appendPlayback(_ data: Data) {
@@ -79,6 +81,13 @@ final class AudioHost {
       return input
     }
     guard status != .error, error == nil, output.frameLength > 0, let samples = output.floatChannelData?[0] else { return }
+    if captureDiagnostics < 3 {
+      var energy: Float = 0
+      for index in 0..<Int(output.frameLength) { energy += samples[index] * samples[index] }
+      let level = sqrt(energy / Float(output.frameLength))
+      fputs("vox-audio-host capture frames=\(output.frameLength) rms=\(level)\n", stderr)
+      captureDiagnostics += 1
+    }
     let data = Data(bytes: samples, count: Int(output.frameLength) * MemoryLayout<Float>.size)
     stdoutQueue.async { self.stdout.write(data) }
   }
