@@ -9,11 +9,9 @@ let playbackFrames: AVAudioFrameCount = 960
 final class AudioHost {
   private let engine = AVAudioEngine()
   private let player = AVAudioPlayerNode()
-  private let captureFormat = AVAudioFormat(standardFormatWithSampleRate: captureRate, channels: 1)!
   private let playbackFormat = AVAudioFormat(standardFormatWithSampleRate: playbackRate, channels: 1)!
   private let stdout = FileHandle.standardOutput
   private let stdoutQueue = DispatchQueue(label: "voxstudio.audio.stdout")
-  private var converter: AVAudioConverter?
   private var pendingPlayback = Data()
   private var captureDiagnostics = 0
 
@@ -27,7 +25,6 @@ final class AudioHost {
     engine.connect(player, to: engine.outputNode, format: playbackFormat)
     let input = engine.inputNode
     let sourceFormat = input.outputFormat(forBus: 0)
-    converter = AVAudioConverter(from: sourceFormat, to: captureFormat)
     input.installTap(onBus: 0, bufferSize: 960, format: sourceFormat) { [weak self] buffer, _ in
       self?.capture(buffer)
     }
@@ -66,7 +63,6 @@ final class AudioHost {
   }
 
   private func capture(_ input: AVAudioPCMBuffer) {
-    guard let converter else { return }
     if captureDiagnostics < 3, let channels = input.floatChannelData {
       let levels = (0..<Int(input.format.channelCount)).map { channel -> String in
         var energy: Float = 0
@@ -75,28 +71,24 @@ final class AudioHost {
       }
       fputs("vox-audio-host source-rms=[\(levels.joined(separator: ","))]\n", stderr)
     }
-    let capacity = AVAudioFrameCount(Double(input.frameLength) * captureRate / input.format.sampleRate) + 8
-    guard let output = AVAudioPCMBuffer(pcmFormat: captureFormat, frameCapacity: capacity) else { return }
-    var supplied = false
-    var error: NSError?
-    let status = converter.convert(to: output, error: &error) { _, status in
-      if supplied {
-        status.pointee = .noDataNow
-        return nil
-      }
-      supplied = true
-      status.pointee = .haveData
-      return input
-    }
-    guard status != .error, error == nil, output.frameLength > 0, let samples = output.floatChannelData?[0] else { return }
+    guard let channels = input.floatChannelData,
+          input.format.sampleRate == 48_000 else { return }
+    // Voice Processing exposes a 9-channel aggregate on this hardware. Each
+    // channel carries the same processed capture signal; AVAudioConverter's
+    // 9-to-1 path returns silence, so select one channel and decimate 3:1.
+    let outputCount = Int(input.frameLength) / 3
+    guard outputCount > 0 else { return }
+    var output = [Float](repeating: 0, count: outputCount)
+    for index in 0..<outputCount { output[index] = channels[0][index * 3] }
+    let samples = output
     if captureDiagnostics < 3 {
       var energy: Float = 0
-      for index in 0..<Int(output.frameLength) { energy += samples[index] * samples[index] }
-      let level = sqrt(energy / Float(output.frameLength))
-      fputs("vox-audio-host capture frames=\(output.frameLength) rms=\(level)\n", stderr)
+      for sample in samples { energy += sample * sample }
+      let level = sqrt(energy / Float(samples.count))
+      fputs("vox-audio-host capture frames=\(samples.count) rms=\(level)\n", stderr)
       captureDiagnostics += 1
     }
-    let data = Data(bytes: samples, count: Int(output.frameLength) * MemoryLayout<Float>.size)
+    let data = samples.withUnsafeBufferPointer { Data(buffer: $0) }
     stdoutQueue.async { self.stdout.write(data) }
   }
 }
