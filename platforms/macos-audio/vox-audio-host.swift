@@ -67,6 +67,14 @@ final class AudioHost {
 
   private func capture(_ input: AVAudioPCMBuffer) {
     guard let converter else { return }
+    if captureDiagnostics < 3, let channels = input.floatChannelData {
+      let levels = (0..<Int(input.format.channelCount)).map { channel -> String in
+        var energy: Float = 0
+        for index in 0..<Int(input.frameLength) { energy += channels[channel][index] * channels[channel][index] }
+        return String(format: "%.5f", sqrt(energy / Float(input.frameLength)))
+      }
+      fputs("vox-audio-host source-rms=[\(levels.joined(separator: ","))]\n", stderr)
+    }
     let capacity = AVAudioFrameCount(Double(input.frameLength) * captureRate / input.format.sampleRate) + 8
     guard let output = AVAudioPCMBuffer(pcmFormat: captureFormat, frameCapacity: capacity) else { return }
     var supplied = false
