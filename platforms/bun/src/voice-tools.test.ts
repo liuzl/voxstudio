@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { captureCommand, decodePcm16le, hasAudibleAudio, recordCommand, splitCommand } from "./voice-tools";
+import {
+  captureCommand,
+  decodePcm16le,
+  hasAudibleAudio,
+  parseAvfoundationAudioDevices,
+  recordCommand,
+  splitCommand,
+} from "./voice-tools";
 
 describe("voice platform tools", () => {
   test.each([
@@ -32,6 +39,19 @@ describe("voice platform tools", () => {
     const samples = decodePcm16le(new Uint8Array([0, 128, 0, 0, 255, 127]));
     expect([...samples]).toEqual([-1, 0, 32_767 / 32_768]);
     expect(() => decodePcm16le(new Uint8Array([0]))).toThrow("even byte");
+  });
+
+  test("parses only AVFoundation audio device entries", () => {
+    expect(parseAvfoundationAudioDevices(`
+[AVFoundation indev] AVFoundation video devices:
+[AVFoundation indev] [0] FaceTime HD Camera
+[AVFoundation indev] AVFoundation audio devices:
+[AVFoundation indev] [0] Teams Audio
+[AVFoundation indev] [1] MacBook Pro Microphone
+`)).toEqual([
+      { id: "0", name: "Teams Audio" },
+      { id: "1", name: "MacBook Pro Microphone" },
+    ]);
   });
 
   test("detects audible recordings without treating silence as speech", () => {

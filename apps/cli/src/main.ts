@@ -5,6 +5,7 @@ import type { HealthResult, VoxConfig } from "@voxstudio/contracts";
 import { loadConfig } from "@voxstudio/platform-bun";
 import { chatUsage, runChat } from "./commands/chat";
 import { configUsage, runConfig } from "./commands/config";
+import { devicesUsage, runDevices } from "./commands/devices";
 import { listenUsage, runListen } from "./commands/listen";
 import { profilesUsage, runProfiles } from "./commands/profiles";
 import { replyUsage, runReply } from "./commands/reply";
@@ -13,7 +14,7 @@ import { runTranscribe, transcribeUsage } from "./commands/transcribe";
 import { runVoices, voicesUsage } from "./commands/voices";
 import { consoleIo, type CliIo } from "./io";
 
-const usage = `usage: vox [-h] [--config CONFIG] {health,say,transcribe,chat,reply,listen,voices,profiles,config} ...
+const usage = `usage: vox [-h] [--config CONFIG] {health,say,transcribe,chat,reply,listen,devices,voices,profiles,config} ...
 
 voxstudio: self-hosted voice I/O
 
@@ -24,6 +25,7 @@ commands:
   chat             one-shot LLM turn
   reply            transcribe audio and speak one reply
   listen           run a continuous headset voice conversation
+  devices          list microphone input devices
   voices           manage named voices
   profiles         create reusable design profiles
   config           validate resolved configuration
@@ -76,7 +78,7 @@ export async function run(
     args.splice(0, 2);
   }
   const command = args.shift();
-  if (!command || !["health", "say", "transcribe", "chat", "reply", "listen", "voices", "profiles", "config"].includes(command)) {
+  if (!command || !["health", "say", "transcribe", "chat", "reply", "listen", "devices", "voices", "profiles", "config"].includes(command)) {
     io.err(usage);
     return 2;
   }
@@ -88,6 +90,7 @@ export async function run(
       chat: chatUsage,
       reply: replyUsage,
       listen: listenUsage,
+      devices: devicesUsage,
       voices: voicesUsage,
       profiles: profilesUsage,
       config: configUsage,
@@ -95,6 +98,7 @@ export async function run(
     io.out(commandUsage[command] ?? usage);
     return 0;
   }
+  if (command === "devices") return runDevices(args, io);
   try {
     const config = explicit === undefined ? await configLoader() : await configLoader({ explicit });
     if (command === "health") {

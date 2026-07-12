@@ -61,6 +61,7 @@ bun run build:cli
 ./apps/cli/dist/vox reply question.wav --language zh --system "请简短回答" --voice design-calm-clear -o answer.wav
 ./apps/cli/dist/vox reply question.wav --voice design-calm-clear --play -o answer.wav
 ./apps/cli/dist/vox reply --record 5 --language zh --voice design-calm-clear -o answer.wav
+./apps/cli/dist/vox devices
 ./apps/cli/dist/vox listen --device "MacBook Pro microphone" --language zh --voice design-calm-clear
 ./apps/cli/dist/vox voices add alice --audio sample.wav --text "参考音的逐字稿"
 ./apps/cli/dist/vox voices add bob --audio sample.wav --language zh  # transcript via ASR

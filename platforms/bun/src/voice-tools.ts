@@ -17,6 +17,11 @@ export interface PcmCapture {
   close(): Promise<void>;
 }
 
+export interface AudioInputDevice {
+  id: string;
+  name: string;
+}
+
 function hostSystem(): HostSystem {
   if (process.platform === "darwin") return "Darwin";
   if (process.platform === "linux") return "Linux";
@@ -61,6 +66,64 @@ export function captureCommand(
   }
   command.push("-ac", "1", "-ar", String(sampleRate), "-f", "s16le", "pipe:1");
   return command;
+}
+
+export function parseAvfoundationAudioDevices(output: string): AudioInputDevice[] {
+  const devices: AudioInputDevice[] = [];
+  let audioSection = false;
+  for (const line of output.split(/\r?\n/)) {
+    if (line.includes("AVFoundation audio devices:")) {
+      audioSection = true;
+      continue;
+    }
+    if (line.includes("AVFoundation video devices:")) {
+      audioSection = false;
+      continue;
+    }
+    if (!audioSection) continue;
+    const match = /\[(\d+)]\s+(.+)$/.exec(line);
+    if (match?.[1] && match[2]) devices.push({ id: match[1], name: match[2].trim() });
+  }
+  return devices;
+}
+
+export async function listInputDevices(system: HostSystem = hostSystem()): Promise<AudioInputDevice[]> {
+  if (system === "Linux") {
+    const pactl = Bun.which("pactl");
+    if (!pactl) throw new TypeError("pactl not found on PATH; cannot list PulseAudio input devices");
+    const child = Bun.spawn([pactl, "list", "sources", "short"], { stdout: "pipe", stderr: "pipe" });
+    const stdout = child.stdout;
+    const stderr = child.stderr;
+    if (!stdout || typeof stdout === "number" || !stderr || typeof stderr === "number") {
+      throw new TypeError("pactl did not expose device listing streams");
+    }
+    const [exitCode, output, error] = await Promise.all([child.exited, new Response(stdout).text(), new Response(stderr).text()]);
+    if (exitCode !== 0) throw new TypeError(`pactl device listing failed: ${error.trim()}`);
+    return output.split(/\r?\n/).flatMap(line => {
+      const fields = line.split("\t");
+      return fields[1] ? [{ id: fields[1], name: fields[1] }] : [];
+    });
+  }
+
+  if (!Bun.which("ffmpeg")) throw new TypeError("ffmpeg not found on PATH; install ffmpeg to list input devices");
+  const input = system === "Darwin"
+    ? ["ffmpeg", "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""]
+    : ["ffmpeg", "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"];
+  const child = Bun.spawn(input, { stdout: "pipe", stderr: "pipe" });
+  const stdout = child.stdout;
+  const stderr = child.stderr;
+  if (!stdout || typeof stdout === "number" || !stderr || typeof stderr === "number") {
+    throw new TypeError("ffmpeg did not expose device listing streams");
+  }
+  const [, output, error] = await Promise.all([child.exited, new Response(stdout).text(), new Response(stderr).text()]);
+  const text = `${output}\n${error}`;
+  if (system === "Darwin") return parseAvfoundationAudioDevices(text);
+  const devices: AudioInputDevice[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const match = /\[dshow[^]]*]\s+"(.+)"\s+\(audio\)/.exec(line);
+    if (match?.[1]) devices.push({ id: match[1], name: match[1] });
+  }
+  return devices;
 }
 
 export function decodePcm16le(bytes: Uint8Array): Float32Array {

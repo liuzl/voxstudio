@@ -9,12 +9,15 @@ export {
   captureCommand,
   capturePcm,
   decodePcm16le,
+  listInputDevices,
+  parseAvfoundationAudioDevices,
   recordAudio,
   recordCommand,
   removeRecording,
   splitCommand,
   type HostSystem,
   type CapturedAudioFrame,
+  type AudioInputDevice,
   type PcmCapture,
 } from "./voice-tools";
 
