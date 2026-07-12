@@ -53,6 +53,28 @@ export async function runChat(
 ): Promise<number> {
   const options = parse(args);
   const prompt = options.prompt && options.prompt !== "-" ? options.prompt : await readStdinText();
+  return completeChat(prompt, options, config, io, fetch);
+}
+
+export async function runChatPrompt(
+  prompt: string,
+  args: string[],
+  config: VoxConfig,
+  io: CliIo,
+  fetch: Fetch = globalThis.fetch,
+): Promise<number> {
+  const options = parse(args);
+  if (options.prompt !== undefined) throw new TypeError("chat: prompt must be supplied separately");
+  return completeChat(prompt, options, config, io, fetch);
+}
+
+async function completeChat(
+  prompt: string,
+  options: ChatArgs,
+  config: VoxConfig,
+  io: CliIo,
+  fetch: Fetch,
+): Promise<number> {
   const messages: ChatMessage[] = [];
   if (options.system) messages.push({ role: "system", content: options.system });
   messages.push({ role: "user", content: prompt });
@@ -69,10 +91,13 @@ export async function runChat(
       io.err(`dropped ${sanitized.dropped.length} unspeakable character(s): ${unique}`);
     }
     const tts = new TtsClient(engine(config, "tts"), fetch);
+    const voice = options.voice ?? config.ttsDefaults.voice;
     const wav = await synthesizeLong(tts, sanitized.text, {
       chunking: config.chunking,
       ttsDefaults: config.ttsDefaults,
-      ...(options.voice === undefined ? {} : { voice: options.voice }),
+      voice,
+      ...(voice === "clone" || voice === "design" ? {} : { prosodyPrompt: true }),
+      continuationId: crypto.randomUUID(),
     });
     await writeBytes(options.output, wav);
     io.err(`wrote ${options.output} (${(wav.byteLength / 1e6).toFixed(1)} MB)`);

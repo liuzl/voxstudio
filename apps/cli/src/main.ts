@@ -6,12 +6,13 @@ import { loadConfig } from "@voxstudio/platform-bun";
 import { chatUsage, runChat } from "./commands/chat";
 import { configUsage, runConfig } from "./commands/config";
 import { profilesUsage, runProfiles } from "./commands/profiles";
+import { replyUsage, runReply } from "./commands/reply";
 import { runSay, sayUsage } from "./commands/say";
 import { runTranscribe, transcribeUsage } from "./commands/transcribe";
 import { runVoices, voicesUsage } from "./commands/voices";
 import { consoleIo, type CliIo } from "./io";
 
-const usage = `usage: vox [-h] [--config CONFIG] {health,say,transcribe,chat,voices,profiles,config} ...
+const usage = `usage: vox [-h] [--config CONFIG] {health,say,transcribe,chat,reply,voices,profiles,config} ...
 
 voxstudio: self-hosted voice I/O
 
@@ -20,6 +21,7 @@ commands:
   say              synthesize speech from text
   transcribe       transcribe an audio file
   chat             one-shot LLM turn
+  reply            transcribe audio and speak one reply
   voices           manage named voices
   profiles         create reusable design profiles
   config           validate resolved configuration
@@ -72,7 +74,7 @@ export async function run(
     args.splice(0, 2);
   }
   const command = args.shift();
-  if (!command || !["health", "say", "transcribe", "chat", "voices", "profiles", "config"].includes(command)) {
+  if (!command || !["health", "say", "transcribe", "chat", "reply", "voices", "profiles", "config"].includes(command)) {
     io.err(usage);
     return 2;
   }
@@ -82,6 +84,7 @@ export async function run(
       say: sayUsage,
       transcribe: transcribeUsage,
       chat: chatUsage,
+      reply: replyUsage,
       voices: voicesUsage,
       profiles: profilesUsage,
       config: configUsage,
@@ -96,6 +99,7 @@ export async function run(
       return runHealth(config, io, fetch);
     }
     if (command === "transcribe") return await runTranscribe(args, config, io, fetch);
+    if (command === "reply") return await runReply(args, config, io, fetch);
     if (command === "say") return await runSay(args, config, io, fetch);
     if (command === "voices") return await runVoices(args, config, io, fetch);
     if (command === "profiles") return await runProfiles(args, config, io, fetch);
