@@ -12,12 +12,20 @@ final class AudioHost {
   private let playbackFormat = AVAudioFormat(standardFormatWithSampleRate: playbackRate, channels: 1)!
   private let stdout = FileHandle.standardOutput
   private let stdoutQueue = DispatchQueue(label: "voxstudio.audio.stdout")
+  private let voiceProcessing: Bool
   private var pendingPlayback = Data()
   private var captureDiagnostics = 0
 
+  init(voiceProcessing: Bool) {
+    self.voiceProcessing = voiceProcessing
+  }
+
   func start() throws {
-    // Voice processing must be configured before the engine starts.
-    try engine.inputNode.setVoiceProcessingEnabled(true)
+    // Voice processing must be configured before the engine starts. Disabling it
+    // yields the unprocessed capture path, which is the only way to obtain an
+    // echo reference for ERLE: Voice Processing I/O is a black box and does not
+    // expose the pre-AEC microphone signal within a processed session.
+    try engine.inputNode.setVoiceProcessingEnabled(voiceProcessing)
     engine.attach(player)
     // Do not route through the default stereo mixer. Voice Processing I/O
     // aggregates capture and render devices and fails initialization when the
@@ -31,7 +39,17 @@ final class AudioHost {
     engine.prepare()
     try engine.start()
     player.play()
+    let capability = """
+    {"aec":\(input.isVoiceProcessingEnabled),\
+    "ns":\(input.isVoiceProcessingEnabled),\
+    "agc":\(input.isVoiceProcessingEnabled),\
+    "captureSampleRate":\(Int(sourceFormat.sampleRate)),\
+    "captureChannels":\(sourceFormat.channelCount),\
+    "outputSampleRate":\(Int(playbackRate)),\
+    "emittedSampleRate":\(Int(captureRate))}
+    """
     fputs("vox-audio-host ready voice-processing=\(input.isVoiceProcessingEnabled) capture=\(sourceFormat.sampleRate)Hz/\(sourceFormat.channelCount)ch\n", stderr)
+    fputs("vox-audio-host capability \(capability)\n", stderr)
   }
 
   func appendPlayback(_ data: Data) {
@@ -73,8 +91,13 @@ final class AudioHost {
       }
       fputs("vox-audio-host source-rms=[\(levels.joined(separator: ","))]\n", stderr)
     }
-    guard let channels = input.floatChannelData,
-          input.format.sampleRate == 48_000 else { return }
+    guard let channels = input.floatChannelData else { return }
+    guard input.format.sampleRate == 48_000 else {
+      // Dropping frames here would emit silence, which a measurement harness
+      // cannot distinguish from perfect echo cancellation. Fail loudly instead.
+      fputs("vox-audio-host error: unsupported capture rate \(input.format.sampleRate)Hz\n", stderr)
+      exit(1)
+    }
     // Voice Processing exposes a 9-channel aggregate on this hardware. Each
     // channel carries the same processed capture signal; AVAudioConverter's
     // 9-to-1 path returns silence, so select one channel and decimate 3:1.
@@ -95,7 +118,9 @@ final class AudioHost {
   }
 }
 
-let host = AudioHost()
+// `--no-voice-processing` is a measurement-only bypass. It is never used by the
+// product duplex path; it exists to capture the un-cancelled echo reference.
+let host = AudioHost(voiceProcessing: !CommandLine.arguments.contains("--no-voice-processing"))
 let signalQueue = DispatchQueue.main
 signal(SIGUSR1, SIG_IGN)
 let clearSignal = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: signalQueue)

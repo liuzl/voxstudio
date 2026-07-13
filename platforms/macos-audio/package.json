@@ -1,0 +1,10 @@
+{
+  "name": "@voxstudio/platform-macos-audio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@voxstudio/audio": "workspace:*",
+    "@voxstudio/duplex-session": "workspace:*"
+  }
+}
