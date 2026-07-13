@@ -17,7 +17,7 @@ import type { CliIo } from "../io";
 
 export const listenUsage = `usage: vox listen [--device NAME] [--language LANG] [--system TEXT] [--max-tokens N]
                  [--voice VOICE] [--barge-in | --speaker-duplex] [--vad energy|silero]
-                 [--threshold N] [--silence-ms N] [--min-speech-ms N]
+                 [--threshold N] [--silence-ms N] [--min-speech-ms N] [--timing]
 
 Run a continuous voice conversation. Press Ctrl-C to stop.
 Without --barge-in, microphone input is suppressed while the agent speaks so external speakers
@@ -25,7 +25,8 @@ cannot interrupt playback. Use --barge-in only with headphones or a headset. --s
 the macOS Voice Processing helper for external-speaker AEC. --vad silero uses the Silero ONNX
 model (fetched into a verified local cache on first use). --threshold is the energy VAD's RMS
 threshold; under silero it sets the level pre-gate that keeps residual echo below notice (both
-default 0.01). The default detector remains energy until a gate run certifies silero.`;
+default 0.01). The default detector remains energy until a gate run certifies silero. --timing
+prints each turn's latency profile (VAD end, ASR, reply, first audio) to stderr.`;
 
 interface ListenOptions {
   device?: string;
@@ -39,6 +40,7 @@ interface ListenOptions {
   threshold?: number;
   silenceMs: number;
   minSpeechMs: number;
+  timing: boolean;
 }
 
 export interface ListenPlayer extends PcmSink {
@@ -74,6 +76,7 @@ function numberOption(args: string[], index: number, option: string): number {
 function parse(args: string[]): ListenOptions {
   const options: ListenOptions = {
     language: "auto", bargeIn: false, speakerDuplex: false, vad: "energy", silenceMs: 650, minSpeechMs: 250,
+    timing: false,
   };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
@@ -83,6 +86,7 @@ function parse(args: string[]): ListenOptions {
     else if (arg === "--voice") options.voice = required(args, ++index, arg);
     else if (arg === "--barge-in") options.bargeIn = true;
     else if (arg === "--speaker-duplex") options.speakerDuplex = true;
+    else if (arg === "--timing") options.timing = true;
     else if (arg === "--vad") {
       const value = required(args, ++index, arg);
       if (value !== "energy" && value !== "silero") throw new TypeError("listen: --vad must be energy or silero");
@@ -119,6 +123,9 @@ export async function runListen(
         io.err(`listen: playback queue reached ${event.maxQueuedMs}ms; dropping audio`);
       } else if (event.type === "turn.false_barge_in") {
         io.err("listen: ignored a brief sound during playback (not speech)");
+      } else if (event.type === "turn.timing" && options.timing) {
+        const points = Object.entries(event.offsetsMs).map(([point, ms]) => `${point} +${Math.round(ms)}ms`);
+        io.err(`timing: ${points.join("  ")} (${event.endReason})`);
       }
     },
   });
@@ -164,6 +171,7 @@ export async function runListen(
         new File([new Uint8Array(wav)], "utterance.wav", { type: "audio/wav" }),
         "utterance.wav", options.language, {}, turn.signal,
       );
+      session.mark(turn.id, "asr_done");
       const transcript = transcription.text.trim();
       if (turn.signal.aborted) return;
       if (!transcript) {
@@ -201,10 +209,12 @@ export async function runListen(
           signal: turn.signal,
         })) {
           if (turn.signal.aborted) return;
+          session.mark(turn.id, "tts_first_audio");
           // `streamLong` yields synthesis pieces, not low-latency PCM frames. A
           // single piece can exceed the session queue duration, so this direct
           // headset path writes it to ffplay immediately instead of dropping it.
           await player.write(piece);
+          session.mark(turn.id, "playback_first");
         }
         if (!turn.signal.aborted) session.complete(turn.id);
       } finally {

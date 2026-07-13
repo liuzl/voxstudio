@@ -208,9 +208,10 @@ describe("duplex session", () => {
     expect(value.queueOutput(turn.id, audio(50))).toBe(true);
     expect(value.complete(turn.id)).toBe(true);
     expect(value.snapshot()).toEqual({
-      sessionId: "session-1", state: "listening", lastSequence: 9, queuedAudioMs: 50,
+      sessionId: "session-1", state: "listening", lastSequence: 10, queuedAudioMs: 50,
     });
-    expect(events.map(event => event.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    // ...9 lifecycle events plus the turn.timing profile emitted at completion.
+    expect(events.map(event => event.sequence)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     expect(events.filter(event => event.type === "session.state").map(event => event.state)).toEqual([
       "listening", "speech_started", "finalizing", "thinking", "speaking", "listening",
     ]);
@@ -234,6 +235,53 @@ describe("duplex session", () => {
     expect(events.find(event => event.type === "turn.interrupted")).toMatchObject({
       turnId: first.id, reason: "barge_in",
     });
+  });
+
+  test("profiles a turn's latency and emits it however the turn ends", () => {
+    const events: DuplexEvent[] = [];
+    let clock = 0;
+    const session = new DuplexSession({
+      now: () => clock,
+      newTurnId: () => "turn-1",
+      onEvent: event => events.push(event),
+    });
+    session.start();
+    const turn = session.startUserSpeech();     // t=0: speech starts
+    clock = 840;
+    session.finalizeUserSpeech(turn.id);        // vad_end +840
+    clock = 850;
+    session.startThinking(turn.id);
+    clock = 1_200;
+    expect(session.mark(turn.id, "asr_done")).toBe(true);
+    clock = 2_000;
+    session.startSpeaking(turn.id);
+    clock = 2_400;
+    session.mark(turn.id, "tts_first_audio");
+    session.mark(turn.id, "tts_first_audio");   // later pieces must not overwrite the first
+    clock = 2_450;
+    session.mark(turn.id, "playback_first");
+    clock = 5_000;
+    session.complete(turn.id);
+
+    const timing = events.find(event => event.type === "turn.timing");
+    expect(timing).toMatchObject({
+      turnId: "turn-1",
+      endReason: "completed",
+      offsetsMs: {
+        vad_end: 840, thinking: 850, asr_done: 1_200, speaking: 2_000,
+        tts_first_audio: 2_400, playback_first: 2_450,
+      },
+    });
+    // Stale turns cannot be marked.
+    expect(session.mark("turn-1", "asr_done")).toBe(false);
+
+    // An interrupted turn reports how far it got and why it ended.
+    const second = session.startUserSpeech();
+    clock = 5_500;
+    session.finalizeUserSpeech(second.id);
+    session.interrupt("cancel");
+    const interrupted = events.filter(event => event.type === "turn.timing")[1];
+    expect(interrupted).toMatchObject({ endReason: "cancel", offsetsMs: { vad_end: 500 } });
   });
 
   test("records a false barge-in against the speaking turn without stopping it", () => {

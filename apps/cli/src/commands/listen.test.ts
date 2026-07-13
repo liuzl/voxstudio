@@ -53,10 +53,16 @@ describe("listen command", () => {
 
     await expect(runListen([
       "--barge-in", "--threshold", "0.1", "--min-speech-ms", "20", "--silence-ms", "20", "--voice", "demo",
+      "--timing",
     ], config, { out: line => output.push(line), err: line => errors.push(line) }, fetch, platform)).resolves.toBe(0);
 
     expect(output).toEqual(["transcript: 你好", "reply: 你好，欢迎使用语音对话。"]);
     expect(errors[0]).toContain("protected speaker mode");
+    const timing = errors.find(line => line.startsWith("timing:"));
+    expect(timing).toContain("vad_end");
+    expect(timing).toContain("asr_done");
+    expect(timing).toContain("playback_first");
+    expect(timing).toContain("(completed)");
     expect(played).toEqual([72_000]);
     expect(playerClosed).toBe(true);
     expect(captureClosed).toBe(true);

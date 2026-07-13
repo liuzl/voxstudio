@@ -33,6 +33,26 @@ export interface DuplexTurnEvent {
   reason?: InterruptionReason;
 }
 
+export type TurnTimingPoint =
+  | "vad_end"
+  | "thinking"
+  | "asr_done"
+  | "speaking"
+  | "tts_first_audio"
+  | "playback_first";
+
+/**
+ * Emitted once per turn when it ends, however it ends. Offsets are milliseconds from the
+ * start of user speech, present only for points the turn actually reached — the profile of
+ * a reply's latency, and the baseline any end-of-turn policy change must beat.
+ */
+export interface DuplexTimingEvent {
+  type: "turn.timing";
+  turnId: string;
+  endReason: "completed" | InterruptionReason;
+  offsetsMs: Partial<Record<TurnTimingPoint, number>>;
+}
+
 export interface DuplexQueueEvent {
   type: "audio.queue_overflow" | "audio.discarded";
   turnId: string;
@@ -40,7 +60,7 @@ export interface DuplexQueueEvent {
   maxQueuedMs: number;
 }
 
-export type DuplexEventPayload = DuplexStateEvent | DuplexTurnEvent | DuplexQueueEvent;
+export type DuplexEventPayload = DuplexStateEvent | DuplexTurnEvent | DuplexTimingEvent | DuplexQueueEvent;
 
 export type DuplexEvent = DuplexEventPayload & {
   sequence: number;
@@ -468,6 +488,8 @@ export class SileroVadSegmenter implements VadSegmenter {
 
 interface ActiveTurn extends DuplexTurn {
   controller: AbortController;
+  startedAtMs: number;
+  timing: Partial<Record<TurnTimingPoint, number>>;
 }
 
 function defaultTurnId(): string {
@@ -518,7 +540,13 @@ export class DuplexSession {
     this.requireState("listening", "speech_started", "finalizing", "thinking", "speaking");
     if (this.active) this.interrupt("barge_in");
     const controller = new AbortController();
-    const turn: ActiveTurn = { id: this.newTurnId(), signal: controller.signal, controller };
+    const turn: ActiveTurn = {
+      id: this.newTurnId(),
+      signal: controller.signal,
+      controller,
+      startedAtMs: this.now(),
+      timing: {},
+    };
     this.active = turn;
     this.transition("speech_started");
     this.emit({ type: "turn.started", turnId: turn.id });
@@ -527,6 +555,7 @@ export class DuplexSession {
 
   finalizeUserSpeech(turnId: string): boolean {
     if (!this.isCurrent(turnId) || this.currentState !== "speech_started") return false;
+    this.mark(turnId, "vad_end");
     this.transition("finalizing");
     this.emit({ type: "vad.end", turnId });
     return true;
@@ -534,13 +563,28 @@ export class DuplexSession {
 
   startThinking(turnId: string): boolean {
     if (!this.isCurrent(turnId) || this.currentState !== "finalizing") return false;
+    this.mark(turnId, "thinking");
     this.transition("thinking");
     return true;
   }
 
   startSpeaking(turnId: string): boolean {
     if (!this.isCurrent(turnId) || this.currentState !== "thinking") return false;
+    this.mark(turnId, "speaking");
     this.transition("speaking");
+    return true;
+  }
+
+  /**
+   * Stamp a timing point on the current turn. State transitions stamp their own points;
+   * engine milestones (ASR done, first TTS audio, first playback write) are marked by the
+   * loop that awaits them. First write wins, and stale turns are rejected like any other
+   * stale work.
+   */
+  mark(turnId: string, point: TurnTimingPoint): boolean {
+    const active = this.active;
+    if (!active || active.id !== turnId) return false;
+    active.timing[point] ??= Math.max(0, this.now() - active.startedAtMs);
     return true;
   }
 
@@ -566,6 +610,7 @@ export class DuplexSession {
 
   complete(turnId: string): boolean {
     if (!this.isCurrent(turnId) || this.currentState !== "speaking") return false;
+    this.emitTiming("completed");
     this.emit({ type: "turn.completed", turnId });
     this.active = undefined;
     this.transition("listening");
@@ -587,6 +632,7 @@ export class DuplexSession {
     if (!active) return false;
     active.controller.abort(reason);
     this.output.clear();
+    this.emitTiming(reason);
     this.emit({ type: "turn.interrupted", turnId: active.id, reason });
     this.active = undefined;
     if (this.currentState !== "closed" && this.currentState !== "reconfiguring") {
@@ -611,6 +657,12 @@ export class DuplexSession {
     this.interrupt("shutdown");
     this.output.clear();
     this.transition("closed");
+  }
+
+  private emitTiming(endReason: "completed" | InterruptionReason): void {
+    const active = this.active;
+    if (!active) return;
+    this.emit({ type: "turn.timing", turnId: active.id, endReason, offsetsMs: { ...active.timing } });
   }
 
   private isCurrent(turnId: string): boolean {
