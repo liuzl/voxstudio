@@ -177,6 +177,109 @@ describe("listen command", () => {
     expect(output).toEqual(["transcript: 你好", "reply: 回答"]);
   });
 
+  test("speculative turn-taking reopens a soft-ended turn and answers the merged utterance", async () => {
+    const output: string[] = [];
+    const asrBytes: number[] = [];
+    let releaseFirstAsr = () => {};
+    const firstAsrGate = new Promise<void>(resolve => { releaseFirstAsr = resolve; });
+    const capture: PcmCapture = {
+      frames: (async function* () {
+        const voiced = () => new Float32Array(320).fill(0.2);
+        const quiet = () => new Float32Array(320);
+        // First clause: 60ms of speech, then 60ms of silence → soft end, dispatch.
+        for (let index = 0; index < 3; index += 1) yield { samples: voiced(), sampleRate: 16_000, timestampMs: index * 20 };
+        for (let index = 3; index < 6; index += 1) yield { samples: quiet(), sampleRate: 16_000, timestampMs: index * 20 };
+        // The user keeps talking: this must reopen, not start a new turn.
+        for (let index = 6; index < 9; index += 1) yield { samples: voiced(), sampleRate: 16_000, timestampMs: index * 20 };
+        for (let index = 9; index < 12; index += 1) yield { samples: quiet(), sampleRate: 16_000, timestampMs: index * 20 };
+        releaseFirstAsr();
+      })(),
+      close: async () => {},
+    };
+    const platform: ListenPlatform = {
+      capture: async () => capture,
+      createPlayer: () => ({ write: async () => {}, close: async () => {} }),
+    };
+    const fetch: Fetch = async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/v1/audio/transcriptions") {
+        const file = (init?.body as FormData).get("file") as File;
+        asrBytes.push(file.size);
+        // The first dispatch resolves only after the session moved on, proving the
+        // superseded revision's result is discarded rather than spoken.
+        if (asrBytes.length === 1) await firstAsrGate;
+        return Response.json({ text: "你好" });
+      }
+      if (path === "/v1/chat/completions") return Response.json({ choices: [{ message: { content: "回答" } }] });
+      if (path === "/v1/audio/speech") return new Response(new Uint8Array(response()));
+      throw new Error(`unexpected path ${path}`);
+    };
+    const config = parseConfig({
+      engines: {
+        asr: { base_url: "http://asr.test" },
+        llm: { base_url: "http://llm.test" },
+        tts: { base_url: "http://tts.test" },
+      },
+    });
+
+    await expect(runListen([
+      "--turn-taking", "speculative", "--reopen-ms", "2000",
+      "--threshold", "0.1", "--min-speech-ms", "40", "--silence-ms", "60", "--voice", "demo",
+    ], config, { out: line => output.push(line), err: () => {} }, fetch, platform)).resolves.toBe(0);
+
+    // One reply, answering the complete utterance: the merged second dispatch carries
+    // strictly more audio than the superseded first one.
+    expect(output).toEqual(["transcript: 你好", "reply: 回答"]);
+    expect(asrBytes).toHaveLength(2);
+    expect(asrBytes[1] as number).toBeGreaterThan(asrBytes[0] as number);
+  });
+
+  test("resumed speech outside the reopen window starts a new turn instead", async () => {
+    const asrBytes: number[] = [];
+    const capture: PcmCapture = {
+      frames: (async function* () {
+        const voiced = () => new Float32Array(320).fill(0.2);
+        const quiet = () => new Float32Array(320);
+        for (let index = 0; index < 3; index += 1) yield { samples: voiced(), sampleRate: 16_000, timestampMs: index * 20 };
+        for (let index = 3; index < 6; index += 1) yield { samples: quiet(), sampleRate: 16_000, timestampMs: index * 20 };
+        for (let index = 6; index < 9; index += 1) yield { samples: voiced(), sampleRate: 16_000, timestampMs: index * 20 };
+        for (let index = 9; index < 12; index += 1) yield { samples: quiet(), sampleRate: 16_000, timestampMs: index * 20 };
+      })(),
+      close: async () => {},
+    };
+    const platform: ListenPlatform = {
+      capture: async () => capture,
+      createPlayer: () => ({ write: async () => {}, close: async () => {} }),
+    };
+    const fetch: Fetch = async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/v1/audio/transcriptions") {
+        const file = (init?.body as FormData).get("file") as File;
+        asrBytes.push(file.size);
+        return Response.json({ text: "你好" });
+      }
+      if (path === "/v1/chat/completions") return Response.json({ choices: [{ message: { content: "回答" } }] });
+      if (path === "/v1/audio/speech") return new Response(new Uint8Array(response()));
+      throw new Error(`unexpected path ${path}`);
+    };
+    const config = parseConfig({
+      engines: {
+        asr: { base_url: "http://asr.test" },
+        llm: { base_url: "http://llm.test" },
+        tts: { base_url: "http://tts.test" },
+      },
+    });
+
+    await expect(runListen([
+      "--turn-taking", "speculative", "--reopen-ms", "1",
+      "--threshold", "0.1", "--min-speech-ms", "40", "--silence-ms", "60", "--voice", "demo",
+    ], config, { out: () => {}, err: () => {} }, fetch, platform)).resolves.toBe(0);
+
+    // Two independent dispatches of similar size: nothing was merged.
+    expect(asrBytes).toHaveLength(2);
+    expect(asrBytes[1] as number).toBeLessThan((asrBytes[0] as number) * 1.5);
+  });
+
   test("validates realtime VAD and token options before opening the microphone", async () => {
     const config = parseConfig({});
     const platform: ListenPlatform = {

@@ -17,6 +17,7 @@ import type { CliIo } from "../io";
 
 export const listenUsage = `usage: vox listen [--device NAME] [--language LANG] [--system TEXT] [--max-tokens N]
                  [--voice VOICE] [--barge-in | --speaker-duplex] [--vad energy|silero]
+                 [--turn-taking conservative|speculative] [--reopen-ms N]
                  [--threshold N] [--silence-ms N] [--min-speech-ms N] [--timing]
 
 Run a continuous voice conversation. Press Ctrl-C to stop.
@@ -26,7 +27,11 @@ the macOS Voice Processing helper for external-speaker AEC. --vad silero uses th
 model (fetched into a verified local cache on first use). --threshold is the energy VAD's RMS
 threshold; under silero it sets the level pre-gate that keeps residual echo below notice (both
 default 0.01). The default detector remains energy until a gate run certifies silero. --timing
-prints each turn's latency profile (VAD end, ASR, reply, first audio) to stderr.`;
+prints each turn's latency profile (VAD end, ASR, reply, first audio) to stderr. --turn-taking
+speculative ends a turn after a short silence (--silence-ms defaults to 150 in this mode) and
+starts answering immediately; if you keep talking within --reopen-ms (default 7000) before the
+reply starts playing, the turn reopens and answers your complete utterance instead. It stays
+opt-in until its latency win and false-reopen rate are measured.`;
 
 interface ListenOptions {
   device?: string;
@@ -37,6 +42,8 @@ interface ListenOptions {
   bargeIn: boolean;
   speakerDuplex: boolean;
   vad: "energy" | "silero";
+  turnTaking: "conservative" | "speculative";
+  reopenMs: number;
   threshold?: number;
   silenceMs: number;
   minSpeechMs: number;
@@ -76,8 +83,9 @@ function numberOption(args: string[], index: number, option: string): number {
 function parse(args: string[]): ListenOptions {
   const options: ListenOptions = {
     language: "auto", bargeIn: false, speakerDuplex: false, vad: "energy", silenceMs: 650, minSpeechMs: 250,
-    timing: false,
+    turnTaking: "conservative", reopenMs: 7_000, timing: false,
   };
+  let silenceSet = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
     if (arg === "--device") options.device = required(args, ++index, arg);
@@ -87,6 +95,13 @@ function parse(args: string[]): ListenOptions {
     else if (arg === "--barge-in") options.bargeIn = true;
     else if (arg === "--speaker-duplex") options.speakerDuplex = true;
     else if (arg === "--timing") options.timing = true;
+    else if (arg === "--turn-taking") {
+      const value = required(args, ++index, arg);
+      if (value !== "conservative" && value !== "speculative") {
+        throw new TypeError("listen: --turn-taking must be conservative or speculative");
+      }
+      options.turnTaking = value;
+    } else if (arg === "--reopen-ms") options.reopenMs = numberOption(args, ++index, arg);
     else if (arg === "--vad") {
       const value = required(args, ++index, arg);
       if (value !== "energy" && value !== "silero") throw new TypeError("listen: --vad must be energy or silero");
@@ -96,11 +111,21 @@ function parse(args: string[]): ListenOptions {
       if (!Number.isInteger(value) || value === 0) throw new TypeError("listen: --max-tokens must be a positive integer");
       options.maxTokens = value;
     } else if (arg === "--threshold") options.threshold = numberOption(args, ++index, arg);
-    else if (arg === "--silence-ms") options.silenceMs = numberOption(args, ++index, arg);
+    else if (arg === "--silence-ms") { options.silenceMs = numberOption(args, ++index, arg); silenceSet = true; }
     else if (arg === "--min-speech-ms") options.minSpeechMs = numberOption(args, ++index, arg);
     else throw new TypeError(`listen: unknown option ${arg}`);
   }
+  // The speculative policy exists to stop paying the long silence up front; left at the
+  // conservative 650ms it would speculate about nothing.
+  if (options.turnTaking === "speculative" && !silenceSet) options.silenceMs = 150;
   return options;
+}
+
+function joinAudio(prefix: Float32Array, samples: Float32Array): Float32Array {
+  const output = new Float32Array(prefix.length + samples.length);
+  output.set(prefix);
+  output.set(samples, prefix.length);
+  return output;
 }
 
 async function stopPlayer(player: ListenPlayer | undefined): Promise<void> {
@@ -162,6 +187,10 @@ export async function runListen(
   let activePlayer: ListenPlayer | undefined;
   let stopping = false;
   let suppressInputUntil = 0;
+  // Speculative turn-taking state: the last soft-ended turn (reopenable until it speaks)
+  // and, while a continuation is being captured, the audio it continues.
+  let speculative: { turnId: string; samples: Float32Array; softEndedAtMs: number } | undefined;
+  let continuationPrefix: Float32Array | undefined;
 
   const processTurn = async (turn: DuplexTurn, samples: Float32Array): Promise<void> => {
     try {
@@ -256,18 +285,54 @@ export async function runListen(
         continue;
       }
       for (const event of await vad.push(frame.samples, frame.timestampMs)) {
-        // An interruption is provisional until confirmed. `speech.start` fires on a single
-        // over-threshold frame — one 20ms residual-echo spike would kill the whole reply —
-        // so the turn starts (and playback stops) only on `speech.confirmed`, after
-        // minSpeechMs of voiced audio. The VAD keeps the pre-roll, so no speech is lost.
-        if (event.type === "speech.confirmed") {
-          activeTurn = session.startUserSpeech();
+        if (event.type === "speech.start") {
+          // Continuation hysteresis: resuming a soft-ended turn takes a single voiced frame,
+          // not full confirmation, because before the commitment point a wrong reopen costs
+          // an aborted speculative dispatch and nothing audible. The kernel refuses the
+          // reopen once the reply is speaking, so barge-in keeps its certified bar.
+          if (speculative && !activeTurn && frame.timestampMs - speculative.softEndedAtMs <= options.reopenMs) {
+            const resumed = session.reopen(speculative.turnId);
+            if (resumed) {
+              activeTurn = resumed;
+              continuationPrefix = speculative.samples;
+              speculative = undefined;
+            }
+          }
+        } else if (event.type === "speech.confirmed") {
+          // An interruption is provisional until confirmed. `speech.start` fires on a single
+          // over-threshold frame — one 20ms residual-echo spike would kill the whole reply —
+          // so a fresh turn starts (and playback stops) only on `speech.confirmed`, after
+          // minSpeechMs of voiced audio. The VAD keeps the pre-roll, so no speech is lost.
+          if (!activeTurn) activeTurn = session.startUserSpeech();
         } else if (event.type === "speech.dropped") {
-          session.recordFalseBargeIn();
-        } else if (event.type === "speech.end" && activeTurn && session.finalizeUserSpeech(activeTurn.id)) {
+          if (activeTurn && continuationPrefix) {
+            // A reopen that never became speech. Put the superseded dispatch back exactly
+            // as it was: same audio, soft-finalized again, still reopenable.
+            const turn = activeTurn;
+            const samples = continuationPrefix;
+            activeTurn = undefined;
+            continuationPrefix = undefined;
+            if (session.softFinalizeUserSpeech(turn.id)) {
+              speculative = { turnId: turn.id, samples, softEndedAtMs: event.timestampMs };
+              startWork(turn, samples);
+            }
+          } else {
+            session.recordFalseBargeIn();
+          }
+        } else if (event.type === "speech.end" && activeTurn) {
+          const samples = continuationPrefix ? joinAudio(continuationPrefix, event.samples) : event.samples;
+          continuationPrefix = undefined;
           const turn = activeTurn;
-          activeTurn = undefined;
-          startWork(turn, event.samples);
+          if (options.turnTaking === "speculative") {
+            if (session.softFinalizeUserSpeech(turn.id)) {
+              activeTurn = undefined;
+              speculative = { turnId: turn.id, samples, softEndedAtMs: event.timestampMs };
+              startWork(turn, samples);
+            }
+          } else if (session.finalizeUserSpeech(turn.id)) {
+            activeTurn = undefined;
+            startWork(turn, samples);
+          }
         }
       }
     }
