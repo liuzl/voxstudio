@@ -202,6 +202,45 @@ confusing than restarting the reply; it offers an explicit replay action. A
 future endpoint may resume only from a recorded, timestamped playback
 checkpoint after usability tests demonstrate that behavior is preferable.
 
+### End-of-turn commitment and speculative reopening
+
+Waiting for a long silence before finalizing a turn charges that wait to every
+reply's latency. The speculative policy ends a turn early and undoes the call
+when it was wrong, instead of paying up front for certainty:
+
+- A turn **soft-ends** after a short silence (target ~150 ms) and dispatches
+  ASR and the reply speculatively. The long conservative silence (650 ms)
+  remains the fallback policy and the hard upper bound.
+- The **commitment point** is the first synthesized audio reaching playback.
+  Until then the turn is reopenable: resumed user speech within a short window
+  (~1 s) — or a longer window (~7 s) when no assistant audio has started —
+  **reopens** the same turn rather than starting a new one.
+- Reopening keeps the turn id and increments a **revision**. All in-flight
+  work for prior revisions is aborted, and results are rejected by
+  `(turnId, revision)`, exactly as stale-turn work is rejected today.
+- Confirmation for speech that continues a reopenable turn uses a lower
+  threshold than fresh speech (about half the fresh `minSpeechMs`): continuing
+  an open turn is more plausible than starting one, and the hysteresis avoids
+  chopping a hesitating speaker into fragments.
+- Reopening never happens while the session is `speaking`. Interrupting
+  playback is the barge-in path, whose confirmation policy is certified by the
+  AEC gate and is not altered by this policy.
+
+The policy cannot become the default on feel. Required before the flip:
+measured end-to-end reply latency delta (from the timing events below), the
+false-reopen rate (a new topic wrongly merged into the previous turn), and the
+wasted-speculation rate (ASR/LLM work discarded by reopens).
+
+### Turn timing
+
+Every turn emits one `turn.timing` event when it completes or is interrupted,
+carrying millisecond offsets from the start of user speech for the points the
+turn actually reached: `vad_end`, `thinking`, `asr_done`, `speaking`,
+`tts_first_audio`, `playback_first`, plus the end reason. State transitions
+stamp their own points; engine milestones are marked explicitly by the loop
+that awaits them. The event is in-memory session telemetry; surfacing it is
+opt-in per the privacy rules below.
+
 ## VAD policy
 
 `EnergyVadSegmenter` is the tested fallback used by the first headset CLI loop.
@@ -267,8 +306,8 @@ vad.start|end       { turnId, timestampMs }
 transcript.partial|final { turnId, text, confidence? }
 response.text.delta|final { turnId, text }
 playback.started|ended|interrupted { turnId }
-timing              { turnId, captureMs, vadEndMs, asrMs, llmFirstMs,
-                       ttsFirstMs, playbackFirstMs }
+turn.timing         { turnId, endReason, offsetsMs: { vad_end, thinking,
+                       asr_done, speaking, tts_first_audio, playback_first } }
 error               { code, recoverable, turnId? }
 endpoint.capability { aec, ns, agc, route, sampleRate }
 session.snapshot    { state, currentTurnId, lastSequence }
