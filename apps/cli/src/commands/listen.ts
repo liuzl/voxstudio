@@ -99,6 +99,8 @@ export async function runListen(
     onEvent: event => {
       if (event.type === "audio.queue_overflow") {
         io.err(`listen: playback queue reached ${event.maxQueuedMs}ms; dropping audio`);
+      } else if (event.type === "turn.false_barge_in") {
+        io.err("listen: ignored a brief sound during playback (not speech)");
       }
     },
   });
@@ -213,9 +215,15 @@ export async function runListen(
         continue;
       }
       for (const event of vad.push(frame.samples, frame.timestampMs)) {
-        if (event.type === "speech.start") {
+        // An interruption is provisional until confirmed. `speech.start` fires on a single
+        // over-threshold frame — one 20ms residual-echo spike would kill the whole reply —
+        // so the turn starts (and playback stops) only on `speech.confirmed`, after
+        // minSpeechMs of voiced audio. The VAD keeps the pre-roll, so no speech is lost.
+        if (event.type === "speech.confirmed") {
           activeTurn = session.startUserSpeech();
-        } else if (activeTurn && session.finalizeUserSpeech(activeTurn.id)) {
+        } else if (event.type === "speech.dropped") {
+          session.recordFalseBargeIn();
+        } else if (event.type === "speech.end" && activeTurn && session.finalizeUserSpeech(activeTurn.id)) {
           const turn = activeTurn;
           activeTurn = undefined;
           startWork(turn, event.samples);

@@ -332,8 +332,14 @@ supported macOS hardware. Browser and CLI metrics are reported separately.
    LLM-to-TTS pipelining while keeping one-shot fallbacks.
 4. **macOS audio helper**: `platforms/macos-audio/vox-audio-host.swift` now
    builds a narrow stdin/stdout PCM helper using `AVAudioEngine` Voice
-   Processing; `vox listen --speaker-duplex` selects it. Real-device AEC,
-   route changes, capability reporting, and release packaging remain required
+   Processing; `vox listen --speaker-duplex` selects it. The empirical gate
+   (`bun run measure:aec`) measures voice-processing attenuation, confirmed
+   self-interruption rate, capture-to-mute latency, and missed barge-ins on
+   real hardware, and refuses to pass an incomplete or synthetic-stimulus run.
+   Interruption is now provisional as specified above: `listen` stops playback
+   on `speech.confirmed` (minSpeechMs of voiced audio), and an unconfirmed
+   trigger is recorded as `false_barge_in` while playback continues. Route
+   changes, capability reporting, and release packaging remain required
    before speaker duplex is declared supported.
 5. **Web Studio realtime**: add a browser endpoint and LiveKit room/gateway,
    reusing the same session events, policy, and provider adapters.

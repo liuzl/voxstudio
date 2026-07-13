@@ -28,7 +28,7 @@ export interface DuplexStateEvent {
 }
 
 export interface DuplexTurnEvent {
-  type: "turn.started" | "vad.end" | "turn.interrupted" | "turn.completed";
+  type: "turn.started" | "vad.end" | "turn.interrupted" | "turn.completed" | "turn.false_barge_in";
   turnId: string;
   reason?: InterruptionReason;
 }
@@ -84,6 +84,25 @@ export interface SpeechStarted {
   rms: number;
 }
 
+/**
+ * Emitted once per utterance, when its accumulated voiced audio reaches `minSpeechMs`.
+ * `speech.start` fires on the first over-threshold frame, so a single 20ms transient — a
+ * residual echo spike, a keyboard tap — raises it. Interruption policy must wait for this
+ * event: a provisional barge-in is not real until enough voiced audio has confirmed it.
+ */
+export interface SpeechConfirmed {
+  type: "speech.confirmed";
+  timestampMs: number;
+  startedAtMs: number;
+}
+
+/** The utterance ended below `minSpeechMs` of voiced audio: noise, not speech. */
+export interface SpeechDropped {
+  type: "speech.dropped";
+  timestampMs: number;
+  startedAtMs: number;
+}
+
 export interface SpeechEnded {
   type: "speech.end";
   timestampMs: number;
@@ -92,7 +111,7 @@ export interface SpeechEnded {
   samples: Float32Array;
 }
 
-export type VadSegmentEvent = SpeechStarted | SpeechEnded;
+export type VadSegmentEvent = SpeechStarted | SpeechConfirmed | SpeechDropped | SpeechEnded;
 
 function durationMs(audio: OutputAudioFrame): number {
   if (!Number.isFinite(audio.sampleRate) || audio.sampleRate <= 0) {
@@ -174,6 +193,7 @@ export class EnergyVadSegmenter {
   private readonly preRoll: Float32Array[] = [];
   private readonly speech: Float32Array[] = [];
   private speaking = false;
+  private confirmed = false;
   private speechSamples = 0;
   private voicedSamples = 0;
   private silenceSamplesSeen = 0;
@@ -227,6 +247,7 @@ export class EnergyVadSegmenter {
     this.preRoll.length = 0;
     this.speech.length = 0;
     this.speaking = false;
+    this.confirmed = false;
     this.speechSamples = 0;
     this.voicedSamples = 0;
     this.silenceSamplesSeen = 0;
@@ -243,11 +264,15 @@ export class EnergyVadSegmenter {
       this.silenceSamplesSeen += samples.length;
     }
     const events: VadSegmentEvent[] = [];
+    if (!this.confirmed && this.voicedSamples >= this.minSpeechSamples) {
+      this.confirmed = true;
+      events.push({ type: "speech.confirmed", timestampMs, startedAtMs: this.startedAtMs });
+    }
     const reason = this.speechSamples >= this.maxSpeechSamples
       ? "max_duration"
       : this.silenceSamplesSeen >= this.silenceSamples ? "silence" : undefined;
     if (!reason) return events;
-    if (this.voicedSamples >= this.minSpeechSamples) {
+    if (this.confirmed) {
       events.push({
         type: "speech.end",
         timestampMs,
@@ -255,6 +280,10 @@ export class EnergyVadSegmenter {
         reason,
         samples: joinSamples(this.speech),
       });
+    } else {
+      // Ended below minSpeechMs of voiced audio. Without this event, a consumer that acted
+      // on speech.start has no way to learn the sound was never speech.
+      events.push({ type: "speech.dropped", timestampMs, startedAtMs: this.startedAtMs });
     }
     this.reset();
     return events;
@@ -375,6 +404,16 @@ export class DuplexSession {
     this.emit({ type: "turn.completed", turnId });
     this.active = undefined;
     this.transition("listening");
+    return true;
+  }
+
+  /**
+   * Record that a provisional interruption turned out not to be speech. Playback was never
+   * stopped — the point of confirming first — so this only annotates the surviving turn.
+   */
+  recordFalseBargeIn(): boolean {
+    if (this.currentState !== "speaking" || !this.active) return false;
+    this.emit({ type: "turn.false_barge_in", turnId: this.active.id });
     return true;
   }
 

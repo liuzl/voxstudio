@@ -36,13 +36,13 @@ describe("barge-in detection", () => {
     expect(bargeIns(capture)).toHaveLength(1);
   });
 
-  test("counts a burst too short to become an utterance, because the product interrupts on it", () => {
-    // `speech.start` fires on the first frame over the threshold and `listen` aborts the
-    // active turn right there; `minSpeechMs` only decides whether the finished segment is
-    // sent to ASR. So a 100ms burst kills the agent's reply without ever producing one.
-    // This counts as a self-interruption, and the measurement must not hide it.
+  test("ignores a burst shorter than the confirmation duration, as the product now does", () => {
+    // Before the provisional-barge-in policy, `listen` aborted the turn on `speech.start` —
+    // the first frame over the threshold — so this 100ms burst killed a whole reply. It now
+    // interrupts only on `speech.confirmed` (minSpeechMs of voiced audio), which a transient
+    // echo spike never reaches; the burst is recorded as a false barge-in instead.
     const capture = concat([speech(1_000, 0), speech(100, 0.2), speech(2_000, 0)]);
-    expect(bargeIns(capture)).toHaveLength(1);
+    expect(bargeIns(capture)).toEqual([]);
   });
 });
 
@@ -115,5 +115,18 @@ describe("gate verdict", () => {
   test("refuses to pass when self-interruption has no silent baseline to subtract", () => {
     const gate = evaluateGate(results({ "self-interruption": { echoAttributablePerMinute: Number.NaN } }), real);
     expect(gate.status).toBe("incomplete");
+  });
+
+  test("never passes a quick run, even when every scenario happens to look clean", () => {
+    // A few seconds of echo cannot establish a per-minute rate. The convenience flag must
+    // not become a way to certify a route.
+    const gate = evaluateGate(results(), real, true);
+    expect(gate.status).toBe("incomplete");
+    expect(gate.reasons[0]).toContain("--quick");
+  });
+
+  test("still fails a quick run that self-interrupts, so a smoke test can catch a regression", () => {
+    const gate = evaluateGate(results({ "self-interruption": { echoAttributablePerMinute: 3 } }), real, true);
+    expect(gate.status).toBe("fail");
   });
 });

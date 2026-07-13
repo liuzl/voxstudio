@@ -34,6 +34,22 @@ product path and not a detector invented for the test.
 bun run measure:aec --far-end path/to/real-speech-48k-mono.wav --trials 12
 ```
 
+For the edit loop there is a smoke mode that finishes in under 20 seconds:
+
+```sh
+bun run measure:aec --quick --far-end path/to/real-speech-48k-mono.wav
+```
+
+`--quick` shortens every scenario, skips the bypass A/B and double-talk, and uses a
+longer convergence trim (dense speech converges the canceller in ~5s, and a short
+measurement window must sit entirely past that). It exists to catch a broken endpoint
+fast; it can never produce a `pass` verdict.
+
+Barge-ins are scored at `speech.confirmed` — the CLI interrupts playback only after
+`minSpeechMs` of voiced audio, so a transient echo spike is recorded as a
+`false_barge_in` while the reply keeps playing. `bargeIns()` counts what the product
+acts on; `vadStarts()` reports raw first-frame triggers as a diagnostic.
+
 The room must be quiet, and the operator speaks when they hear the two-tone cue.
 The run writes `report.json`, the per-scenario captures, and a verdict to
 `outputs/aec/<timestamp>/`, and **exits non-zero unless the verdict is `pass`** —

@@ -138,10 +138,13 @@ macOS arm64, Linux x64, and Windows x64. Signed release artifacts, Web, MCP, des
 rewriting, and a duplex conversation loop are not built yet.
 
 The duplex conversation session kernel and the headset-oriented `vox listen` command are
-implemented and tested with simulated audio. `listen` currently uses an energy-VAD fallback and
-has no speaker AEC. It suppresses microphone input during playback by default; `--barge-in`
-requires headphones or a headset. Native speaker-mode AEC, Silero ONNX VAD, and the Web Studio
-remain separate measured delivery phases.
+implemented and tested with simulated audio. `listen` uses an energy-VAD fallback with a
+provisional barge-in policy: playback stops only after `minSpeechMs` of voiced audio confirms
+the interruption, and an unconfirmed trigger is recorded as a `false_barge_in` while the reply
+keeps playing. It suppresses microphone input during playback by default; `--barge-in` requires
+headphones or a headset. `--speaker-duplex` uses the macOS voice-processing helper, gated by a
+real-hardware measurement harness (`bun run measure:aec`, see `platforms/macos-audio/`); the
+formal gate run, Silero ONNX VAD, and the Web Studio remain separate measured delivery phases.
 
 ## Related
 

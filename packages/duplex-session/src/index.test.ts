@@ -30,20 +30,44 @@ describe("bounded audio queue", () => {
 });
 
 describe("energy VAD segmentation", () => {
-  test("keeps pre-roll, ends after silence, and bounds short noise", () => {
+  test("keeps pre-roll, confirms after enough voiced audio, and ends after silence", () => {
     const vad = new EnergyVadSegmenter({
-      sampleRate: 1_000, threshold: 0.1, preRollMs: 20, minSpeechMs: 20, silenceMs: 30, maxSpeechMs: 200,
+      sampleRate: 1_000, threshold: 0.1, preRollMs: 20, minSpeechMs: 30, silenceMs: 30, maxSpeechMs: 200,
     });
     expect(vad.push(new Float32Array(20), 0)).toEqual([]);
     const started = vad.push(new Float32Array(20).fill(0.2), 20);
     expect(started).toEqual([{ type: "speech.start", timestampMs: 20, rms: expect.any(Number) }]);
-    expect(vad.push(new Float32Array(20).fill(0.2), 40)).toEqual([]);
+    expect(vad.push(new Float32Array(20).fill(0.2), 40)).toEqual([
+      { type: "speech.confirmed", timestampMs: 40, startedAtMs: 20 },
+    ]);
     expect(vad.push(new Float32Array(20), 60)).toEqual([]);
     const ended = vad.push(new Float32Array(20), 80);
     expect(ended).toHaveLength(1);
     const event = ended[0];
     expect(event).toMatchObject({ type: "speech.end", reason: "silence", startedAtMs: 20 });
     if (event?.type === "speech.end") expect(event.samples.length).toBe(100);
+  });
+
+  test("confirms only once per utterance", () => {
+    const vad = new EnergyVadSegmenter({ sampleRate: 1_000, threshold: 0.1, minSpeechMs: 10, silenceMs: 100, preRollMs: 0 });
+    expect(vad.push(new Float32Array(20).fill(0.2), 0).map(event => event.type))
+      .toEqual(["speech.start", "speech.confirmed"]);
+    expect(vad.push(new Float32Array(20).fill(0.2), 20)).toEqual([]);
+  });
+
+  test("reports a burst that ends below the minimum voiced duration as dropped, not speech", () => {
+    const vad = new EnergyVadSegmenter({
+      sampleRate: 1_000, threshold: 0.1, preRollMs: 0, minSpeechMs: 50, silenceMs: 30, maxSpeechMs: 200,
+    });
+    expect(vad.push(new Float32Array(20).fill(0.2), 0)).toEqual([
+      { type: "speech.start", timestampMs: 0, rms: expect.any(Number) },
+    ]);
+    expect(vad.push(new Float32Array(20), 20)).toEqual([]);
+    expect(vad.push(new Float32Array(20), 40)).toEqual([
+      { type: "speech.dropped", timestampMs: 40, startedAtMs: 0 },
+    ]);
+    // The segmenter is reusable after a drop.
+    expect(vad.push(new Float32Array(20).fill(0.2), 60).map(event => event.type)).toEqual(["speech.start"]);
   });
 
   test("ends a continuous utterance at its maximum duration", () => {
@@ -112,6 +136,22 @@ describe("duplex session", () => {
     expect(events.find(event => event.type === "turn.interrupted")).toMatchObject({
       turnId: first.id, reason: "barge_in",
     });
+  });
+
+  test("records a false barge-in against the speaking turn without stopping it", () => {
+    const { value, events } = session();
+    value.start();
+    const turn = value.startUserSpeech();
+    value.finalizeUserSpeech(turn.id);
+    value.startThinking(turn.id);
+    value.startSpeaking(turn.id);
+    expect(value.recordFalseBargeIn()).toBe(true);
+    expect(value.state).toBe("speaking");
+    expect(turn.signal.aborted).toBe(false);
+    expect(events.find(event => event.type === "turn.false_barge_in")).toMatchObject({ turnId: turn.id });
+    value.complete(turn.id);
+    // Outside of speaking there is no playback to protect, so there is nothing to record.
+    expect(value.recordFalseBargeIn()).toBe(false);
   });
 
   test("rejects stale turn work and reports queue overflow", () => {

@@ -1,6 +1,6 @@
 import { mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { readWav, writeWav } from "@voxstudio/audio";
+import { readWav, trimEdgeSilence, writeWav } from "@voxstudio/audio";
 import { EnergyVadSegmenter, type VadSegmentEvent } from "@voxstudio/duplex-session";
 
 // Speaker-mode AEC gate for `vox listen --speaker-duplex`. It drives the real
@@ -26,7 +26,17 @@ interface Options {
   volume: number;
   trials: number;
   scenarios: string[];
+  seconds?: number;
+  quick: boolean;
 }
+
+// A smoke run for the edit loop: does the endpoint still start, cancel, and cancel echo at
+// all? It is far too short to estimate a rate like "1.4 self-interruptions per minute", and
+// it skips double-talk because that needs a person. It can never pass the gate — see
+// `evaluateGate` — it exists to fail fast, not to certify.
+const quickSeconds = 8; // 5s for the canceller to converge, 3s measured
+const quickTrials = 1;
+const quickScenarios = ["noise-floor", "echo", "capture-to-mute"];
 
 interface CaptureChunk {
   samples: Float32Array;
@@ -51,16 +61,26 @@ function parse(argv: string[]): Options {
     volume: 45,
     trials: 5,
     scenarios: ["noise-floor", "echo", "capture-to-mute", "double-talk"],
+    quick: false,
   };
+  let scenariosSet = false;
+  let trialsSet = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] as string;
     const value = (): string => argv[++index] ?? fail(`aec-measure: ${arg} requires a value`);
     if (arg === "--far-end") options.farEnd = value();
     else if (arg === "--out") options.outDir = value();
     else if (arg === "--volume") options.volume = Number(value());
-    else if (arg === "--trials") options.trials = Number(value());
-    else if (arg === "--scenario") options.scenarios = value().split(",");
+    else if (arg === "--seconds") options.seconds = Number(value());
+    else if (arg === "--quick") options.quick = true;
+    else if (arg === "--trials") { options.trials = Number(value()); trialsSet = true; }
+    else if (arg === "--scenario") { options.scenarios = value().split(","); scenariosSet = true; }
     else fail(`aec-measure: unknown option ${arg}`);
+  }
+  if (options.quick) {
+    options.seconds ??= quickSeconds;
+    if (!trialsSet) options.trials = quickTrials;
+    if (!scenariosSet) options.scenarios = quickScenarios;
   }
   if (!Number.isInteger(options.volume) || options.volume < 0 || options.volume > 100) {
     fail("aec-measure: --volume must be an integer between 0 and 100");
@@ -68,7 +88,19 @@ function parse(argv: string[]): Options {
   if (!Number.isInteger(options.trials) || options.trials <= 0) {
     fail("aec-measure: --trials must be a positive integer");
   }
+  if (options.seconds !== undefined && (!Number.isFinite(options.seconds) || options.seconds <= 0)) {
+    fail("aec-measure: --seconds must be a positive number");
+  }
   return options;
+}
+
+/** Repeat `samples` until it covers `milliseconds`, so a short far-end still drives a scenario. */
+function tile(samples: Float32Array, milliseconds: number): Float32Array {
+  const length = Math.ceil(playbackRate * milliseconds / 1_000);
+  if (samples.length === 0) fail("aec-measure: the far-end is empty");
+  const output = new Float32Array(length);
+  for (let index = 0; index < length; index += 1) output[index] = samples[index % samples.length] as number;
+  return output;
 }
 
 function rmsDb(samples: Float32Array): number {
@@ -95,6 +127,22 @@ function percentile(values: number[], quantile: number): number {
   const high = Math.ceil(position);
   const weight = position - low;
   return (sorted[low] as number) * (1 - weight) + (sorted[high] as number) * weight;
+}
+
+/** Engine start-up. Enough for a capture with no playback in it. */
+const startupMs = 1_000;
+
+/**
+ * An adaptive canceller has not converged when playback begins; until it does, it leaks echo
+ * that the VAD counts as speech. Discarding only start-up leaves those artifacts in, which
+ * inflates the self-interruption rate — invisibly in a long run, catastrophically in a short
+ * one. Every consumer of an echo capture must trim by this, and by the same amount, or the
+ * same recording yields different rates depending on who is counting.
+ */
+const aecWarmupMs = 3_000;
+
+function steadyState(capture: Float32Array, skipMs = startupMs): Float32Array {
+  return capture.subarray(Math.min(Math.round(captureRate * skipMs / 1_000), capture.length));
 }
 
 function join32(parts: Float32Array[]): Float32Array {
@@ -157,16 +205,30 @@ export function scoreDoubleTalk(cues: Cue[], detections: number[], earlyMs = 200
   };
 }
 
-/** Score a capture with the CLI's VAD. Every `speech.start` is a barge-in the product would act on. */
-export function bargeIns(samples: Float32Array, threshold = vadDefaults.threshold): number[] {
+function vadEvents(samples: Float32Array, threshold: number, type: VadSegmentEvent["type"]): number[] {
   const vad = new EnergyVadSegmenter({ ...vadDefaults, threshold });
-  const starts: number[] = [];
+  const timestamps: number[] = [];
   for (let offset = 0; offset + captureFrameSamples <= samples.length; offset += captureFrameSamples) {
     const timestampMs = 1_000 * offset / captureRate;
-    const events: VadSegmentEvent[] = vad.push(samples.subarray(offset, offset + captureFrameSamples), timestampMs);
-    for (const event of events) if (event.type === "speech.start") starts.push(event.timestampMs);
+    for (const event of vad.push(samples.subarray(offset, offset + captureFrameSamples), timestampMs)) {
+      if (event.type === type) timestamps.push(event.timestampMs);
+    }
   }
-  return starts;
+  return timestamps;
+}
+
+/**
+ * Score a capture with the CLI's VAD. Since the provisional-barge-in policy, `listen`
+ * interrupts playback on `speech.confirmed` — after minSpeechMs of voiced audio — not on
+ * `speech.start`. Counting starts here would fail the product for spikes it now ignores.
+ */
+export function bargeIns(samples: Float32Array, threshold = vadDefaults.threshold): number[] {
+  return vadEvents(samples, threshold, "speech.confirmed");
+}
+
+/** Raw first-frame triggers: a diagnostic for how noisy the detector input is, not a product metric. */
+export function vadStarts(samples: Float32Array, threshold = vadDefaults.threshold): number[] {
+  return vadEvents(samples, threshold, "speech.start");
 }
 
 async function startHost(voiceProcessing: boolean): Promise<HostSession> {
@@ -203,7 +265,7 @@ async function startHost(voiceProcessing: boolean): Promise<HostSession> {
     await Bun.sleep(20);
   }
   // Let the capture path settle before a scenario reads levels from it.
-  await Bun.sleep(500);
+  await Bun.sleep(250);
 
   return {
     write: async (samples: Float32Array) => {
@@ -251,6 +313,16 @@ async function playFarEnd(
       await Bun.sleep(5);
     }
   }
+}
+
+/** A constant-level tone complex. Used where a scenario needs an unambiguous "loud" and "silent". */
+function steadyStimulus(): Float32Array {
+  const samples = new Float32Array(playbackRate);
+  for (let index = 0; index < samples.length; index += 1) {
+    const t = index / playbackRate;
+    samples[index] = 0.3 * (Math.sin(2 * Math.PI * 220 * t) + 0.5 * Math.sin(2 * Math.PI * 440 * t)) / 1.5;
+  }
+  return samples;
 }
 
 /** Synthetic far-end used only when no real TTS WAV is supplied: speech-shaped, deterministic. */
@@ -308,9 +380,10 @@ function thresholdSweep(echoCapture: Float32Array, doubleTalk: ScenarioResult): 
   const guards = doubleTalk.guards ?? [];
   const originMs = doubleTalk.captureOriginMs ?? 0;
   if (!capture || !cues) return [];
-  const echoSeconds = echoCapture.length / captureRate;
+  const echo = steadyState(echoCapture, aecWarmupMs);
+  const echoSeconds = echo.length / captureRate;
   return [0.005, 0.01, 0.015, 0.02, 0.03, 0.05].map(threshold => {
-    const selfInterruptions = bargeIns(echoCapture, threshold).length;
+    const selfInterruptions = bargeIns(echo, threshold).length;
     const detections = bargeIns(capture, threshold)
       .map(value => value + originMs)
       .filter(value => !guards.some(guard => value >= guard.startMs && value <= guard.endMs));
@@ -339,7 +412,7 @@ async function noiseFloor(durationMs: number): Promise<ScenarioResult> {
   const host = await startHost(true);
   await Bun.sleep(durationMs);
   const capture = await host.stop();
-  const steady = capture.subarray(Math.min(captureRate, capture.length));
+  const steady = steadyState(capture);
   const starts = bargeIns(steady);
   const seconds = steady.length / captureRate;
   return {
@@ -355,15 +428,14 @@ async function noiseFloor(durationMs: number): Promise<ScenarioResult> {
 }
 
 /** Far-end only. With voice processing on this is residual echo; with it off, raw echo. */
-async function echo(farEnd: Float32Array, voiceProcessing: boolean): Promise<ScenarioResult> {
+async function echo(farEnd: Float32Array, voiceProcessing: boolean, warmupMs = aecWarmupMs): Promise<ScenarioResult> {
   const label = voiceProcessing ? "echo" : "echo-bypass";
   console.log(`\n[${label}] 扬声器播放远端语音 ${(farEnd.length / playbackRate).toFixed(1)}s，请保持安静、不要说话…`);
   const host = await startHost(voiceProcessing);
   await playFarEnd(host, farEnd, 200);
   await Bun.sleep(600); // let the tail drain through the capture path
   const capture = await host.stop();
-  // Drop the first second: engine start-up and AEC convergence are not steady state.
-  const steady = capture.subarray(Math.min(captureRate, capture.length));
+  const steady = steadyState(capture, warmupMs);
   const starts = bargeIns(steady);
   const seconds = steady.length / captureRate;
   return {
@@ -376,6 +448,7 @@ async function echo(farEnd: Float32Array, voiceProcessing: boolean): Promise<Sce
       echoPeakFrameDb: Math.max(...frameLevelsDb(steady)),
       falseBargeIns: starts.length,
       falseBargeInsPerMinute: seconds > 0 ? starts.length * 60 / seconds : 0,
+      rawVadStarts: vadStarts(steady).length,
     },
   };
 }
@@ -393,7 +466,7 @@ async function echo(farEnd: Float32Array, voiceProcessing: boolean): Promise<Sce
  * builds that backlog first, and stops feeding at the signal because a real barge-in
  * aborts the TTS stream.
  */
-async function captureToMute(farEnd: Float32Array, trials: number, volume: number): Promise<ScenarioResult> {
+async function captureToMute(trials: number, volume: number): Promise<ScenarioResult> {
   console.log(`\n[capture-to-mute] ${trials} 次打断（旁路模式，麦克风直接听扬声器，音量 ${volume}），请保持安静…`);
   // This scenario measures the render path, so its volume does not have to match the
   // echo A/B. It is raised only so the speaker sits far enough above the unprocessed
@@ -402,28 +475,40 @@ async function captureToMute(farEnd: Float32Array, trials: number, volume: numbe
   const latencies: number[] = [];
   const invalid: string[] = [];
   let firstBufferMutes = 0;
-  let captureBufferMs = 0;
-  for (let trial = 0; trial < trials; trial += 1) {
-    const host = await startHost(false);
-    // The bypass path has no noise suppression, so its floor sits far above the AEC
-    // path's. "Quiet" has to be anchored to that measured floor: a fixed drop from the
-    // playing level can land below it and then silence is never detectable. Use a low
-    // percentile so a single transient (a fan, a keystroke) does not raise the floor.
-    await Bun.sleep(1_000);
-    const floorDb = percentile(host.chunks.map(chunk => rmsDb(chunk.samples)), 0.2);
-    const quietDb = floorDb + 6;
-    captureBufferMs = 1_000 * (host.chunks[0]?.samples.length ?? 0) / captureRate;
 
+  // One host serves every trial. The helper resumes playback after a clear, so restarting
+  // it per trial only paid for engine start-up and a fresh floor measurement each time.
+  const host = await startHost(false);
+  // The bypass path has no noise suppression, so its floor sits far above the AEC path's.
+  // "Quiet" has to be anchored to that measured floor: a fixed drop from the playing level
+  // can land below it and then silence is never detectable. Use a low percentile so a
+  // single transient (a fan, a keystroke) does not raise the floor.
+  await Bun.sleep(1_000);
+  const floorDb = percentile(host.chunks.map(chunk => rmsDb(chunk.samples)), 0.2);
+  const quietDb = floorDb + 6;
+  const captureBufferMs = 1_000 * (host.chunks[0]?.samples.length ?? 0) / captureRate;
+
+  // Deliberately NOT the far-end speech. This measures when the speaker falls silent, and
+  // speech has pauses: if the clear signal lands in one, the level before and after it are
+  // the same and the trial says nothing. A steady stimulus makes "it stopped" unambiguous.
+  // The render path does not care what it is rendering, so realism buys nothing here.
+  const leadMs = 3_000;
+  const signalAtElapsedMs = 1_200;
+  const stream = tile(steadyStimulus(), leadMs + signalAtElapsedMs + 1_000);
+
+  for (let trial = 0; trial < trials; trial += 1) {
+    const seen = host.chunks.length;
     let signalAtMs = 0;
-    await playFarEnd(host, farEnd, 3_000, elapsed => {
-      if (elapsed < 2_500) return true;
+    // Play just long enough to establish a steady speaker level and a backlog; the lead
+    // reproduces the real case of a long synthesis piece already handed to the host.
+    await playFarEnd(host, stream, leadMs, elapsed => {
+      if (elapsed < signalAtElapsedMs) return true;
       signalAtMs = performance.now();
       host.clearPlayback();
       return false;
     });
-    await Bun.sleep(1_500);
-    const chunks = [...host.chunks];
-    await host.stop();
+    await Bun.sleep(1_000);
+    const chunks = host.chunks.slice(seen);
 
     const active = chunks.filter(chunk => chunk.arrivedAtMs >= signalAtMs - 500 && chunk.arrivedAtMs < signalAtMs);
     const activeDb = rmsDb(join32(active.map(chunk => chunk.samples)));
@@ -461,6 +546,10 @@ async function captureToMute(farEnd: Float32Array, trials: number, volume: numbe
       ? `未观察到静音 (playing ${activeDb.toFixed(1)}dB, floor ${floorDb.toFixed(1)}dB)`
       : `${muteAtMs.toFixed(0)}ms (playing ${activeDb.toFixed(1)}dB → quiet <${quietDb.toFixed(1)}dB)`}`);
   }
+  // The trials share one host, so it outlives the loop. Leaving it open holds the child's
+  // stdin and the process never exits.
+  await host.stop();
+
   return {
     scenario: "capture-to-mute",
     metrics: {
@@ -597,11 +686,20 @@ export const syntheticSource = "synthetic:v1";
  * A run that did not gather the evidence is `incomplete`, never `pass`. Silence about a
  * missing measurement is how an unmeasured endpoint gets declared supported.
  */
-export function evaluateGate(results: ScenarioResult[], farEndSource: string): { status: GateStatus; reasons: string[] } {
+export function evaluateGate(
+  results: ScenarioResult[],
+  farEndSource: string,
+  quick = false,
+): { status: GateStatus; reasons: string[] } {
   const find = (scenario: string): Record<string, number | string | boolean> | undefined =>
     results.find(result => result.scenario === scenario)?.metrics;
   const reasons: string[] = [];
   let failed = false;
+
+  // A few seconds of echo cannot estimate a rate of roughly one event per minute. Quick runs
+  // exist to catch a broken endpoint fast; letting one certify a route would be the whole
+  // point of the gate defeated by its own convenience flag.
+  if (quick) reasons.push("this was a --quick smoke run; it is too short to establish a rate");
 
   // The synthetic stimulus keeps the harness runnable without an engine, but cancellation
   // and an energy VAD both behave differently on real speech spectra and dynamics. It can
@@ -640,13 +738,23 @@ async function loadFarEnd(path: string | undefined): Promise<{ samples: Float32A
   if (wav.sampleRate !== playbackRate) {
     fail(`aec-measure: --far-end must be ${playbackRate}Hz mono; ${path} is ${wav.sampleRate}Hz`);
   }
-  return { samples: wav.samples, source: path };
+  // Synthesized speech opens and closes with near-silence. Left in, a scenario that samples
+  // a fixed window can land entirely inside it and measure a speaker that was never playing.
+  const samples = trimEdgeSilence(wav.samples, wav.sampleRate);
+  if (samples.length === 0) fail(`aec-measure: ${path} contains no speech`);
+  return { samples, source: path };
 }
 
 async function main(): Promise<void> {
   if (process.platform !== "darwin") fail("speaker-mode AEC measurement requires macOS");
   const options = parse(process.argv.slice(2));
   const farEnd = await loadFarEnd(options.farEnd);
+  // Level scenarios can run on a slice; capture-to-mute and double-talk build their own
+  // streams. A shorter slice trades statistical power for wall clock, which is why a run
+  // that used one cannot pass the gate.
+  const sample = options.seconds === undefined
+    ? farEnd.samples
+    : farEnd.samples.subarray(0, Math.min(farEnd.samples.length, Math.round(playbackRate * options.seconds)));
   const route = await audioRoute();
   const restoreVolume = await systemVolume();
 
@@ -657,7 +765,7 @@ async function main(): Promise<void> {
   console.log("speaker-mode AEC measurement");
   console.log(`  输出路由: ${route.output}`);
   console.log(`  输入路由: ${route.input}`);
-  console.log(`  远端素材: ${farEnd.source} (${(farEnd.samples.length / playbackRate).toFixed(1)}s)`);
+  console.log(`  远端素材: ${farEnd.source} (用 ${(sample.length / playbackRate).toFixed(1)}s${options.quick ? "，quick 冒烟模式" : ""})`);
   console.log(`  系统音量: ${options.volume} (测量期间固定，结束后恢复为 ${restoreVolume})`);
   console.log(`  报告目录: ${outDir}`);
 
@@ -670,17 +778,24 @@ async function main(): Promise<void> {
     let floorDb: number | undefined;
     let baselineFalsePerMinute = Number.NaN;
     if (options.scenarios.includes("noise-floor")) {
-      const result = await noiseFloor(1_000 * farEnd.samples.length / playbackRate);
+      // The floor does not involve the canceller, so a quick run keeps it short; the full
+      // run matches the echo duration so the false-trigger baselines are comparable.
+      const result = await noiseFloor(options.quick ? 3_000 : 1_000 * sample.length / playbackRate);
       floorDb = result.metrics.noiseFloorDb as number;
       baselineFalsePerMinute = result.metrics.falseBargeInsPerMinute as number;
       results.push(result);
     }
     if (options.scenarios.includes("echo")) {
-      const processed = await echo(farEnd.samples, true);
-      const bypass = await echo(farEnd.samples, false);
-      results.push(processed, bypass);
+      // Convergence with dense speech material takes ~5s (measured); a short window must
+      // sit entirely past it or it reports the convergence tail as leakage.
+      const processed = await echo(sample, true, options.quick ? 5_000 : aecWarmupMs);
+      // The bypass arm exists for the attenuation A/B, a certification number. A smoke run
+      // answers "is echo still being cancelled at all", which the processed arm alone does
+      // against the noise floor — so quick skips the second 40s-class playback entirely.
+      const bypass = options.quick ? undefined : await echo(sample, false);
+      results.push(processed);
+      if (bypass) results.push(bypass);
       const processedDb = processed.metrics.echoLevelDb as number;
-      const bypassDb = bypass.metrics.echoLevelDb as number;
       // Voice Processing applies AEC, noise suppression, and automatic gain control as one
       // unit, and none of them can be switched off individually. So this A/B measures the
       // attenuation of the whole voice-processing path, not the echo canceller in isolation:
@@ -692,29 +807,33 @@ async function main(): Promise<void> {
       // attenuation, so it becomes a lower bound. Without a measured floor there is nothing
       // to make that judgement against, and the harness says so rather than inventing one.
       const atFloor = floorDb === undefined ? undefined : processedDb <= floorDb + 3;
-      results.push({
-        scenario: "voice-processing-attenuation",
-        metrics: {
-          attenuationDb: bypassDb - processedDb,
-          bypassEchoDb: bypassDb,
-          residualEchoDb: processedDb,
-          noiseFloorDb: floorDb ?? Number.NaN,
-          residualAtNoiseFloor: atFloor ?? false,
-          isAecOnlyErle: false,
-          note: atFloor === undefined
-            ? "no noise floor was measured in this run; whether the residual is floor-limited is unknown"
-            : atFloor
-              ? "whole voice-processing path (AEC+NS+AGC); residual sits at the noise floor, so the true attenuation is at least this value"
-              : "whole voice-processing path (AEC+NS+AGC); residual is above the noise floor, so this is a direct measurement",
-        },
-      });
+      if (bypass) {
+        const bypassDb = bypass.metrics.echoLevelDb as number;
+        results.push({
+          scenario: "voice-processing-attenuation",
+          metrics: {
+            attenuationDb: bypassDb - processedDb,
+            bypassEchoDb: bypassDb,
+            residualEchoDb: processedDb,
+            noiseFloorDb: floorDb ?? Number.NaN,
+            residualAtNoiseFloor: atFloor ?? false,
+            isAecOnlyErle: false,
+            note: atFloor === undefined
+              ? "no noise floor was measured in this run; whether the residual is floor-limited is unknown"
+              : atFloor
+                ? "whole voice-processing path (AEC+NS+AGC); residual sits at the noise floor, so the true attenuation is at least this value"
+                : "whole voice-processing path (AEC+NS+AGC); residual is above the noise floor, so this is a direct measurement",
+          },
+        });
+      }
       // The energy VAD fires on ambient noise on its own. Only the excess over the silent
       // baseline is attributable to echo leaking through the canceller.
       //
-      // This is a detector trigger rate, not a count of interruptions a user would live
-      // through: in production the first `speech.start` aborts the turn and stops playback,
-      // so the echo that caused the next trigger would never have been played. Read it as
-      // "how often a minute of agent speech would be killed by its own echo".
+      // "Barge-ins" here are confirmed ones — the provisional policy in `listen` only stops
+      // playback after minSpeechMs of voiced audio, so this counts what the product would
+      // actually act on. It remains a rate under continuous playback: in production the
+      // first confirmed trigger stops the speaker, so read it as "how often a minute of
+      // agent speech would be killed by its own echo".
       const echoPerMinute = processed.metrics.falseBargeInsPerMinute as number;
       results.push({
         scenario: "self-interruption",
@@ -724,13 +843,15 @@ async function main(): Promise<void> {
           echoAttributablePerMinute: Number.isNaN(baselineFalsePerMinute)
             ? Number.NaN
             : Math.max(0, echoPerMinute - baselineFalsePerMinute),
-          bypassPerMinute: bypass.metrics.falseBargeInsPerMinute as number,
-          note: "detector trigger rate under continuous playback; production stops playback on the first trigger",
+          rawVadStartsPerMinute: (processed.metrics.rawVadStarts as number) * 60
+            / (processed.metrics.capturedSeconds as number),
+          ...(bypass ? { bypassPerMinute: bypass.metrics.falseBargeInsPerMinute as number } : {}),
+          note: "confirmed barge-in rate under continuous playback; production stops playback on the first one",
         },
       });
     }
     if (options.scenarios.includes("capture-to-mute")) {
-      results.push(await captureToMute(farEnd.samples, options.trials, Math.max(options.volume, 70)));
+      results.push(await captureToMute(options.trials, Math.max(options.volume, 70)));
       await setSystemVolume(options.volume);
     }
     if (options.scenarios.includes("double-talk")) {
@@ -746,13 +867,15 @@ async function main(): Promise<void> {
   for (const result of results) {
     if (result.capture) writeFileSync(join(outDir, `${result.scenario}.wav`), writeWav(result.capture, captureRate));
   }
-  const gate = evaluateGate(results, farEnd.source);
+  const gate = evaluateGate(results, farEnd.source, options.quick);
   const report = {
     measuredAt: new Date().toISOString(),
     endpoint: "macos-voice-processing",
     route,
     volume: options.volume,
     farEnd: farEnd.source,
+    farEndSeconds: sample.length / playbackRate,
+    quick: options.quick,
     vad: vadDefaults,
     gate,
     scenarios: results.map(result => ({ scenario: result.scenario, metrics: result.metrics })),
@@ -763,7 +886,11 @@ async function main(): Promise<void> {
   for (const result of results) {
     console.log(`\n${result.scenario}`);
     for (const [key, value] of Object.entries(result.metrics)) {
-      console.log(`  ${key}: ${typeof value === "number" ? Number(value.toFixed(2)) : value}`);
+      // toFixed(2) collapses 0.005 and 0.015 to the same "0.01"; keep small values legible.
+      const shown = typeof value === "number"
+        ? Number(Math.abs(value) < 1 ? value.toPrecision(3) : value.toFixed(2))
+        : value;
+      console.log(`  ${key}: ${shown}`);
     }
   }
   console.log(`\n=== 判定: ${gate.status.toUpperCase()} ===`);
