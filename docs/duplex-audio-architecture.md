@@ -231,6 +231,15 @@ measured end-to-end reply latency delta (from the timing events below), the
 false-reopen rate (a new topic wrongly merged into the previous turn), and the
 wasted-speculation rate (ASR/LLM work discarded by reopens).
 
+Measured 2026-07-14 (live engines, one-sentence replies, four completed turns
+per arm): the mechanism works — dispatch moves 500 ms earlier by construction
+and no false reopens were observed — but the end-to-end median did not move
+(8.3 s conservative vs 8.6 s speculative), because the pipeline is dominated by
+first-chunk TTS synthesis (2.6–6.8 s, ±2 s variance), then ASR (~2 s), then the
+LLM (~1 s). A 500 ms saving is unresolvable under that variance at practical
+sample sizes, so the default stays conservative and the latency priority moves
+to phase 3's streaming adapters, which attack the segments that dominate.
+
 ### Turn timing
 
 Every turn emits one `turn.timing` event when it completes or is interrupted,
