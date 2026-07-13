@@ -183,9 +183,24 @@ function joinSamples(parts: Float32Array[]): Float32Array {
   return output;
 }
 
-export class EnergyVadSegmenter {
-  private readonly sampleRate: number;
-  private readonly threshold: number;
+/**
+ * A segmenter as `listen` consumes one: audio frames in, segment events out. `push` may be
+ * synchronous (energy) or asynchronous (a model inference per window); callers await it
+ * either way.
+ */
+export interface VadSegmenter {
+  push(samples: Float32Array, timestampMs: number): VadSegmentEvent[] | Promise<VadSegmentEvent[]>;
+  reset(): void;
+}
+
+/**
+ * The segmentation state machine shared by every detector: pre-roll retention, provisional
+ * `speech.start`, confirmation after `minSpeechMs` of voiced audio, silence/max-duration
+ * ends, and dropped bursts. Detectors differ only in how a piece of audio is judged voiced;
+ * this lifecycle — the part the barge-in policy and the AEC gate certify — must not fork
+ * per detector.
+ */
+export class VadSegmentAssembler {
   private readonly minSpeechSamples: number;
   private readonly silenceSamples: number;
   private readonly maxSpeechSamples: number;
@@ -199,21 +214,15 @@ export class EnergyVadSegmenter {
   private silenceSamplesSeen = 0;
   private startedAtMs = 0;
 
-  constructor(options: VadSegmenterOptions) {
+  constructor(options: Omit<VadSegmenterOptions, "threshold">) {
     if (!Number.isFinite(options.sampleRate) || options.sampleRate <= 0) {
       throw new TypeError("VAD sampleRate must be a positive finite number");
-    }
-    const threshold = options.threshold ?? 0.01;
-    if (!Number.isFinite(threshold) || threshold < 0) {
-      throw new TypeError("VAD threshold must be a non-negative finite number");
     }
     const milliseconds = (value: number | undefined, fallback: number, name: string): number => {
       const resolved = value ?? fallback;
       if (!Number.isFinite(resolved) || resolved < 0) throw new TypeError(`VAD ${name} must be a non-negative finite number`);
       return Math.round(options.sampleRate * resolved / 1_000);
     };
-    this.sampleRate = options.sampleRate;
-    this.threshold = threshold;
     this.minSpeechSamples = milliseconds(options.minSpeechMs, 250, "minSpeechMs");
     this.silenceSamples = milliseconds(options.silenceMs, 650, "silenceMs");
     this.maxSpeechSamples = milliseconds(options.maxSpeechMs, 15_000, "maxSpeechMs");
@@ -221,13 +230,17 @@ export class EnergyVadSegmenter {
     if (this.maxSpeechSamples === 0) throw new TypeError("VAD maxSpeechMs must be greater than zero");
   }
 
-  push(samples: Float32Array, timestampMs: number): VadSegmentEvent[] {
+  /** `level` is embedded in `speech.start` as `rms`: an energy for the RMS detector, a probability for a model. */
+  push(samples: Float32Array, timestampMs: number, voiced: boolean, level: number): VadSegmentEvent[] {
     if (samples.length === 0) return [];
-    const level = rms(samples);
-    const voiced = level >= this.threshold;
     if (!this.speaking) {
-      this.pushPreRoll(samples);
-      if (!voiced) return [];
+      if (!voiced) {
+        this.pushPreRoll(samples);
+        return [];
+      }
+      // The triggering audio enters the utterance once, through append below. Adding it to
+      // the pre-roll first duplicated it: the pre-roll copy and the appended copy both
+      // landed in the segment, giving ASR a stuttered onset.
       this.speaking = true;
       this.startedAtMs = timestampMs;
       this.speech.push(...this.preRoll);
@@ -298,6 +311,138 @@ export class EnergyVadSegmenter {
       if (!first) break;
       total -= first.length;
     }
+  }
+}
+
+export class EnergyVadSegmenter implements VadSegmenter {
+  private readonly assembler: VadSegmentAssembler;
+  private readonly threshold: number;
+
+  constructor(options: VadSegmenterOptions) {
+    const threshold = options.threshold ?? 0.01;
+    if (!Number.isFinite(threshold) || threshold < 0) {
+      throw new TypeError("VAD threshold must be a non-negative finite number");
+    }
+    this.threshold = threshold;
+    this.assembler = new VadSegmentAssembler(options);
+  }
+
+  push(samples: Float32Array, timestampMs: number): VadSegmentEvent[] {
+    const level = rms(samples);
+    return this.assembler.push(samples, timestampMs, level >= this.threshold, level);
+  }
+
+  reset(): void {
+    this.assembler.reset();
+  }
+}
+
+/**
+ * A model that scores fixed-size 16kHz windows with a speech probability. The Silero VAD
+ * ONNX model is the production implementation; tests inject a scripted one. Models are
+ * stateful across windows (Silero carries an RNN state), hence `reset`.
+ */
+export interface SpeechProbabilityModel {
+  /** Window length the model requires, in samples at 16kHz. Silero v5 uses 512 (32ms). */
+  readonly windowSamples: number;
+  process(window: Float32Array): number | Promise<number>;
+  reset(): void;
+}
+
+export interface SileroVadOptions {
+  model: SpeechProbabilityModel;
+  /** Probability at or above which an idle stream turns voiced. Silero's recommended default. */
+  startProbability?: number;
+  /** Probability below which a voiced stream turns silent — hysteresis against flutter. */
+  endProbability?: number;
+  minSpeechMs?: number;
+  silenceMs?: number;
+  maxSpeechMs?: number;
+  preRollMs?: number;
+}
+
+const sileroSampleRate = 16_000;
+
+/**
+ * Silero-backed segmenter with the same contract and the same certified segment lifecycle
+ * as `EnergyVadSegmenter`. It buffers arbitrary capture frames into the model's fixed
+ * windows and classifies each window with hysteresis: a window must clear
+ * `startProbability` to open speech but only fall below `endProbability` to leave it.
+ */
+export class SileroVadSegmenter implements VadSegmenter {
+  private readonly assembler: VadSegmentAssembler;
+  private readonly model: SpeechProbabilityModel;
+  private readonly startProbability: number;
+  private readonly endProbability: number;
+  private readonly pending: Float32Array[] = [];
+  private pendingSamples = 0;
+  private anchorMs: number | undefined;
+  private consumedSamples = 0;
+  private voiced = false;
+
+  constructor(options: SileroVadOptions) {
+    const start = options.startProbability ?? 0.5;
+    const end = options.endProbability ?? 0.35;
+    if (!Number.isFinite(start) || start <= 0 || start > 1) {
+      throw new TypeError("VAD startProbability must be within (0, 1]");
+    }
+    if (!Number.isFinite(end) || end < 0 || end > start) {
+      throw new TypeError("VAD endProbability must be within [0, startProbability]");
+    }
+    if (!Number.isInteger(options.model.windowSamples) || options.model.windowSamples <= 0) {
+      throw new TypeError("VAD model windowSamples must be a positive integer");
+    }
+    this.model = options.model;
+    this.startProbability = start;
+    this.endProbability = end;
+    this.assembler = new VadSegmentAssembler({ ...options, sampleRate: sileroSampleRate });
+  }
+
+  async push(samples: Float32Array, timestampMs: number): Promise<VadSegmentEvent[]> {
+    if (samples.length === 0) return [];
+    if (this.anchorMs === undefined) {
+      this.anchorMs = timestampMs;
+      this.consumedSamples = 0;
+    }
+    this.pending.push(samples);
+    this.pendingSamples += samples.length;
+    const events: VadSegmentEvent[] = [];
+    while (this.pendingSamples >= this.model.windowSamples) {
+      // The window's timestamp is derived from the sample count, not the arrival clock, so
+      // it stays aligned with the frame timestamps the caller derives the same way.
+      const windowStartMs = this.anchorMs + 1_000 * this.consumedSamples / sileroSampleRate;
+      const window = this.takeWindow();
+      this.consumedSamples += window.length;
+      const probability = await this.model.process(window);
+      this.voiced = probability >= (this.voiced ? this.endProbability : this.startProbability);
+      events.push(...this.assembler.push(window, windowStartMs, this.voiced, probability));
+    }
+    return events;
+  }
+
+  reset(): void {
+    this.assembler.reset();
+    this.model.reset();
+    this.pending.length = 0;
+    this.pendingSamples = 0;
+    this.anchorMs = undefined;
+    this.consumedSamples = 0;
+    this.voiced = false;
+  }
+
+  private takeWindow(): Float32Array {
+    const window = new Float32Array(this.model.windowSamples);
+    let filled = 0;
+    while (filled < window.length) {
+      const head = this.pending[0] as Float32Array;
+      const take = Math.min(head.length, window.length - filled);
+      window.set(head.subarray(0, take), filled);
+      filled += take;
+      if (take === head.length) this.pending.shift();
+      else this.pending[0] = head.subarray(take);
+    }
+    this.pendingSamples -= window.length;
+    return window;
   }
 }
 

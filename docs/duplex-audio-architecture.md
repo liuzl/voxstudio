@@ -215,6 +215,20 @@ verified local cache rather than committed to this repository. A VAD adapter
 must expose the same frame/segment contract as `EnergyVadSegmenter`, so the CLI
 and Web do not take a dependency on a particular detector.
 
+`SileroVadSegmenter` implements that adapter. The segment lifecycle — pre-roll,
+provisional `speech.start`, confirmation, `speech.dropped`, ends — lives in one
+shared `VadSegmentAssembler`, so both detectors carry the exact barge-in
+semantics the AEC gate certified; Silero replaces only the per-window voiced
+judgement (model probability with start/end hysteresis, 0.5/0.35 defaults). The
+model is pinned by version and SHA-256 (Silero VAD v5.1.2, MIT) and fetched into
+`~/.cache/voxstudio/` on first use; a hash mismatch refuses to load. Inference
+runs through onnxruntime-node at a fraction of a millisecond per 32 ms window.
+`vox listen --vad silero` selects it in the workspace runtime; the compiled
+standalone binary reports an explicit capability error because the ONNX Runtime
+native library cannot be embedded, and release packaging owns that gap. The
+energy detector remains the CLI default until a gate run certifies Silero on a
+supported route.
+
 ## Realtime gateway and events
 
 Existing OpenAI-compatible engine endpoints remain valid for one-shot work.
@@ -324,8 +338,9 @@ supported macOS hardware. Browser and CLI metrics are reported separately.
    reconnect/idempotency transport tests, and timing schema integration remain.
 2. **CLI headset duplex**: `vox listen` now uses continuous FFmpeg PCM capture,
    fallback VAD segmentation, cancellation, bounded playback, and explicit
-   headset mode. It has simulated end-to-end coverage; real-device validation
-   and the Silero ONNX adapter remain before declaring it supported.
+   headset mode. It has simulated end-to-end coverage, and `--vad silero`
+   selects the Silero ONNX adapter (see VAD policy). Real-device headset
+   validation and a Silero gate run remain before declaring it supported.
 3. **Streaming adapters**: batch ASR, LLM, and TTS clients now accept the
    current turn's `AbortSignal`, and `streamLong` stops requesting chunks after
    cancellation. Add token-streaming LLM/ASR/TTS adapters and sentence-level

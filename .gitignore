@@ -27,3 +27,4 @@ pretrained_models/
 
 # local config (may contain real endpoints/keys)
 voxstudio.yaml
+*.bun-build

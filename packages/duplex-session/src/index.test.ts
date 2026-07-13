@@ -4,7 +4,9 @@ import {
   DuplexSession,
   type DuplexEvent,
   EnergyVadSegmenter,
+  SileroVadSegmenter,
   type OutputAudioFrame,
+  type SpeechProbabilityModel,
 } from "./index";
 
 function audio(milliseconds: number, sampleRate = 1_000): OutputAudioFrame {
@@ -83,6 +85,87 @@ describe("energy VAD segmentation", () => {
     expect(() => new EnergyVadSegmenter({ sampleRate: 0 })).toThrow("sampleRate");
     expect(() => new EnergyVadSegmenter({ sampleRate: 1_000, threshold: -1 })).toThrow("threshold");
     expect(() => new EnergyVadSegmenter({ sampleRate: 1_000, maxSpeechMs: 0 })).toThrow("maxSpeechMs");
+  });
+});
+
+describe("silero VAD segmentation", () => {
+  // A scripted model: consumes one probability per window, records window sizes.
+  function model(script: number[], windowSamples = 512): SpeechProbabilityModel & { windows: number[]; resets: number } {
+    let index = 0;
+    const value = {
+      windowSamples,
+      windows: [] as number[],
+      resets: 0,
+      process(window: Float32Array): number {
+        value.windows.push(window.length);
+        return script[Math.min(index++, script.length - 1)] as number;
+      },
+      reset(): void {
+        value.resets += 1;
+        index = 0;
+      },
+    };
+    return value;
+  }
+
+  const windowMs = 512_000 / 16_000; // 32ms
+
+  function frame(fill = 0): Float32Array {
+    return new Float32Array(320).fill(fill); // 20ms capture frames, as the CLI delivers
+  }
+
+  test("buffers capture frames into model windows and stamps events from the sample clock", async () => {
+    const fake = model([0.9, 0.9, 0.9, 0.1, 0.1, 0.1, 0.1, 0.1]);
+    const vad = new SileroVadSegmenter({ model: fake, minSpeechMs: 64, silenceMs: 96 });
+    const events = [];
+    // 8 windows need 4096 samples = 12.8 frames; feed 13.
+    for (let index = 0; index < 13; index += 1) {
+      events.push(...await vad.push(frame(index < 5 ? 0.2 : 0), index * 20));
+    }
+    expect(fake.windows).toEqual([512, 512, 512, 512, 512, 512, 512, 512]);
+    expect(events.map(event => event.type)).toEqual(["speech.start", "speech.confirmed", "speech.end"]);
+    const [start, confirmed] = events;
+    expect(start?.timestampMs).toBe(0);
+    if (confirmed?.type === "speech.confirmed") expect(confirmed.timestampMs).toBe(windowMs);
+    // Silence (96ms = 3 windows) is reached at window 6, so the utterance is windows 1-6.
+    const end = events[2];
+    if (end?.type === "speech.end") expect(end.samples.length).toBe(6 * 512);
+  });
+
+  test("uses hysteresis: a mid-band probability sustains speech but never starts it", async () => {
+    const idle = new SileroVadSegmenter({ model: model([0.4, 0.4, 0.4]), minSpeechMs: 32 });
+    expect(await idle.push(new Float32Array(512 * 3).fill(0.2), 0)).toEqual([]);
+
+    const speaking = new SileroVadSegmenter({ model: model([0.9, 0.4, 0.4, 0.1, 0.1, 0.1]), minSpeechMs: 32, silenceMs: 96 });
+    const events = await speaking.push(new Float32Array(512 * 6).fill(0.2), 0);
+    // 0.4 windows (≥ end 0.35) keep the utterance open; only the 0.1 run ends it.
+    expect(events.map(event => event.type)).toEqual(["speech.start", "speech.confirmed", "speech.end"]);
+    const end = events[2];
+    if (end?.type === "speech.end") expect(end.samples.length).toBe(6 * 512);
+  });
+
+  test("drops a single-window burst instead of confirming it", async () => {
+    const vad = new SileroVadSegmenter({ model: model([0.9, 0.1, 0.1, 0.1]), minSpeechMs: 64, silenceMs: 96 });
+    const events = await vad.push(new Float32Array(512 * 4), 0);
+    expect(events.map(event => event.type)).toEqual(["speech.start", "speech.dropped"]);
+  });
+
+  test("reset clears the model state, the buffer, and the sample clock", async () => {
+    const fake = model([0.9]);
+    const vad = new SileroVadSegmenter({ model: fake, minSpeechMs: 32 });
+    await vad.push(new Float32Array(600).fill(0.2), 0); // one window consumed, 88 samples pending
+    vad.reset();
+    expect(fake.resets).toBe(1);
+    // After reset the next push re-anchors: a fresh 512-sample window starts from the new timestamp.
+    const events = await vad.push(new Float32Array(512).fill(0.2), 5_000);
+    expect(events[0]).toMatchObject({ type: "speech.start", timestampMs: 5_000 });
+  });
+
+  test("validates its configuration", () => {
+    const fake = model([0.9]);
+    expect(() => new SileroVadSegmenter({ model: fake, startProbability: 0 })).toThrow("startProbability");
+    expect(() => new SileroVadSegmenter({ model: fake, endProbability: 0.9 })).toThrow("endProbability");
+    expect(() => new SileroVadSegmenter({ model: { ...fake, windowSamples: 0 } })).toThrow("windowSamples");
   });
 });
 

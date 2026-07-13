@@ -118,6 +118,59 @@ describe("listen command", () => {
     expect(played).toEqual([72_000]);
   });
 
+  test("runs a turn through the silero VAD when selected", async () => {
+    const output: string[] = [];
+    const windows: number[] = [];
+    const capture: PcmCapture = {
+      frames: (async function* () {
+        // 512-sample windows: 4 voiced frames (1280 samples → 2 voiced windows), then
+        // enough silence for the third window and the 64ms end-of-speech run.
+        for (let index = 0; index < 4; index += 1) {
+          yield { samples: new Float32Array(320).fill(0.2), sampleRate: 16_000, timestampMs: index * 20 };
+        }
+        for (let index = 4; index < 12; index += 1) {
+          yield { samples: new Float32Array(320), sampleRate: 16_000, timestampMs: index * 20 };
+        }
+      })(),
+      close: async () => {},
+    };
+    const platform: ListenPlatform = {
+      capture: async () => capture,
+      createPlayer: () => ({ write: async () => {}, close: async () => {} }),
+      loadSileroVad: async () => ({
+        windowSamples: 512,
+        // A stand-in scorer: voiced when the window carries energy. The real model is
+        // exercised by the platform loader against actual audio, not here.
+        process: (window: Float32Array) => {
+          windows.push(window.length);
+          return window.some(sample => sample !== 0) ? 0.9 : 0.05;
+        },
+        reset: () => {},
+      }),
+    };
+    const fetch: Fetch = async input => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/v1/audio/transcriptions") return Response.json({ text: "你好" });
+      if (path === "/v1/chat/completions") return Response.json({ choices: [{ message: { content: "回答" } }] });
+      if (path === "/v1/audio/speech") return new Response(new Uint8Array(response()));
+      throw new Error(`unexpected path ${path}`);
+    };
+    const config = parseConfig({
+      engines: {
+        asr: { base_url: "http://asr.test" },
+        llm: { base_url: "http://llm.test" },
+        tts: { base_url: "http://tts.test" },
+      },
+    });
+
+    await expect(runListen([
+      "--barge-in", "--vad", "silero", "--min-speech-ms", "64", "--silence-ms", "64", "--voice", "demo",
+    ], config, { out: line => output.push(line), err: () => {} }, fetch, platform)).resolves.toBe(0);
+
+    expect(windows.every(length => length === 512)).toBe(true);
+    expect(output).toEqual(["transcript: 你好", "reply: 回答"]);
+  });
+
   test("validates realtime VAD and token options before opening the microphone", async () => {
     const config = parseConfig({});
     const platform: ListenPlatform = {
@@ -129,5 +182,10 @@ describe("listen command", () => {
       .rejects.toThrow("positive integer");
     await expect(runListen(["--threshold", "-1"], config, io, globalThis.fetch, platform))
       .rejects.toThrow("non-negative");
+    await expect(runListen(["--vad", "cnn"], config, io, globalThis.fetch, platform))
+      .rejects.toThrow("energy or silero");
+    // --threshold silently ignored under silero would fake a tuning knob.
+    await expect(runListen(["--vad", "silero", "--threshold", "0.02"], config, io, globalThis.fetch, platform))
+      .rejects.toThrow("energy VAD");
   });
 });
