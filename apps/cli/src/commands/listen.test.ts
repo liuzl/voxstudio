@@ -345,6 +345,53 @@ describe("listen command", () => {
     expect(asrBytes[1] as number).toBeLessThan((asrBytes[0] as number) * 1.5);
   });
 
+  test("synthesizes a tight first chunk so the reply starts speaking early", async () => {
+    const speechInputs: string[] = [];
+    const longReply = "第一句话说完了。第二句话也说完了。第三句话比较长，需要更多的时间来讲完整个内容。"
+      + "第四句继续补充一些说明。第五句把剩下的内容全部讲完，保证总长度超过一个完整的合成块。";
+    const capture: PcmCapture = {
+      frames: (async function* () {
+        yield { samples: new Float32Array(320).fill(0.2), sampleRate: 16_000, timestampMs: 0 };
+        yield { samples: new Float32Array(320).fill(0.2), sampleRate: 16_000, timestampMs: 20 };
+        yield { samples: new Float32Array(320), sampleRate: 16_000, timestampMs: 40 };
+      })(),
+      close: async () => {},
+    };
+    const platform: ListenPlatform = {
+      capture: async () => capture,
+      createPlayer: () => ({ write: async () => {}, close: async () => {} }),
+    };
+    const fetch: Fetch = async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/v1/audio/transcriptions") return Response.json({ text: "你好" });
+      if (path === "/v1/chat/completions") return Response.json({ choices: [{ message: { content: longReply } }] });
+      if (path === "/v1/audio/speech") {
+        speechInputs.push((JSON.parse(String(init?.body)) as { input: string }).input);
+        return new Response(new Uint8Array(response()));
+      }
+      throw new Error(`unexpected path ${path}`);
+    };
+    const config = parseConfig({
+      engines: {
+        asr: { base_url: "http://asr.test" },
+        llm: { base_url: "http://llm.test" },
+        tts: { base_url: "http://tts.test" },
+      },
+    });
+
+    await expect(runListen([
+      "--barge-in", "--threshold", "0.1", "--min-speech-ms", "40", "--silence-ms", "20", "--voice", "demo",
+    ], config, { out: () => {}, err: () => {} }, fetch, platform)).resolves.toBe(0);
+
+    // ~2.5s of Mandarin is roughly 14 characters. The first chunk must be small — it is
+    // the reply's time-to-first-audio — while later chunks grow back to full size.
+    expect(speechInputs.length).toBeGreaterThanOrEqual(2);
+    const first = Array.from(speechInputs[0] as string).length;
+    const second = Array.from(speechInputs[1] as string).length;
+    expect(first).toBeLessThanOrEqual(20);
+    expect(second).toBeGreaterThan(first);
+  });
+
   test("validates realtime VAD and token options before opening the microphone", async () => {
     const config = parseConfig({});
     const platform: ListenPlatform = {

@@ -248,7 +248,12 @@ export async function runListen(
         const voice = options.voice ?? config.ttsDefaults.voice;
         const sanitized = sanitizeForTts(reply);
         for await (const piece of streamLong(tts, sanitized.text, {
-          chunking: config.chunking,
+          // Conversation is latency-bound where long-form reading is seam-bound: first
+          // audio arrives when the first chunk finishes synthesizing (engine RTF ≈ 1), so
+          // an 8s first chunk is 8s of dead air. A tight first cap trades an earlier seam
+          // — inaudible between conversational sentences — for most of that wait; growth
+          // restores full-size chunks immediately after.
+          chunking: { ...config.chunking, firstMaxSeconds: Math.min(config.chunking.firstMaxSeconds, 2.5) },
           ttsDefaults: config.ttsDefaults,
           voice,
           ...(voice === "clone" || voice === "design" ? {} : { prosodyPrompt: true }),
