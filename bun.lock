@@ -83,6 +83,7 @@
       "dependencies": {
         "@voxstudio/audio": "workspace:*",
         "@voxstudio/duplex-session": "workspace:*",
+        "@voxstudio/platform-bun": "workspace:*",
       },
     },
   },

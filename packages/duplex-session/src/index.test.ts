@@ -122,7 +122,9 @@ describe("silero VAD segmentation", () => {
     for (let index = 0; index < 13; index += 1) {
       events.push(...await vad.push(frame(index < 5 ? 0.2 : 0), index * 20));
     }
-    expect(fake.windows).toEqual([512, 512, 512, 512, 512, 512, 512, 512]);
+    // Windows 5+ are pure silence: the level gate marks them unvoiced without consulting
+    // the model, so only the windows carrying audio produce an inference.
+    expect(fake.windows).toEqual([512, 512, 512, 512]);
     expect(events.map(event => event.type)).toEqual(["speech.start", "speech.confirmed", "speech.end"]);
     const [start, confirmed] = events;
     expect(start?.timestampMs).toBe(0);
@@ -146,8 +148,21 @@ describe("silero VAD segmentation", () => {
 
   test("drops a single-window burst instead of confirming it", async () => {
     const vad = new SileroVadSegmenter({ model: model([0.9, 0.1, 0.1, 0.1]), minSpeechMs: 64, silenceMs: 96 });
-    const events = await vad.push(new Float32Array(512 * 4), 0);
+    const events = await vad.push(new Float32Array(512 * 4).fill(0.2), 0);
     expect(events.map(event => event.type)).toEqual(["speech.start", "speech.dropped"]);
+  });
+
+  test("gates quiet audio by level before the model sees it", async () => {
+    // Residual echo after cancellation is quiet speech — the agent's own leaked voice — and
+    // a good speech model scores it as speech. The level gate is what keeps silero from
+    // confirming a barge-in on it; rescoring the certified AEC-gate captures showed exactly
+    // that failure with the gate disabled.
+    const fake = model([0.99, 0.99, 0.99, 0.99]);
+    const vad = new SileroVadSegmenter({ model: fake, minSpeechMs: 32, minLevel: 0.01 });
+    const quiet = new Float32Array(512 * 4).fill(0.003); // well-formed, but ~-50dBFS
+    expect(await vad.push(quiet, 0)).toEqual([]);
+    expect(fake.windows).toEqual([]);
+    expect(() => new SileroVadSegmenter({ model: fake, minLevel: -1 })).toThrow("minLevel");
   });
 
   test("reset clears the model state, the buffer, and the sample clock", async () => {

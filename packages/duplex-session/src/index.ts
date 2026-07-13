@@ -355,6 +355,15 @@ export interface SileroVadOptions {
   startProbability?: number;
   /** Probability below which a voiced stream turns silent — hysteresis against flutter. */
   endProbability?: number;
+  /**
+   * RMS below which a window is unvoiced without consulting the model. Measured necessity,
+   * not an optimization: residual echo after cancellation IS quiet speech — the agent's own
+   * leaked voice — and a good speech model recognizes it where an energy threshold ignores
+   * it. Rescoring the certified AEC-gate captures showed silero confirming self-interruptions
+   * on residual echo the energy detector never saw. The gate also skips inference on
+   * silence. Set 0 to disable (headset routes with no echo path).
+   */
+  minLevel?: number;
   minSpeechMs?: number;
   silenceMs?: number;
   maxSpeechMs?: number;
@@ -374,6 +383,7 @@ export class SileroVadSegmenter implements VadSegmenter {
   private readonly model: SpeechProbabilityModel;
   private readonly startProbability: number;
   private readonly endProbability: number;
+  private readonly minLevel: number;
   private readonly pending: Float32Array[] = [];
   private pendingSamples = 0;
   private anchorMs: number | undefined;
@@ -392,9 +402,14 @@ export class SileroVadSegmenter implements VadSegmenter {
     if (!Number.isInteger(options.model.windowSamples) || options.model.windowSamples <= 0) {
       throw new TypeError("VAD model windowSamples must be a positive integer");
     }
+    const minLevel = options.minLevel ?? 0.01;
+    if (!Number.isFinite(minLevel) || minLevel < 0) {
+      throw new TypeError("VAD minLevel must be a non-negative finite number");
+    }
     this.model = options.model;
     this.startProbability = start;
     this.endProbability = end;
+    this.minLevel = minLevel;
     this.assembler = new VadSegmentAssembler({ ...options, sampleRate: sileroSampleRate });
   }
 
@@ -413,6 +428,11 @@ export class SileroVadSegmenter implements VadSegmenter {
       const windowStartMs = this.anchorMs + 1_000 * this.consumedSamples / sileroSampleRate;
       const window = this.takeWindow();
       this.consumedSamples += window.length;
+      if (rms(window) < this.minLevel) {
+        this.voiced = false;
+        events.push(...this.assembler.push(window, windowStartMs, false, 0));
+        continue;
+      }
       const probability = await this.model.process(window);
       this.voiced = probability >= (this.voiced ? this.endProbability : this.startProbability);
       events.push(...this.assembler.push(window, windowStartMs, this.voiced, probability));

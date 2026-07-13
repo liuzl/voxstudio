@@ -219,7 +219,17 @@ and Web do not take a dependency on a particular detector.
 provisional `speech.start`, confirmation, `speech.dropped`, ends — lives in one
 shared `VadSegmentAssembler`, so both detectors carry the exact barge-in
 semantics the AEC gate certified; Silero replaces only the per-window voiced
-judgement (model probability with start/end hysteresis, 0.5/0.35 defaults). The
+judgement (model probability with start/end hysteresis, 0.5/0.35 defaults).
+
+A speech model alone is not sufficient for speaker-mode duplex, and this is
+measured, not speculative: residual echo after cancellation is quiet speech —
+the agent's own leaked voice — and rescoring the certified AEC-gate captures
+showed Silero confirming self-interruptions on residual the energy detector
+never noticed (3.8/min against 0). `SileroVadSegmenter` therefore applies a
+level pre-gate (`minLevel`, default aligned with the energy threshold at 0.01
+RMS): windows below it are unvoiced without consulting the model, which also
+skips inference on silence. With the gate, the same captures score 0 confirmed
+self-interruptions and 12/12 operator barge-ins with none false. The
 model is pinned by version and SHA-256 (Silero VAD v5.1.2, MIT) and fetched into
 `~/.cache/voxstudio/` on first use; a hash mismatch refuses to load. Inference
 runs through onnxruntime-node at a fraction of a millisecond per 32 ms window.

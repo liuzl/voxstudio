@@ -1,7 +1,8 @@
 import { mkdirSync, existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readWav, trimEdgeSilence, writeWav } from "@voxstudio/audio";
-import { EnergyVadSegmenter, type VadSegmentEvent } from "@voxstudio/duplex-session";
+import { EnergyVadSegmenter, SileroVadSegmenter, type VadSegmenter, type VadSegmentEvent } from "@voxstudio/duplex-session";
+import { loadSileroVadModel } from "@voxstudio/platform-bun";
 
 // Speaker-mode AEC gate for `vox listen --speaker-duplex`. It drives the real
 // audio host over its real IPC and scores the capture with the same VAD and the
@@ -28,6 +29,7 @@ interface Options {
   scenarios: string[];
   seconds?: number;
   quick: boolean;
+  vad: "energy" | "silero";
 }
 
 // A smoke run for the edit loop: does the endpoint still start, cancel, and cancel echo at
@@ -62,6 +64,7 @@ function parse(argv: string[]): Options {
     trials: 5,
     scenarios: ["noise-floor", "echo", "capture-to-mute", "double-talk"],
     quick: false,
+    vad: "energy",
   };
   let scenariosSet = false;
   let trialsSet = false;
@@ -73,6 +76,11 @@ function parse(argv: string[]): Options {
     else if (arg === "--volume") options.volume = Number(value());
     else if (arg === "--seconds") options.seconds = Number(value());
     else if (arg === "--quick") options.quick = true;
+    else if (arg === "--vad") {
+      const kind = value();
+      if (kind !== "energy" && kind !== "silero") fail("aec-measure: --vad must be energy or silero");
+      options.vad = kind;
+    }
     else if (arg === "--trials") { options.trials = Number(value()); trialsSet = true; }
     else if (arg === "--scenario") { options.scenarios = value().split(","); scenariosSet = true; }
     else fail(`aec-measure: unknown option ${arg}`);
@@ -229,6 +237,45 @@ export function bargeIns(samples: Float32Array, threshold = vadDefaults.threshol
 /** Raw first-frame triggers: a diagnostic for how noisy the detector input is, not a product metric. */
 export function vadStarts(samples: Float32Array, threshold = vadDefaults.threshold): number[] {
   return vadEvents(samples, threshold, "speech.start");
+}
+
+interface VadScore {
+  confirmed: number[];
+  starts: number[];
+}
+
+/** Which detector the scenarios score with — the product supports both, so the gate must too. */
+interface BargeInScorer {
+  kind: "energy" | "silero";
+  detect(samples: Float32Array): Promise<VadScore>;
+}
+
+async function detectWith(vad: VadSegmenter, samples: Float32Array): Promise<VadScore> {
+  const score: VadScore = { confirmed: [], starts: [] };
+  for (let offset = 0; offset + captureFrameSamples <= samples.length; offset += captureFrameSamples) {
+    const timestampMs = 1_000 * offset / captureRate;
+    for (const event of await vad.push(samples.subarray(offset, offset + captureFrameSamples), timestampMs)) {
+      if (event.type === "speech.confirmed") score.confirmed.push(event.timestampMs);
+      else if (event.type === "speech.start") score.starts.push(event.timestampMs);
+    }
+  }
+  return score;
+}
+
+function makeScorer(kind: "energy" | "silero"): BargeInScorer {
+  if (kind === "energy") {
+    return { kind, detect: samples => detectWith(new EnergyVadSegmenter(vadDefaults), samples) };
+  }
+  return {
+    kind,
+    // A fresh model per capture: the Silero RNN state is stateful and captures are
+    // independent recordings, so state must never leak from one into the next.
+    detect: async samples => detectWith(new SileroVadSegmenter({
+      model: await loadSileroVadModel(),
+      minSpeechMs: vadDefaults.minSpeechMs,
+      silenceMs: vadDefaults.silenceMs,
+    }), samples),
+  };
 }
 
 async function startHost(voiceProcessing: boolean): Promise<HostSession> {
@@ -407,13 +454,13 @@ function thresholdSweep(echoCapture: Float32Array, doubleTalk: ScenarioResult): 
  * ambient noise alone, so a false barge-in during playback only counts against the AEC if
  * it exceeds this baseline. Its duration matches the far-end so the rates are comparable.
  */
-async function noiseFloor(durationMs: number): Promise<ScenarioResult> {
+async function noiseFloor(durationMs: number, scorer: BargeInScorer): Promise<ScenarioResult> {
   console.log(`\n[noise-floor] ${(durationMs / 1_000).toFixed(0)}s 静音采集，请保持安静…`);
   const host = await startHost(true);
   await Bun.sleep(durationMs);
   const capture = await host.stop();
   const steady = steadyState(capture);
-  const starts = bargeIns(steady);
+  const starts = (await scorer.detect(steady)).confirmed;
   const seconds = steady.length / captureRate;
   return {
     scenario: "noise-floor",
@@ -428,7 +475,12 @@ async function noiseFloor(durationMs: number): Promise<ScenarioResult> {
 }
 
 /** Far-end only. With voice processing on this is residual echo; with it off, raw echo. */
-async function echo(farEnd: Float32Array, voiceProcessing: boolean, warmupMs = aecWarmupMs): Promise<ScenarioResult> {
+async function echo(
+  farEnd: Float32Array,
+  voiceProcessing: boolean,
+  scorer: BargeInScorer,
+  warmupMs = aecWarmupMs,
+): Promise<ScenarioResult> {
   const label = voiceProcessing ? "echo" : "echo-bypass";
   console.log(`\n[${label}] 扬声器播放远端语音 ${(farEnd.length / playbackRate).toFixed(1)}s，请保持安静、不要说话…`);
   const host = await startHost(voiceProcessing);
@@ -436,7 +488,7 @@ async function echo(farEnd: Float32Array, voiceProcessing: boolean, warmupMs = a
   await Bun.sleep(600); // let the tail drain through the capture path
   const capture = await host.stop();
   const steady = steadyState(capture, warmupMs);
-  const starts = bargeIns(steady);
+  const score = await scorer.detect(steady);
   const seconds = steady.length / captureRate;
   return {
     scenario: label,
@@ -446,9 +498,9 @@ async function echo(farEnd: Float32Array, voiceProcessing: boolean, warmupMs = a
       capturedSeconds: seconds,
       echoLevelDb: rmsDb(steady),
       echoPeakFrameDb: Math.max(...frameLevelsDb(steady)),
-      falseBargeIns: starts.length,
-      falseBargeInsPerMinute: seconds > 0 ? starts.length * 60 / seconds : 0,
-      rawVadStarts: vadStarts(steady).length,
+      falseBargeIns: score.confirmed.length,
+      falseBargeInsPerMinute: seconds > 0 ? score.confirmed.length * 60 / seconds : 0,
+      rawVadStarts: score.starts.length,
     },
   };
 }
@@ -601,7 +653,7 @@ function cueTone(): Float32Array {
  * reference, so the canceller removes it like any other far-end audio; the window around it
  * is still excluded from scoring so that a residual tone cannot be mistaken for the operator.
  */
-async function doubleTalk(farEnd: Float32Array, trials: number): Promise<ScenarioResult> {
+async function doubleTalk(farEnd: Float32Array, trials: number, scorer: BargeInScorer): Promise<ScenarioResult> {
   const speakMs = 2_500;
   const gapMs = 3_000;
   const leadInMs = 3_000;
@@ -648,7 +700,7 @@ async function doubleTalk(farEnd: Float32Array, trials: number): Promise<Scenari
   const first = host.chunks[0];
   const firstBufferMs = first ? 1_000 * first.samples.length / captureRate : 0;
   const captureOriginMs = (first ? first.arrivedAtMs - firstBufferMs : playbackStartMs) - playbackStartMs;
-  const detections = bargeIns(capture).map(value => value + captureOriginMs);
+  const detections = (await scorer.detect(capture)).confirmed.map(value => value + captureOriginMs);
 
   const scored = detections.filter(value => !guards.some(guard => value >= guard.startMs && value <= guard.endMs));
   const score = scoreDoubleTalk(cues, scored);
@@ -749,6 +801,7 @@ async function main(): Promise<void> {
   if (process.platform !== "darwin") fail("speaker-mode AEC measurement requires macOS");
   const options = parse(process.argv.slice(2));
   const farEnd = await loadFarEnd(options.farEnd);
+  const scorer = makeScorer(options.vad);
   // Level scenarios can run on a slice; capture-to-mute and double-talk build their own
   // streams. A shorter slice trades statistical power for wall clock, which is why a run
   // that used one cannot pass the gate.
@@ -762,7 +815,7 @@ async function main(): Promise<void> {
   const outDir = join(options.outDir, stamp);
   mkdirSync(outDir, { recursive: true });
 
-  console.log("speaker-mode AEC measurement");
+  console.log(`speaker-mode AEC measurement (VAD: ${options.vad})`);
   console.log(`  输出路由: ${route.output}`);
   console.log(`  输入路由: ${route.input}`);
   console.log(`  远端素材: ${farEnd.source} (用 ${(sample.length / playbackRate).toFixed(1)}s${options.quick ? "，quick 冒烟模式" : ""})`);
@@ -780,7 +833,7 @@ async function main(): Promise<void> {
     if (options.scenarios.includes("noise-floor")) {
       // The floor does not involve the canceller, so a quick run keeps it short; the full
       // run matches the echo duration so the false-trigger baselines are comparable.
-      const result = await noiseFloor(options.quick ? 3_000 : 1_000 * sample.length / playbackRate);
+      const result = await noiseFloor(options.quick ? 3_000 : 1_000 * sample.length / playbackRate, scorer);
       floorDb = result.metrics.noiseFloorDb as number;
       baselineFalsePerMinute = result.metrics.falseBargeInsPerMinute as number;
       results.push(result);
@@ -788,11 +841,11 @@ async function main(): Promise<void> {
     if (options.scenarios.includes("echo")) {
       // Convergence with dense speech material takes ~5s (measured); a short window must
       // sit entirely past it or it reports the convergence tail as leakage.
-      const processed = await echo(sample, true, options.quick ? 5_000 : aecWarmupMs);
+      const processed = await echo(sample, true, scorer, options.quick ? 5_000 : aecWarmupMs);
       // The bypass arm exists for the attenuation A/B, a certification number. A smoke run
       // answers "is echo still being cancelled at all", which the processed arm alone does
       // against the noise floor — so quick skips the second 40s-class playback entirely.
-      const bypass = options.quick ? undefined : await echo(sample, false);
+      const bypass = options.quick ? undefined : await echo(sample, false, scorer);
       results.push(processed);
       if (bypass) results.push(bypass);
       const processedDb = processed.metrics.echoLevelDb as number;
@@ -855,10 +908,12 @@ async function main(): Promise<void> {
       await setSystemVolume(options.volume);
     }
     if (options.scenarios.includes("double-talk")) {
-      const result = await doubleTalk(farEnd.samples, options.trials);
+      const result = await doubleTalk(farEnd.samples, options.trials, scorer);
       results.push(result);
       const echoCapture = results.find(value => value.scenario === "echo")?.capture;
-      if (echoCapture) results.push(...thresholdSweep(echoCapture, result));
+      // The sweep varies the energy detector's RMS threshold; silero has no such knob, its
+      // probability hysteresis is fixed by the model's calibration.
+      if (echoCapture && options.vad === "energy") results.push(...thresholdSweep(echoCapture, result));
     }
   } finally {
     await setSystemVolume(restoreVolume);
@@ -876,7 +931,10 @@ async function main(): Promise<void> {
     farEnd: farEnd.source,
     farEndSeconds: sample.length / playbackRate,
     quick: options.quick,
-    vad: vadDefaults,
+    vad: options.vad === "energy"
+      ? { kind: "energy", ...vadDefaults }
+      : { kind: "silero", model: "silero-vad-v5.1.2", startProbability: 0.5, endProbability: 0.35,
+          minSpeechMs: vadDefaults.minSpeechMs, silenceMs: vadDefaults.silenceMs },
     gate,
     scenarios: results.map(result => ({ scenario: result.scenario, metrics: result.metrics })),
   };

@@ -48,7 +48,10 @@ fast; it can never produce a `pass` verdict.
 Barge-ins are scored at `speech.confirmed` — the CLI interrupts playback only after
 `minSpeechMs` of voiced audio, so a transient echo spike is recorded as a
 `false_barge_in` while the reply keeps playing. `bargeIns()` counts what the product
-acts on; `vadStarts()` reports raw first-frame triggers as a diagnostic.
+acts on; `vadStarts()` reports raw first-frame triggers as a diagnostic. `--vad silero`
+scores every scenario with the Silero segmenter instead of the energy detector, which
+is how a Silero default gets certified; the threshold sweep is energy-specific and is
+skipped under it.
 
 The room must be quiet, and the operator speaks when they hear the two-tone cue.
 The run writes `report.json`, the per-scenario captures, and a verdict to

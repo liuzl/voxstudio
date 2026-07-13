@@ -184,8 +184,5 @@ describe("listen command", () => {
       .rejects.toThrow("non-negative");
     await expect(runListen(["--vad", "cnn"], config, io, globalThis.fetch, platform))
       .rejects.toThrow("energy or silero");
-    // --threshold silently ignored under silero would fake a tuning knob.
-    await expect(runListen(["--vad", "silero", "--threshold", "0.02"], config, io, globalThis.fetch, platform))
-      .rejects.toThrow("energy VAD");
   });
 });

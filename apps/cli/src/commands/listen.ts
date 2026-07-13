@@ -23,8 +23,9 @@ Run a continuous voice conversation. Press Ctrl-C to stop.
 Without --barge-in, microphone input is suppressed while the agent speaks so external speakers
 cannot interrupt playback. Use --barge-in only with headphones or a headset. --speaker-duplex uses
 the macOS Voice Processing helper for external-speaker AEC. --vad silero uses the Silero ONNX
-model (fetched into a verified local cache on first use); --threshold applies to the energy VAD
-only. The default remains energy until a gate run certifies silero.`;
+model (fetched into a verified local cache on first use). --threshold is the energy VAD's RMS
+threshold; under silero it sets the level pre-gate that keeps residual echo below notice (both
+default 0.01). The default detector remains energy until a gate run certifies silero.`;
 
 interface ListenOptions {
   device?: string;
@@ -95,11 +96,6 @@ function parse(args: string[]): ListenOptions {
     else if (arg === "--min-speech-ms") options.minSpeechMs = numberOption(args, ++index, arg);
     else throw new TypeError(`listen: unknown option ${arg}`);
   }
-  if (options.vad === "silero" && options.threshold !== undefined) {
-    // Silently accepting it would let the user believe they tuned a detector that never
-    // reads the value.
-    throw new TypeError("listen: --threshold applies to the energy VAD; silero uses probability hysteresis");
-  }
   return options;
 }
 
@@ -134,6 +130,10 @@ export async function runListen(
         model: await (platform.loadSileroVad as () => Promise<SpeechProbabilityModel>)(),
         silenceMs: options.silenceMs,
         minSpeechMs: options.minSpeechMs,
+        // Under silero, --threshold is the level pre-gate. Residual echo after cancellation
+        // is quiet speech, and the model recognizes it; the gate is what keeps the agent's
+        // own leaked voice below notice, exactly as it does for the energy detector.
+        ...(options.threshold === undefined ? {} : { minLevel: options.threshold }),
       })
     : new EnergyVadSegmenter({
         sampleRate: 16_000,
