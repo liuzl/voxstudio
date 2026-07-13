@@ -57,7 +57,9 @@ describe("listen command", () => {
     ], config, { out: line => output.push(line), err: line => errors.push(line) }, fetch, platform)).resolves.toBe(0);
 
     expect(output).toEqual(["transcript: 你好", "reply: 你好，欢迎使用语音对话。"]);
-    expect(errors[0]).toContain("protected speaker mode");
+    // This platform offers no silero loader, so the certified default degrades loudly.
+    expect(errors[0]).toContain("using the energy detector");
+    expect(errors.some(line => line.includes("protected speaker mode"))).toBe(true);
     const timing = errors.find(line => line.startsWith("timing:"));
     expect(timing).toContain("vad_end");
     expect(timing).toContain("asr_done");

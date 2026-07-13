@@ -268,15 +268,19 @@ never noticed (3.8/min against 0). `SileroVadSegmenter` therefore applies a
 level pre-gate (`minLevel`, default aligned with the energy threshold at 0.01
 RMS): windows below it are unvoiced without consulting the model, which also
 skips inference on silence. With the gate, the same captures score 0 confirmed
-self-interruptions and 12/12 operator barge-ins with none false. The
+self-interruptions and 12/12 operator barge-ins with none false. A live gate
+run on 2026-07-14 (same route, real TTS far-end, 12 operator cues) certified
+the gated detector: 0 confirmed self-interruptions (5.6/min raw model starts
+absorbed), 12/12 barge-ins heard with none missed or false, and detection
+latency p50 574 ms — 69 ms faster than the energy detector's certified run.
+Silero is therefore the CLI default where the ONNX runtime is available;
+`listen` degrades loudly to the equally-certified energy detector otherwise
+(the compiled standalone binary cannot carry the runtime), and `--vad` selects
+one explicitly. The
 model is pinned by version and SHA-256 (Silero VAD v5.1.2, MIT) and fetched into
 `~/.cache/voxstudio/` on first use; a hash mismatch refuses to load. Inference
 runs through onnxruntime-node at a fraction of a millisecond per 32 ms window.
-`vox listen --vad silero` selects it in the workspace runtime; the compiled
-standalone binary reports an explicit capability error because the ONNX Runtime
-native library cannot be embedded, and release packaging owns that gap. The
-energy detector remains the CLI default until a gate run certifies Silero on a
-supported route.
+Release packaging still owns embedding a runtime for the standalone binary.
 
 ## Realtime gateway and events
 

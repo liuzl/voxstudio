@@ -145,9 +145,10 @@ keeps playing. It suppresses microphone input during playback by default; `--bar
 headphones or a headset. `--speaker-duplex` uses the macOS voice-processing helper, gated by a
 real-hardware measurement harness (`bun run measure:aec`, see `platforms/macos-audio/`). The
 gate passed on built-in MacBook speakers with real speech: zero confirmed self-interruptions
-and 12/12 operator barge-ins heard. `--vad silero` selects the Silero ONNX VAD (v5.1.2, pinned
-by SHA-256 and fetched into a verified local cache on first use); energy remains the default
-until a gate run certifies it. Route-change handling, release packaging of the helper and the
+and 12/12 operator barge-ins heard. The Silero ONNX VAD (v5.1.2, pinned by SHA-256, fetched
+into a verified local cache on first use) passed the same gate with faster detection and is
+the default where the ONNX runtime is available; `listen` falls back loudly to the certified
+energy detector otherwise. Route-change handling, release packaging of the helper and the
 ONNX runtime, and the Web Studio remain separate measured delivery phases.
 
 ## Related

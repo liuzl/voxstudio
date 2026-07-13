@@ -24,9 +24,10 @@ Run a continuous voice conversation. Press Ctrl-C to stop.
 Without --barge-in, microphone input is suppressed while the agent speaks so external speakers
 cannot interrupt playback. Use --barge-in only with headphones or a headset. --speaker-duplex uses
 the macOS Voice Processing helper for external-speaker AEC. --vad silero uses the Silero ONNX
-model (fetched into a verified local cache on first use). --threshold is the energy VAD's RMS
-threshold; under silero it sets the level pre-gate that keeps residual echo below notice (both
-default 0.01). The default detector remains energy until a gate run certifies silero. --timing
+model (fetched into a verified local cache on first use) and is the default where the ONNX
+runtime is available; otherwise listen says so and uses the energy detector. --threshold is the
+energy VAD's RMS threshold; under silero it sets the level pre-gate that keeps residual echo
+below notice (both default 0.01). --timing
 prints each turn's latency profile (VAD end, ASR, reply, first audio) to stderr. --turn-taking
 speculative ends a turn after a short silence (--silence-ms defaults to 150 in this mode) and
 starts answering immediately; if you keep talking within --reopen-ms (default 7000) before the
@@ -42,6 +43,7 @@ interface ListenOptions {
   bargeIn: boolean;
   speakerDuplex: boolean;
   vad: "energy" | "silero";
+  vadExplicit: boolean;
   turnTaking: "conservative" | "speculative";
   reopenMs: number;
   threshold?: number;
@@ -82,7 +84,8 @@ function numberOption(args: string[], index: number, option: string): number {
 
 function parse(args: string[]): ListenOptions {
   const options: ListenOptions = {
-    language: "auto", bargeIn: false, speakerDuplex: false, vad: "energy", silenceMs: 650, minSpeechMs: 250,
+    language: "auto", bargeIn: false, speakerDuplex: false, vad: "silero", vadExplicit: false,
+    silenceMs: 650, minSpeechMs: 250,
     turnTaking: "conservative", reopenMs: 7_000, timing: false,
   };
   let silenceSet = false;
@@ -106,6 +109,7 @@ function parse(args: string[]): ListenOptions {
       const value = required(args, ++index, arg);
       if (value !== "energy" && value !== "silero") throw new TypeError("listen: --vad must be energy or silero");
       options.vad = value;
+      options.vadExplicit = true;
     } else if (arg === "--max-tokens") {
       const value = numberOption(args, ++index, arg);
       if (!Number.isInteger(value) || value === 0) throw new TypeError("listen: --max-tokens must be a positive integer");
@@ -154,25 +158,39 @@ export async function runListen(
       }
     },
   });
-  if (options.vad === "silero" && !platform.loadSileroVad) {
-    throw new TypeError("the silero VAD is not available on this platform");
+  const energyVad = (): VadSegmenter => new EnergyVadSegmenter({
+    sampleRate: 16_000,
+    threshold: options.threshold ?? 0.01,
+    silenceMs: options.silenceMs,
+    minSpeechMs: options.minSpeechMs,
+  });
+  const sileroVad = async (): Promise<VadSegmenter> => {
+    if (!platform.loadSileroVad) throw new TypeError("the silero VAD is not available on this platform");
+    return new SileroVadSegmenter({
+      model: await platform.loadSileroVad(),
+      silenceMs: options.silenceMs,
+      minSpeechMs: options.minSpeechMs,
+      // Under silero, --threshold is the level pre-gate. Residual echo after cancellation
+      // is quiet speech, and the model recognizes it; the gate is what keeps the agent's
+      // own leaked voice below notice, exactly as it does for the energy detector.
+      ...(options.threshold === undefined ? {} : { minLevel: options.threshold }),
+    });
+  };
+  let vad: VadSegmenter;
+  if (options.vad === "energy") {
+    vad = energyVad();
+  } else {
+    try {
+      vad = await sileroVad();
+    } catch (error) {
+      // Silero is the certified default, but it needs the ONNX runtime, which the compiled
+      // standalone binary cannot carry. Asked-for silero fails loudly; the default degrades
+      // loudly to the energy detector, which passed the same gate.
+      if (options.vadExplicit) throw error;
+      io.err(`listen: silero VAD unavailable (${error instanceof Error ? error.message : String(error)}); using the energy detector`);
+      vad = energyVad();
+    }
   }
-  const vad: VadSegmenter = options.vad === "silero"
-    ? new SileroVadSegmenter({
-        model: await (platform.loadSileroVad as () => Promise<SpeechProbabilityModel>)(),
-        silenceMs: options.silenceMs,
-        minSpeechMs: options.minSpeechMs,
-        // Under silero, --threshold is the level pre-gate. Residual echo after cancellation
-        // is quiet speech, and the model recognizes it; the gate is what keeps the agent's
-        // own leaked voice below notice, exactly as it does for the energy detector.
-        ...(options.threshold === undefined ? {} : { minLevel: options.threshold }),
-      })
-    : new EnergyVadSegmenter({
-        sampleRate: 16_000,
-        threshold: options.threshold ?? 0.01,
-        silenceMs: options.silenceMs,
-        minSpeechMs: options.minSpeechMs,
-      });
   if (options.speakerDuplex && !platform.startSpeakerDuplex) {
     throw new TypeError("speaker duplex is not available on this platform");
   }
