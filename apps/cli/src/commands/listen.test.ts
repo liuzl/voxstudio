@@ -126,6 +126,69 @@ describe("listen command", () => {
     expect(played).toEqual([72_000]);
   });
 
+  test("speech while the reply is still audibly playing barges in and stops the player", async () => {
+    const output: string[] = [];
+    const played: number[] = [];
+    let firstPlayerAborted = false;
+    let players = 0;
+    let releaseTail = () => {};
+    const tailGate = new Promise<void>(resolve => { releaseTail = resolve; });
+    const capture: PcmCapture = {
+      frames: (async function* () {
+        // First utterance → first reply starts playing.
+        yield { samples: new Float32Array(320).fill(0.2), sampleRate: 16_000, timestampMs: 0 };
+        yield { samples: new Float32Array(320).fill(0.2), sampleRate: 16_000, timestampMs: 20 };
+        yield { samples: new Float32Array(320), sampleRate: 16_000, timestampMs: 40 };
+        while (played.length === 0) await Bun.sleep(2);
+        // All bytes are written but the tail is still audible (close is pending). Speaking
+        // now must interrupt the reply, not open a turn beside it.
+        yield { samples: new Float32Array(320).fill(0.2), sampleRate: 16_000, timestampMs: 60 };
+        yield { samples: new Float32Array(320).fill(0.2), sampleRate: 16_000, timestampMs: 80 };
+        yield { samples: new Float32Array(320), sampleRate: 16_000, timestampMs: 100 };
+      })(),
+      close: async () => {},
+    };
+    const platform: ListenPlatform = {
+      capture: async () => capture,
+      createPlayer: () => {
+        const isFirst = ++players === 1;
+        return {
+          write: async audio => { played.push(audio.samples.length); },
+          // The first reply's audible tail: close resolves only when playback would end.
+          close: async () => { if (isFirst) await tailGate; },
+          abort: async () => {
+            if (isFirst) {
+              firstPlayerAborted = true;
+              releaseTail();
+            }
+          },
+        };
+      },
+    };
+    const fetch: Fetch = async input => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/v1/audio/transcriptions") return Response.json({ text: "你好" });
+      if (path === "/v1/chat/completions") return Response.json({ choices: [{ message: { content: "回答" } }] });
+      if (path === "/v1/audio/speech") return new Response(new Uint8Array(response()));
+      throw new Error(`unexpected path ${path}`);
+    };
+    const config = parseConfig({
+      engines: {
+        asr: { base_url: "http://asr.test" },
+        llm: { base_url: "http://llm.test" },
+        tts: { base_url: "http://tts.test" },
+      },
+    });
+
+    await expect(runListen([
+      "--barge-in", "--threshold", "0.1", "--min-speech-ms", "40", "--silence-ms", "20", "--voice", "demo",
+    ], config, { out: line => output.push(line), err: () => {} }, fetch, platform)).resolves.toBe(0);
+
+    expect(firstPlayerAborted).toBe(true);
+    // Both utterances were answered; the second one killed the first reply's tail.
+    expect(output).toEqual(["transcript: 你好", "reply: 回答", "transcript: 你好", "reply: 回答"]);
+  });
+
   test("runs a turn through the silero VAD when selected", async () => {
     const output: string[] = [];
     const windows: number[] = [];

@@ -77,13 +77,28 @@ export async function startMacosAudioHost(): Promise<MacosAudioHost> {
       reader.releaseLock();
     }
   })();
+  // Writing PCM to the helper is near-instant; the helper then renders it at realtime. The
+  // player must therefore keep its own audio clock: without it, "close" returns while the
+  // speaker still has seconds of queued reply to say, the session flips to listening, and a
+  // barge-in during that audible tail interrupts nothing — the exact failure a user reports
+  // as "I can't interrupt it".
+  let playbackEndsAtMs = 0;
+  const drainPadMs = 150; // device/render latency beyond the sample arithmetic
   const player: MacosAudioHost["player"] = {
     write: async (audio: PcmAudio) => {
       if (audio.sampleRate !== playbackRate) throw new TypeError(`speaker duplex requires ${playbackRate}Hz TTS audio`);
+      const durationMs = 1_000 * audio.samples.length / playbackRate;
+      playbackEndsAtMs = Math.max(Date.now(), playbackEndsAtMs) + durationMs;
       await stdin.write(new Uint8Array(audio.samples.buffer, audio.samples.byteOffset, audio.samples.byteLength));
     },
-    close: async () => {},
-    abort: async () => { child.kill(clearPlaybackSignal); },
+    close: async () => {
+      const remaining = playbackEndsAtMs + drainPadMs - Date.now();
+      if (remaining > 0) await Bun.sleep(remaining);
+    },
+    abort: async () => {
+      playbackEndsAtMs = 0;
+      child.kill(clearPlaybackSignal);
+    },
   };
   return { capture: { frames, close }, player, close };
 }

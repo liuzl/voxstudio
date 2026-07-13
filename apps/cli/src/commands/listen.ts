@@ -263,11 +263,18 @@ export async function runListen(
           await player.write(piece);
           session.mark(turn.id, "playback_first");
         }
-        if (!turn.signal.aborted) session.complete(turn.id);
+        // The last byte entering the player is not the reply being finished: sinks render
+        // at realtime after near-instant writes. Completing before close() flipped the
+        // session to listening while the speaker was still talking, so speech during the
+        // audible tail opened a fresh turn instead of barging in — and nothing stopped the
+        // audio. The turn stays `speaking` until the reply is audibly done.
+        if (!turn.signal.aborted) {
+          await player.close();
+          if (!turn.signal.aborted) session.complete(turn.id);
+        }
       } finally {
         turn.signal.removeEventListener("abort", abort);
         if (activePlayer === player) activePlayer = undefined;
-        if (!turn.signal.aborted) await player.close();
         if (!allowBargeIn) suppressInputUntil = Date.now() + 750;
       }
     } catch (error) {
