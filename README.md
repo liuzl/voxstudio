@@ -143,8 +143,10 @@ provisional barge-in policy: playback stops only after `minSpeechMs` of voiced a
 the interruption, and an unconfirmed trigger is recorded as a `false_barge_in` while the reply
 keeps playing. It suppresses microphone input during playback by default; `--barge-in` requires
 headphones or a headset. `--speaker-duplex` uses the macOS voice-processing helper, gated by a
-real-hardware measurement harness (`bun run measure:aec`, see `platforms/macos-audio/`); the
-formal gate run, Silero ONNX VAD, and the Web Studio remain separate measured delivery phases.
+real-hardware measurement harness (`bun run measure:aec`, see `platforms/macos-audio/`). The
+gate passed on built-in MacBook speakers with real speech: zero confirmed self-interruptions
+and 12/12 operator barge-ins heard. Route-change handling, release packaging of the helper,
+Silero ONNX VAD, and the Web Studio remain separate measured delivery phases.
 
 ## Related
 

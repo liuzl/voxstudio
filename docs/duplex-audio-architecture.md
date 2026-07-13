@@ -338,7 +338,11 @@ supported macOS hardware. Browser and CLI metrics are reported separately.
    real hardware, and refuses to pass an incomplete or synthetic-stimulus run.
    Interruption is now provisional as specified above: `listen` stops playback
    on `speech.confirmed` (minSpeechMs of voiced audio), and an unconfirmed
-   trigger is recorded as `false_barge_in` while playback continues. Route
+   trigger is recorded as `false_barge_in` while playback continues. The gate
+   passed on 2026-07-13 on built-in MacBook Pro speakers/microphone with real
+   TTS far-end speech: 0 confirmed self-interruptions (13.2/min raw triggers
+   absorbed by confirmation), 12/12 operator barge-ins heard with none missed
+   or false, capture-to-mute p95 186ms, 26.5dB direct path attenuation. Route
    changes, capability reporting, and release packaging remain required
    before speaker duplex is declared supported.
 5. **Web Studio realtime**: add a browser endpoint and LiveKit room/gateway,
