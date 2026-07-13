@@ -107,6 +107,40 @@ describe("engine HTTP clients", () => {
       .resolves.toBe("reply");
   });
 
+  test("chatStream yields SSE deltas even when events split across network chunks", async () => {
+    const events = [
+      'data: {"choices":[{"delta":{"content":"你好"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"，世界"}}]}\n\ndata: {"choices":[{"delta":{"content":"。"}}]}\n\n',
+      "data: [DONE]\n\n",
+    ].join("");
+    const bytes = new TextEncoder().encode(events);
+    const fetch: Fetch = async (_input, init) => {
+      expect((JSON.parse(String(init?.body)) as { stream?: boolean }).stream).toBe(true);
+      // Split mid-event to prove reassembly.
+      const cut = Math.floor(bytes.length / 3) + 1;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes.slice(0, cut));
+          controller.enqueue(bytes.slice(cut));
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: { "content-type": "text/event-stream" } });
+    };
+    const client = new LlmClient({ baseUrl: "https://voice.example", model: "gemma" }, fetch);
+    const deltas: string[] = [];
+    for await (const delta of client.chatStream([{ role: "user", content: "hi" }])) deltas.push(delta);
+    expect(deltas).toEqual(["你好", "，世界", "。"]);
+  });
+
+  test("chatStream falls back to the whole reply when the engine answers with plain JSON", async () => {
+    const fetch: Fetch = async () => json({ choices: [{ message: { content: "整段回复" } }] });
+    const client = new LlmClient({ baseUrl: "https://voice.example", model: "gemma" }, fetch);
+    const deltas: string[] = [];
+    for await (const delta of client.chatStream([{ role: "user", content: "hi" }])) deltas.push(delta);
+    expect(deltas).toEqual(["整段回复"]);
+  });
+
   test("non-success responses throw normalized errors", async () => {
     const fetch: Fetch = async () => json({
       detail: { error: { code: "busy", message: "Try later", type: "capacity" } },

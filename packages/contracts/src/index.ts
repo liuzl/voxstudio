@@ -84,6 +84,7 @@ export interface ChatCompletionRequest {
   messages: ChatMessage[];
   max_tokens: number;
   temperature?: number;
+  stream?: boolean;
 }
 
 export interface Voice {

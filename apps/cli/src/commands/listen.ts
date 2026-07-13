@@ -10,7 +10,7 @@ import {
   type SpeechProbabilityModel,
   type VadSegmenter,
 } from "@voxstudio/duplex-session";
-import { streamLong } from "@voxstudio/orchestration";
+import { streamReply } from "@voxstudio/orchestration";
 import { capturePcm, FfplaySink, loadSileroVadModel, startMacosAudioHost, type MacosAudioHost, type PcmCapture, type PcmSink } from "@voxstudio/platform-bun";
 import { sanitizeForTts } from "@voxstudio/text";
 import type { CliIo } from "../io";
@@ -227,27 +227,27 @@ export async function runListen(
         return;
       }
       io.out(`transcript: ${transcript}`);
-      const reply = await llm.chat([
-        ...(options.system === undefined ? [] : [{ role: "system" as const, content: options.system }]),
-        { role: "user", content: transcript },
-      ], options.maxTokens, undefined, turn.signal);
-      if (turn.signal.aborted) return;
-      if (!reply.trim()) {
-        io.err("listen: model returned empty content");
-        session.interrupt("cancel");
-        return;
-      }
-      io.out(`reply: ${reply}`);
-      if (!session.startSpeaking(turn.id)) return;
-      if (!allowBargeIn) suppressInputUntil = Number.POSITIVE_INFINITY;
+      // The reply pipelines: sentences flow into TTS while the model is still generating,
+      // so first audio no longer waits for the full completion. The turn stays `thinking`
+      // (still reopenable under the speculative policy) until the first piece exists.
+      let replyText = "";
+      const deltas = (async function* (): AsyncGenerator<string> {
+        for await (const delta of llm.chatStream([
+          ...(options.system === undefined ? [] : [{ role: "system" as const, content: options.system }]),
+          { role: "user", content: transcript },
+        ], options.maxTokens, undefined, turn.signal)) {
+          if (replyText === "") session.mark(turn.id, "llm_first");
+          replyText += delta;
+          yield delta;
+        }
+      })();
       const player = speakerHost?.player ?? platform.createPlayer();
       activePlayer = player;
       const abort = () => { void stopPlayer(player); };
       turn.signal.addEventListener("abort", abort, { once: true });
       try {
         const voice = options.voice ?? config.ttsDefaults.voice;
-        const sanitized = sanitizeForTts(reply);
-        for await (const piece of streamLong(tts, sanitized.text, {
+        for await (const piece of streamReply(tts, deltas, {
           // Conversation is latency-bound where long-form reading is seam-bound: first
           // audio arrives when the first chunk finishes synthesizing (engine RTF ≈ 1), so
           // an 8s first chunk is 8s of dead air. A tight first cap trades an earlier seam
@@ -259,15 +259,23 @@ export async function runListen(
           ...(voice === "clone" || voice === "design" ? {} : { prosodyPrompt: true }),
           continuationId: crypto.randomUUID(),
           signal: turn.signal,
+          transformChunk: text => sanitizeForTts(text).text,
         })) {
           if (turn.signal.aborted) return;
+          if (session.state === "thinking" && !session.startSpeaking(turn.id)) return;
+          if (!allowBargeIn) suppressInputUntil = Number.POSITIVE_INFINITY;
           session.mark(turn.id, "tts_first_audio");
-          // `streamLong` yields synthesis pieces, not low-latency PCM frames. A
-          // single piece can exceed the session queue duration, so this direct
-          // headset path writes it to ffplay immediately instead of dropping it.
+          // Synthesis pieces, not low-latency PCM frames: a single piece can exceed the
+          // session queue duration, so this direct path writes to the player immediately.
           await player.write(piece);
           session.mark(turn.id, "playback_first");
         }
+        if (!turn.signal.aborted && !replyText.trim()) {
+          io.err("listen: model returned empty content");
+          session.interrupt("cancel");
+          return;
+        }
+        if (!turn.signal.aborted) io.out(`reply: ${replyText}`);
         // The last byte entering the player is not the reply being finished: sinks render
         // at realtime after near-instant writes. Completing before close() flipped the
         // session to listening while the speaker was still talking, so speech during the

@@ -10,6 +10,7 @@ import {
   type SpeechEngine,
   type SynthesisOptions,
   streamLong,
+  streamReply,
   synthesizeLong,
 } from "./index";
 
@@ -61,6 +62,74 @@ async function collect(
   for await (const piece of streamLong(tts, text, synthesis)) pieces.push(piece.samples);
   return pieces;
 }
+
+describe("streaming reply orchestration", () => {
+  // Conversation-scale chunking: the shared fixture's 0.4s caps exist to force splits in
+  // the long-text tests, and would shred single sentences here.
+  const replyChunking: ChunkConfig = { ...chunking, maxSeconds: 15, firstMaxSeconds: 8 };
+
+  async function* deltas(parts: string[]): AsyncGenerator<string> {
+    for (const part of parts) yield part;
+  }
+
+  async function drainReply(
+    tts: SpeechEngine,
+    parts: string[],
+    extra: Partial<import("./index").StreamReplyOptions> = {},
+  ) {
+    const pieces: Float32Array[] = [];
+    for await (const piece of streamReply(tts, deltas(parts), { ...options, chunking: replyChunking, ...extra })) {
+      pieces.push(piece.samples);
+    }
+    return pieces;
+  }
+
+  test("synthesizes the first sentence as its own immediate chunk", async () => {
+    const tts = new FakeTts();
+    // Deltas split mid-sentence, the way a model streams tokens.
+    await drainReply(tts, ["你好", "。今天天气", "很好。"]);
+    expect(tts.calls.length).toBe(2);
+    expect(tts.calls[0]?.input).toBe("你好。");
+    expect(tts.calls[1]?.input).toBe("今天天气很好。");
+  });
+
+  test("marks only the final chunk as the continuation end", async () => {
+    const tts = new FakeTts();
+    await drainReply(tts, ["第一句。", "第二句。"], { continuationId: "reply-1" });
+    expect(tts.calls.map(call => call.continuation_end)).toEqual([false, true]);
+    expect(tts.calls.every(call => call.continuation_id === "reply-1")).toBe(true);
+  });
+
+  test("speaks an unpunctuated tail after the stream ends", async () => {
+    const tts = new FakeTts();
+    await drainReply(tts, ["好的。", "马上就来"], { continuationId: "reply-2" });
+    expect(tts.calls.map(call => call.input)).toEqual(["好的。", "马上就来"]);
+    expect(tts.calls[1]?.continuation_end).toBe(true);
+  });
+
+  test("a single-sentence reply is one chunk marked as the end", async () => {
+    const tts = new FakeTts();
+    await drainReply(tts, ["只有", "一句话。"], { continuationId: "reply-3" });
+    expect(tts.calls.map(call => call.input)).toEqual(["只有一句话。"]);
+    expect(tts.calls[0]?.continuation_end).toBe(true);
+  });
+
+  test("applies the chunk transform before synthesis and drops chunks it empties", async () => {
+    const tts = new FakeTts();
+    const pieces = await drainReply(tts, ["**你好。**", "正文继续。"], {
+      transformChunk: (text: string) => text.replaceAll("*", ""),
+    });
+    expect(tts.calls.map(call => call.input)).toEqual(["你好。", "正文继续。"]);
+    expect(pieces.length).toBeGreaterThan(0);
+  });
+
+  test("yields nothing for a stream with no speakable text", async () => {
+    const tts = new FakeTts();
+    const pieces = await drainReply(tts, ["   ", ""]);
+    expect(tts.calls).toEqual([]);
+    expect(pieces).toEqual([]);
+  });
+});
 
 describe("long-text orchestration", () => {
   test("requests chunks serially in order with stable wire fields", async () => {

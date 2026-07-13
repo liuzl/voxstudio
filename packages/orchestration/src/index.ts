@@ -11,7 +11,7 @@ import type {
   SpeechInput,
   TtsDefaults,
 } from "@voxstudio/contracts";
-import { chunkText } from "@voxstudio/text";
+import { chunkText, estSeconds, SentenceAssembler } from "@voxstudio/text";
 
 export interface SpeechEngine {
   speech(input: SpeechInput, signal?: AbortSignal): Promise<ArrayBuffer | Uint8Array>;
@@ -53,31 +53,31 @@ function speechInput(text: string, options: SynthesisOptions, end: boolean): Spe
   };
 }
 
-export async function* streamLong(
+interface TextChunk {
+  text: string;
+  last: boolean;
+}
+
+/**
+ * The synthesis pipeline shared by both entry points: per-chunk engine calls carrying the
+ * continuation session, edge-silence trims, loudness matching to the first chunk, and one
+ * fixed pause between pieces. Chunks may arrive incrementally; only the producer knows
+ * which is last, so each carries its own flag.
+ */
+async function* synthesizeChunks(
   tts: SpeechEngine,
-  text: string,
+  chunks: AsyncIterable<TextChunk> | Iterable<TextChunk>,
   options: SynthesisOptions,
 ): AsyncGenerator<PcmAudio> {
-  const chunks = chunkText(text, {
-    maxSeconds: options.chunking.maxSeconds,
-    firstMaxSeconds: options.chunking.firstMaxSeconds,
-    growth: options.chunking.growth,
-    enders: options.chunking.sentenceEnders,
-  });
-  if (chunks.length === 0) throw new TypeError("nothing to synthesize");
-
   const gapMs = Math.max(0, options.chunking.joinPauseMs - 2 * options.chunking.edgePadMs);
   let pause: Float32Array | null = null;
   let targetDb: number | null = null;
   let sampleRate: number | null = null;
 
-  for (let index = 0; index < chunks.length; index += 1) {
-    options.signal?.throwIfAborted();
-    const chunk = chunks[index] as string;
-    await options.onChunk?.(index, chunks.length, chunk);
+  for await (const chunk of chunks) {
     options.signal?.throwIfAborted();
     const decoded = readWav(await tts.speech(
-      speechInput(chunk, options, index === chunks.length - 1), options.signal,
+      speechInput(chunk.text, options, chunk.last), options.signal,
     ));
     options.signal?.throwIfAborted();
     if (sampleRate !== null && decoded.sampleRate !== sampleRate) {
@@ -100,6 +100,112 @@ export async function* streamLong(
     }
     yield { samples, sampleRate: decoded.sampleRate };
   }
+}
+
+export async function* streamLong(
+  tts: SpeechEngine,
+  text: string,
+  options: SynthesisOptions,
+): AsyncGenerator<PcmAudio> {
+  const chunks = chunkText(text, {
+    maxSeconds: options.chunking.maxSeconds,
+    firstMaxSeconds: options.chunking.firstMaxSeconds,
+    growth: options.chunking.growth,
+    enders: options.chunking.sentenceEnders,
+  });
+  if (chunks.length === 0) throw new TypeError("nothing to synthesize");
+  const pieces = async function* (): AsyncGenerator<TextChunk> {
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunk = chunks[index] as string;
+      await options.onChunk?.(index, chunks.length, chunk);
+      yield { text: chunk, last: index === chunks.length - 1 };
+    }
+  };
+  yield* synthesizeChunks(tts, pieces(), options);
+}
+
+export interface StreamReplyOptions extends SynthesisOptions {
+  /** Applied to each chunk's text before synthesis (e.g. TTS sanitization). */
+  transformChunk?: (text: string) => string;
+}
+
+/**
+ * Pipeline a streaming reply into speech: sentences are assembled from the model's text
+ * deltas, the very first complete sentence is synthesized immediately — it is the reply's
+ * time-to-first-audio — and later sentences accumulate into growing chunks exactly like
+ * `streamLong`'s, all under one continuation session. The model keeps generating while the
+ * engine synthesizes: the two stages overlap instead of queueing.
+ */
+export async function* streamReply(
+  tts: SpeechEngine,
+  deltas: AsyncIterable<string>,
+  options: StreamReplyOptions,
+): AsyncGenerator<PcmAudio> {
+  const chunking = options.chunking;
+  const textChunks = async function* (): AsyncGenerator<TextChunk> {
+    const assembler = new SentenceAssembler(chunking.sentenceEnders);
+    let pending = "";
+    let emitted = 0;
+    let previousSeconds = 0;
+    let held: string | undefined;
+
+    const capSeconds = (): number => emitted === 0
+      ? Math.min(chunking.firstMaxSeconds ?? chunking.maxSeconds, chunking.maxSeconds)
+      : Math.min(chunking.maxSeconds, chunking.growth * Math.max(previousSeconds, 1));
+
+    // One chunk of lookahead: only the producer's end reveals which chunk is last, so each
+    // ready chunk is held until the next exists (last: false) or the stream ends (last: true).
+    function* release(text: string, last: boolean): Generator<TextChunk> {
+      const transformed = options.transformChunk ? options.transformChunk(text) : text;
+      if (!transformed.trim()) return;
+      if (held !== undefined) yield { text: held, last: false };
+      held = undefined;
+      if (last) yield { text: transformed, last: true };
+      else held = transformed;
+    }
+
+    function* drain(final: boolean): Generator<TextChunk> {
+      while (pending.trim()) {
+        if (!final && emitted > 0 && estSeconds(pending) < capSeconds()) break;
+        const cap = capSeconds();
+        let text = pending;
+        if (estSeconds(text) > cap * 1.2) {
+          const parts = chunkText(text, {
+            maxSeconds: chunking.maxSeconds,
+            firstMaxSeconds: cap,
+            growth: chunking.growth,
+            enders: chunking.sentenceEnders,
+          });
+          text = parts[0] as string;
+          pending = parts.slice(1).join(" ");
+        } else {
+          pending = "";
+        }
+        emitted += 1;
+        previousSeconds = estSeconds(text);
+        yield* release(text, final && !pending.trim());
+      }
+    }
+
+    for await (const delta of deltas) {
+      options.signal?.throwIfAborted();
+      for (const sentence of assembler.push(delta)) {
+        pending += sentence;
+        yield* drain(false);
+      }
+      // The hold below exists only for the last-chunk flag. The moment any further text is
+      // in flight — even half a sentence — the held chunk cannot be last, so release it now
+      // rather than delaying its synthesis until the next full chunk forms.
+      if (held !== undefined && (pending.trim() || assembler.hasBuffered())) {
+        yield { text: held, last: false };
+        held = undefined;
+      }
+    }
+    pending += assembler.flush();
+    yield* drain(true);
+    if (held !== undefined) yield { text: held, last: true };
+  };
+  yield* synthesizeChunks(tts, textChunks(), options);
 }
 
 export async function synthesizeLong(

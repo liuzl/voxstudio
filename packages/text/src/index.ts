@@ -197,6 +197,47 @@ export interface ChunkOptions {
   enders?: string;
 }
 
+/**
+ * Assembles a token stream into complete sentences. `push` returns each sentence the moment
+ * its terminator arrives — the bridge that lets TTS start on sentence one while the model
+ * is still generating sentence three. Unfinished text stays buffered until `flush`.
+ */
+export class SentenceAssembler {
+  private readonly enders: Set<string>;
+  private buffer = "";
+
+  constructor(enders: string = sentenceEnders) {
+    this.enders = new Set(Array.from(enders));
+  }
+
+  push(delta: string): string[] {
+    this.buffer += delta;
+    const chars = Array.from(this.buffer);
+    const sentences: string[] = [];
+    let start = 0;
+    for (let index = 0; index < chars.length; index += 1) {
+      if (this.enders.has(chars[index] as string)) {
+        sentences.push(chars.slice(start, index + 1).join(""));
+        start = index + 1;
+      }
+    }
+    this.buffer = chars.slice(start).join("");
+    return sentences.filter(sentence => sentence.trim().length > 0);
+  }
+
+  /** True while un-terminated text sits in the buffer — the signal that more is coming. */
+  hasBuffered(): boolean {
+    return this.buffer.trim().length > 0;
+  }
+
+  /** Whatever never reached a terminator — the reply's unpunctuated tail. */
+  flush(): string {
+    const rest = this.buffer;
+    this.buffer = "";
+    return rest.trim().length > 0 ? rest : "";
+  }
+}
+
 export function chunkText(input: string, options: ChunkOptions = {}): string[] {
   const text = normalizeWhitespace(input);
   if (!text) return [];

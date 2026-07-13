@@ -56,6 +56,41 @@ export function parseTranscript(raw: string): Transcription {
   };
 }
 
+/**
+ * Yield the `data:` payloads of a server-sent-event stream, handling events split across
+ * network chunks. Ends at `[DONE]` or stream close.
+ */
+export async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+  const decoder = new TextDecoder();
+  const reader = body.getReader();
+  let buffer = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline).replace(/\r$/, "");
+        buffer = buffer.slice(newline + 1);
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (data === "[DONE]") return;
+        if (data) yield data;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export function extractChatDelta(payload: unknown): string {
+  if (!isRecord(payload) || !Array.isArray(payload.choices)) return "";
+  const choice = payload.choices[0];
+  if (!isRecord(choice) || !isRecord(choice.delta)) return "";
+  return typeof choice.delta.content === "string" ? choice.delta.content : "";
+}
+
 export function extractChatContent(payload: unknown): string {
   if (!isRecord(payload) || !Array.isArray(payload.choices)) return "";
   const choice = payload.choices[0];

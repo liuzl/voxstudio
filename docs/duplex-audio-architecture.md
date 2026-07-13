@@ -403,10 +403,16 @@ supported macOS hardware. Browser and CLI metrics are reported separately.
    headset mode. It has simulated end-to-end coverage, and `--vad silero`
    selects the Silero ONNX adapter (see VAD policy). Real-device headset
    validation and a Silero gate run remain before declaring it supported.
-3. **Streaming adapters**: batch ASR, LLM, and TTS clients now accept the
-   current turn's `AbortSignal`, and `streamLong` stops requesting chunks after
-   cancellation. Add token-streaming LLM/ASR/TTS adapters and sentence-level
-   LLM-to-TTS pipelining while keeping one-shot fallbacks.
+3. **Streaming adapters**: batch ASR, LLM, and TTS clients accept the current
+   turn's `AbortSignal`, and `streamLong` stops requesting chunks after
+   cancellation. `LlmClient.chatStream` streams completions over SSE — an
+   engine that answers with plain JSON degrades to one full-reply delta — and
+   `streamReply` pipelines the token stream into synthesis: the first complete
+   sentence is synthesized immediately while the model keeps generating, later
+   sentences accumulate into growing chunks, and one continuation session spans
+   the reply. `vox listen` speaks through this pipeline. Streaming ASR and
+   engine-side TTS audio streaming (the ~2.5s fixed per-request synthesis
+   overhead) remain.
 4. **macOS audio helper**: `platforms/macos-audio/vox-audio-host.swift` now
    builds a narrow stdin/stdout PCM helper using `AVAudioEngine` Voice
    Processing; `vox listen --speaker-duplex` selects it. The empirical gate

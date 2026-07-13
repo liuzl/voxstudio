@@ -38,6 +38,7 @@ export type TurnTimingPoint =
   | "vad_end"
   | "thinking"
   | "asr_done"
+  | "llm_first"
   | "speaking"
   | "tts_first_audio"
   | "playback_first";

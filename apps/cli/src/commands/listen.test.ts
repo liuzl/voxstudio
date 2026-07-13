@@ -345,6 +345,73 @@ describe("listen command", () => {
     expect(asrBytes[1] as number).toBeLessThan((asrBytes[0] as number) * 1.5);
   });
 
+  test("pipelines a streaming reply: first sentence synthesizes before the model finishes", async () => {
+    const output: string[] = [];
+    const speechInputs: string[] = [];
+    let releaseRest = () => {};
+    const restGate = new Promise<void>(resolve => { releaseRest = resolve; });
+    const capture: PcmCapture = {
+      frames: (async function* () {
+        yield { samples: new Float32Array(320).fill(0.2), sampleRate: 16_000, timestampMs: 0 };
+        yield { samples: new Float32Array(320).fill(0.2), sampleRate: 16_000, timestampMs: 20 };
+        yield { samples: new Float32Array(320), sampleRate: 16_000, timestampMs: 40 };
+      })(),
+      close: async () => {},
+    };
+    const platform: ListenPlatform = {
+      capture: async () => capture,
+      createPlayer: () => ({ write: async () => {}, close: async () => {} }),
+    };
+    const encoder = new TextEncoder();
+    const event = (content: string) =>
+      encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`);
+    const fetch: Fetch = async input => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/v1/audio/transcriptions") return Response.json({ text: "你好" });
+      if (path === "/v1/chat/completions") {
+        // Sentence one and a partial of sentence two arrive, then the stream stalls until
+        // sentence one has been synthesized — proving TTS did not wait for the completion.
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            controller.enqueue(event("第一句话说完了。第二句"));
+            await restGate;
+            controller.enqueue(event("话也说完了。"));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        });
+        return new Response(stream, { headers: { "content-type": "text/event-stream" } });
+      }
+      if (path === "/v1/audio/speech") return new Response(new Uint8Array(response()));
+      throw new Error(`unexpected path ${path}`);
+    };
+    const trackingFetch: Fetch = async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/v1/audio/speech") {
+        speechInputs.push((JSON.parse(String(init?.body)) as { input: string }).input);
+        if (speechInputs.length === 1) releaseRest();
+      }
+      return fetch(input, init);
+    };
+    const config = parseConfig({
+      engines: {
+        asr: { base_url: "http://asr.test" },
+        llm: { base_url: "http://llm.test" },
+        tts: { base_url: "http://tts.test" },
+      },
+    });
+
+    await expect(runListen([
+      "--barge-in", "--threshold", "0.1", "--min-speech-ms", "40", "--silence-ms", "20", "--voice", "demo",
+    ], config, { out: line => output.push(line), err: () => {} }, trackingFetch, platform)).resolves.toBe(0);
+
+    // The gate only opens after speech request #1, so the pipeline must have synthesized
+    // sentence one while the model still held sentence two.
+    expect(speechInputs[0]).toBe("第一句话说完了。");
+    expect(speechInputs.length).toBe(2);
+    expect(output).toEqual(["transcript: 你好", "reply: 第一句话说完了。第二句话也说完了。"]);
+  });
+
   test("synthesizes a tight first chunk so the reply starts speaking early", async () => {
     const speechInputs: string[] = [];
     const longReply = "第一句话说完了。第二句话也说完了。第三句话比较长，需要更多的时间来讲完整个内容。"
