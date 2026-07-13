@@ -284,6 +284,75 @@ describe("duplex session", () => {
     expect(interrupted).toMatchObject({ endReason: "cancel", offsetsMs: { vad_end: 500 } });
   });
 
+  test("a soft-ended turn reopens for resumed speech, aborting only the superseded revision", () => {
+    const { value, events } = session();
+    value.start();
+    const first = value.startUserSpeech();
+    expect(value.softFinalizeUserSpeech(first.id)).toBe(true);
+    expect(value.startThinking(first.id)).toBe(true);
+
+    const resumed = value.reopen(first.id);
+    expect(resumed).toBeDefined();
+    expect(resumed?.id).toBe(first.id);
+    expect(resumed?.revision).toBe(1);
+    // The superseded revision's work cancels; the turn itself is alive and listening again.
+    expect(first.signal.aborted).toBe(true);
+    expect(first.signal.reason).toBe("reopened");
+    expect(resumed?.signal.aborted).toBe(false);
+    expect(value.state).toBe("speech_started");
+    expect(events.find(event => event.type === "turn.reopened")).toMatchObject({
+      turnId: first.id, revision: 1,
+    });
+    expect(events.filter(event => event.type === "turn.interrupted")).toHaveLength(0);
+
+    // The reopened revision runs to completion like any turn.
+    expect(value.softFinalizeUserSpeech(first.id)).toBe(true);
+    expect(value.startThinking(first.id)).toBe(true);
+    expect(value.startSpeaking(first.id)).toBe(true);
+    expect(value.complete(first.id)).toBe(true);
+  });
+
+  test("reopening is refused after commitment, after a hard finalize, and for stale turns", () => {
+    const { value } = session();
+    value.start();
+
+    // Hard finalize is not reopenable.
+    const hard = value.startUserSpeech();
+    value.finalizeUserSpeech(hard.id);
+    expect(value.reopen(hard.id)).toBeUndefined();
+    value.interrupt("cancel");
+
+    // Speaking is the commitment point: reopening playback is barge-in territory.
+    const committed = value.startUserSpeech();
+    value.softFinalizeUserSpeech(committed.id);
+    value.startThinking(committed.id);
+    value.startSpeaking(committed.id);
+    expect(value.reopen(committed.id)).toBeUndefined();
+    expect(value.reopen("someone-else")).toBeUndefined();
+    expect(committed.signal.aborted).toBe(false);
+  });
+
+  test("a reopened turn restarts its timing profile", () => {
+    const events: DuplexEvent[] = [];
+    let clock = 0;
+    const value = new DuplexSession({ now: () => clock, newTurnId: () => "turn-1", onEvent: e => events.push(e) });
+    value.start();
+    const turn = value.startUserSpeech();
+    clock = 300;
+    value.softFinalizeUserSpeech(turn.id); // vad_end +300, then discarded by the reopen
+    clock = 500;
+    const resumed = value.reopen(turn.id);
+    clock = 900;
+    value.softFinalizeUserSpeech(resumed?.id as string);
+    value.startThinking(turn.id);
+    value.startSpeaking(turn.id);
+    clock = 1_000;
+    value.complete(turn.id);
+    const timing = events.find(event => event.type === "turn.timing");
+    // The profile describes the revision that produced the reply, not the abandoned one.
+    expect(timing).toMatchObject({ endReason: "completed", offsetsMs: { vad_end: 900 } });
+  });
+
   test("records a false barge-in against the speaking turn without stopping it", () => {
     const { value, events } = session();
     value.start();

@@ -28,9 +28,10 @@ export interface DuplexStateEvent {
 }
 
 export interface DuplexTurnEvent {
-  type: "turn.started" | "vad.end" | "turn.interrupted" | "turn.completed" | "turn.false_barge_in";
+  type: "turn.started" | "vad.end" | "turn.interrupted" | "turn.completed" | "turn.false_barge_in" | "turn.reopened";
   turnId: string;
   reason?: InterruptionReason;
+  revision?: number;
 }
 
 export type TurnTimingPoint =
@@ -70,6 +71,12 @@ export type DuplexEvent = DuplexEventPayload & {
 
 export interface DuplexTurn {
   id: string;
+  /**
+   * Increments when a soft-ended turn reopens. The signal below belongs to this revision:
+   * reopening aborts it (reason "reopened") and hands the caller a fresh handle, so work
+   * started for a superseded revision cancels exactly like work for a superseded turn.
+   */
+  revision: number;
   signal: AbortSignal;
 }
 
@@ -490,6 +497,7 @@ interface ActiveTurn extends DuplexTurn {
   controller: AbortController;
   startedAtMs: number;
   timing: Partial<Record<TurnTimingPoint, number>>;
+  reopenable: boolean;
 }
 
 function defaultTurnId(): string {
@@ -542,23 +550,64 @@ export class DuplexSession {
     const controller = new AbortController();
     const turn: ActiveTurn = {
       id: this.newTurnId(),
+      revision: 0,
       signal: controller.signal,
       controller,
       startedAtMs: this.now(),
       timing: {},
+      reopenable: false,
     };
     this.active = turn;
     this.transition("speech_started");
     this.emit({ type: "turn.started", turnId: turn.id });
-    return turn;
+    // A snapshot, not the live turn: reopening swaps the live signal for a fresh one, and a
+    // handle that silently followed it would let superseded work escape its abort.
+    return { id: turn.id, revision: turn.revision, signal: turn.signal };
   }
 
   finalizeUserSpeech(turnId: string): boolean {
     if (!this.isCurrent(turnId) || this.currentState !== "speech_started") return false;
+    if (this.active) this.active.reopenable = false;
     this.mark(turnId, "vad_end");
     this.transition("finalizing");
     this.emit({ type: "vad.end", turnId });
     return true;
+  }
+
+  /**
+   * Finalize speculatively: the turn proceeds to processing exactly as after
+   * `finalizeUserSpeech`, but stays reopenable until it starts speaking. The kernel owns
+   * only the mechanism — whether resumed speech is recent enough to reopen rather than
+   * start a new turn is the turn-taking policy's decision.
+   */
+  softFinalizeUserSpeech(turnId: string): boolean {
+    if (!this.isCurrent(turnId) || this.currentState !== "speech_started") return false;
+    if (this.active) this.active.reopenable = true;
+    this.mark(turnId, "vad_end");
+    this.transition("finalizing");
+    this.emit({ type: "vad.end", turnId });
+    return true;
+  }
+
+  /**
+   * Resume a soft-ended turn because the user kept talking. Aborts the superseded
+   * revision's in-flight work, returns a fresh handle for the same turn, and restarts the
+   * timing profile — the reply the user will actually hear is the one answering their
+   * complete utterance. Refused once the turn is speaking: that is the commitment point,
+   * and interrupting playback is the barge-in path, not a reopen.
+   */
+  reopen(turnId: string): DuplexTurn | undefined {
+    const active = this.active;
+    if (!active || active.id !== turnId || !active.reopenable) return undefined;
+    if (this.currentState !== "finalizing" && this.currentState !== "thinking") return undefined;
+    active.controller.abort("reopened");
+    active.controller = new AbortController();
+    active.signal = active.controller.signal;
+    active.revision += 1;
+    active.timing = {};
+    this.transition("speech_started");
+    this.emit({ type: "turn.reopened", turnId, revision: active.revision });
+    return { id: active.id, revision: active.revision, signal: active.signal };
   }
 
   startThinking(turnId: string): boolean {
@@ -570,6 +619,9 @@ export class DuplexSession {
 
   startSpeaking(turnId: string): boolean {
     if (!this.isCurrent(turnId) || this.currentState !== "thinking") return false;
+    // Commitment point: from here the reply is being delivered, and resumed user speech is
+    // a barge-in for the interruption policy, never a reopen.
+    if (this.active) this.active.reopenable = false;
     this.mark(turnId, "speaking");
     this.transition("speaking");
     return true;
