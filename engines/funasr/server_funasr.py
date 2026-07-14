@@ -102,6 +102,11 @@ def create_app(recognizer: Recognizer | None = None, settings: Settings | None =
     async def health() -> JSONResponse:
         return JSONResponse({"status": "ok", "model": resolved.model})
 
+    @app.get("/health")
+    async def health_compat() -> JSONResponse:
+        # The product health probe expects this path.
+        return JSONResponse({"status": "ok", "model": resolved.model})
+
     @app.post("/v1/audio/transcriptions")
     async def transcribe(
         file: Annotated[UploadFile, File()],
