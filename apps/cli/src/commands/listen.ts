@@ -30,11 +30,11 @@ model (fetched into a verified local cache on first use) and is the default wher
 runtime is available; otherwise listen says so and uses the energy detector. --threshold is the
 energy VAD's RMS threshold; under silero it sets the level pre-gate that keeps residual echo
 below notice (both default 0.01). --timing
-prints each turn's latency profile (VAD end, ASR, reply, first audio) to stderr. --turn-taking
-speculative ends a turn after a short silence (--silence-ms defaults to 150 in this mode) and
-starts answering immediately; if you keep talking within --reopen-ms (default 7000) before the
-reply starts playing, the turn reopens and answers your complete utterance instead. It stays
-opt-in until its latency win and false-reopen rate are measured. --save-utterances writes each
+prints each turn's latency profile (VAD end, ASR, reply, first audio) to stderr. Turn-taking is
+speculative by default: a turn ends after a short silence (--silence-ms defaults to 150) and the
+reply starts immediately; if you keep talking within --reopen-ms (default 7000) before playback
+begins, the turn reopens and answers your complete utterance instead. --turn-taking conservative
+restores the single 650ms-silence policy. --save-utterances writes each
 utterance to DIR as a WAV plus what ASR heard — an explicit opt-in for building an ASR test set
 from your own voice; nothing is recorded without it.`;
 
@@ -91,7 +91,7 @@ function parse(args: string[]): ListenOptions {
   const options: ListenOptions = {
     language: "auto", bargeIn: false, speakerDuplex: false, vad: "silero", vadExplicit: false,
     silenceMs: 650, minSpeechMs: 250,
-    turnTaking: "conservative", reopenMs: 7_000, timing: false,
+    turnTaking: "speculative", reopenMs: 7_000, timing: false,
   };
   let silenceSet = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -158,6 +158,10 @@ export async function runListen(
         io.err(`listen: playback queue reached ${event.maxQueuedMs}ms; dropping audio`);
       } else if (event.type === "turn.false_barge_in") {
         io.err("listen: ignored a brief sound during playback (not speech)");
+      } else if (event.type === "turn.reopened" && options.timing) {
+        // The wasted-speculation counter: each reopen means one speculative dispatch was
+        // aborted and re-run on the merged utterance.
+        io.err(`timing: turn reopened (revision ${event.revision})`);
       } else if (event.type === "turn.timing" && options.timing) {
         const points = Object.entries(event.offsetsMs).map(([point, ms]) => `${point} +${Math.round(ms)}ms`);
         io.err(`timing: ${points.join("  ")} (${event.endReason})`);
