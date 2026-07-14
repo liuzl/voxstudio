@@ -122,6 +122,8 @@ it speaks. See `docs/chunking.md`.
 The duplex conversation architecture, including CLI speaker-mode AEC, browser
 WebRTC/LiveKit transport, cancellation semantics, privacy boundaries, and
 quality gates, is specified in [docs/duplex-audio-architecture.md](./docs/duplex-audio-architecture.md).
+The browser studio for voxstudio.cc — panels, gateway, hosting, and delivery
+phases — is specified in [docs/web-studio.md](./docs/web-studio.md).
 
 ## Model stack
 
