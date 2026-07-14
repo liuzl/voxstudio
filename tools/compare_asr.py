@@ -74,8 +74,9 @@ def transcribe(base_url: str, wav: Path, language: str | None) -> tuple[str, flo
         import json
         payload = json.loads(response.read())
     elapsed = time.monotonic() - started
-    # Engines may tag the language (e.g. parakeet's <|zh|>); strip any such decoration.
-    text = re.sub(r"<\|[^|]*\|>", "", str(payload.get("text", ""))).strip()
+    # Engines tag the language in different styles — parakeet appends <zh-CN>, SenseVoice
+    # wraps <|zh|>. The product client strips both; scoring must too.
+    text = re.sub(r"<\|[^|]*\|>|<[A-Za-z-]+>", "", str(payload.get("text", ""))).strip()
     return text, elapsed
 
 
