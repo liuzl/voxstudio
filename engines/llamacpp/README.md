@@ -26,8 +26,10 @@ engines:
     model: gemma4-12b-qat
 ```
 
-**Do not bother with the Gemma MTP draft** (`--spec-type draft-mtp` +
-`mtp-gemma-4-12B-it.gguf`): measured draft acceptance is 12–20% on Mandarin chat —
-regardless of sampling temperature, draft device, or host — so speculation is a net
-slowdown (59 → 19 chars/s here). The RTX host that appears fast with MTP enabled is fast
-despite it, not because of it; its speed is raw GPU throughput.
+**Leave the Gemma MTP draft off on Apple Silicon** (`--spec-type draft-mtp` +
+`mtp-gemma-4-12B-it.gguf`): measured end-to-end it is a net slowdown here (60 → 19
+chars/s) even though the draft accepts a healthy ~2.7 tokens per verification round —
+Metal's speculation overhead exceeds the gain at chat-time acceptance. The same
+configuration is a systematically-verified 3x+ win on a CUDA host (100 → 307-375 tok/s
+in the 2026-06-12 benchmark): speculation's payoff is a property of the backend, not of
+the model pair, and each host needs its own A/B.
