@@ -34,6 +34,16 @@ engines:
     model: sensevoice-small
 ```
 
+## Deploy on macOS (launchd)
+
+`com.voxstudio.funasr-asr.plist.example` runs the server as a user agent (the systemd
+unit below is for Linux hosts). Fill in the checkout path, then:
+
+```sh
+cp com.voxstudio.funasr-asr.plist.example ~/Library/LaunchAgents/com.voxstudio.funasr-asr.plist
+launchctl load ~/Library/LaunchAgents/com.voxstudio.funasr-asr.plist
+```
+
 ## Contract
 
 - `POST /v1/audio/transcriptions` — multipart `file`, optional `language` hint
