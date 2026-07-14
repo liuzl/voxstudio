@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- launchd user agent for the Kokoro TTS server. Replace %CHECKOUT% and %UV_BIN%;
+     machine-specific values stay out of this public repo. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.voxstudio.kokoro-tts</string>
+  <key>WorkingDirectory</key><string>%CHECKOUT%/engines/kokoro</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>%UV_BIN%</string>
+    <string>run</string>
+    <string>python</string>
+    <string>server_kokoro.py</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>KOKORO_PORT</key><string>18089</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/kokoro-tts.log</string>
+  <key>StandardErrorPath</key><string>/tmp/kokoro-tts.log</string>
+</dict>
+</plist>

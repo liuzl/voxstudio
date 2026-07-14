@@ -30,6 +30,8 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | `engines/voxcpm2-server/` | Our TTS engine wrapper — FastAPI over OpenBMB VoxCPM2 |
 | `engines/parakeet/` | Deployment and integration notes for the default real-time ASR engine |
 | `engines/moss-transcribe/` | Evaluation notes for long-form ASR and speaker diarization |
+| `engines/funasr/` | Realtime-slot ASR server (SenseVoice-Small / Paraformer, OpenAI-compatible) |
+| `engines/kokoro/` | Local CPU TTS server — the conversation fast lane (fixed voice bank, ~0.2s first audio) |
 | `packages/` | Shared TypeScript contracts, clients, configuration, text, audio, and orchestration |
 | `packages/duplex-session/` | Platform-neutral realtime turn state, cancellation, events, and bounded playback queue |
 | `platforms/bun/` | Filesystem, process, recording, and playback adapters for Bun apps |

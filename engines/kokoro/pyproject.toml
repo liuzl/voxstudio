@@ -1,0 +1,28 @@
+[project]
+name = "kokoro-server"
+version = "0.1.0"
+description = "OpenAI-compatible HTTP adapter for Kokoro TTS (local conversation fast lane)"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "huggingface-hub>=0.25",
+    "kokoro>=0.9",
+    "misaki[zh]>=0.9",
+    "soundfile>=0.12",
+    "torch>=2.3",
+    "torchaudio>=2.3",
+    "uvicorn>=0.30",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28",
+    "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.uv]
+package = false
