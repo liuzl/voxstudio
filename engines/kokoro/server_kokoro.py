@@ -62,8 +62,17 @@ class KokoroSynthesizer:
 
         self._lock = threading.Lock()
         model = KModel(repo_id=settings.repo).to(settings.device).eval()
+        # The Chinese G2P cannot phonemize embedded English words — they come out mangled
+        # or dropped. Per the model card, English spans are routed to the English G2P
+        # pipeline (model=False: G2P only, no second model).
+        en_pipeline = KPipeline(lang_code="a", repo_id=settings.repo, model=False)
+
+        def en_callable(text: str) -> str:
+            return next(en_pipeline(text)).phonemes or ""
+
         # zh voices use the Chinese G2P pipeline; the model itself is language-agnostic.
-        self._pipeline = KPipeline(lang_code="z", repo_id=settings.repo, model=model)
+        self._pipeline = KPipeline(lang_code="z", repo_id=settings.repo, model=model,
+                                   en_callable=en_callable)
         self._voices = sorted(
             name.removeprefix("voices/").removesuffix(".pt")
             for name in list_repo_files(settings.repo)
