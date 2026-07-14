@@ -1,0 +1,22 @@
+# systemd unit template for the FunASR transcription server.
+# Copy to /etc/systemd/system/funasr-asr.service and fill in the placeholders;
+# machine-specific values stay out of this public repo.
+[Unit]
+Description=FunASR OpenAI-compatible transcription server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%SERVICE_USER%
+WorkingDirectory=%CHECKOUT%/engines/funasr
+Environment=FUNASR_HOST=127.0.0.1
+Environment=FUNASR_PORT=18088
+Environment=FUNASR_MODEL=iic/SenseVoiceSmall
+Environment=FUNASR_DEVICE=%DEVICE%
+ExecStart=%UV_BIN% run python server_funasr.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

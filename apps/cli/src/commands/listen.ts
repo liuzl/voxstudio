@@ -13,12 +13,14 @@ import {
 import { streamReply } from "@voxstudio/orchestration";
 import { capturePcm, FfplaySink, loadSileroVadModel, startMacosAudioHost, type MacosAudioHost, type PcmCapture, type PcmSink } from "@voxstudio/platform-bun";
 import { sanitizeForTts } from "@voxstudio/text";
+import { join } from "node:path";
 import type { CliIo } from "../io";
 
 export const listenUsage = `usage: vox listen [--device NAME] [--language LANG] [--system TEXT] [--max-tokens N]
                  [--voice VOICE] [--barge-in | --speaker-duplex] [--vad energy|silero]
                  [--turn-taking conservative|speculative] [--reopen-ms N]
                  [--threshold N] [--silence-ms N] [--min-speech-ms N] [--timing]
+                 [--save-utterances DIR]
 
 Run a continuous voice conversation. Press Ctrl-C to stop.
 Without --barge-in, microphone input is suppressed while the agent speaks so external speakers
@@ -32,7 +34,9 @@ prints each turn's latency profile (VAD end, ASR, reply, first audio) to stderr.
 speculative ends a turn after a short silence (--silence-ms defaults to 150 in this mode) and
 starts answering immediately; if you keep talking within --reopen-ms (default 7000) before the
 reply starts playing, the turn reopens and answers your complete utterance instead. It stays
-opt-in until its latency win and false-reopen rate are measured.`;
+opt-in until its latency win and false-reopen rate are measured. --save-utterances writes each
+utterance to DIR as a WAV plus what ASR heard — an explicit opt-in for building an ASR test set
+from your own voice; nothing is recorded without it.`;
 
 interface ListenOptions {
   device?: string;
@@ -50,6 +54,7 @@ interface ListenOptions {
   silenceMs: number;
   minSpeechMs: number;
   timing: boolean;
+  saveUtterances?: string;
 }
 
 export interface ListenPlayer extends PcmSink {
@@ -98,6 +103,7 @@ function parse(args: string[]): ListenOptions {
     else if (arg === "--barge-in") options.bargeIn = true;
     else if (arg === "--speaker-duplex") options.speakerDuplex = true;
     else if (arg === "--timing") options.timing = true;
+    else if (arg === "--save-utterances") options.saveUtterances = required(args, ++index, arg);
     else if (arg === "--turn-taking") {
       const value = required(args, ++index, arg);
       if (value !== "conservative" && value !== "speculative") {
@@ -220,6 +226,15 @@ export async function runListen(
       );
       session.mark(turn.id, "asr_done");
       const transcript = transcription.text.trim();
+      if (options.saveUtterances) {
+        // An explicit opt-in per the privacy rules. The empty-transcript failures are the
+        // most valuable samples in the set, so saving happens regardless of the result.
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const base = join(options.saveUtterances, `utterance-${stamp}`);
+        await Bun.write(`${base}.wav`, wav);
+        await Bun.write(`${base}.txt`, `${transcript}\n`);
+        io.err(`listen: saved utterance ${base}.wav`);
+      }
       if (turn.signal.aborted) return;
       if (!transcript) {
         io.err("listen: ASR returned empty text");
