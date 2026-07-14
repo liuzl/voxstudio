@@ -68,6 +68,8 @@ export interface SpeechRequest {
   prosody_prompt?: boolean;
   continuation_id?: string;
   continuation_end?: boolean;
+  /** Chunked f32le PCM as generation proceeds, instead of one WAV after it finishes. */
+  stream?: boolean;
 }
 
 export type SpeechInput = Omit<SpeechRequest, "model">;

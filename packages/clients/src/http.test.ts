@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SpeechInput, SpeechRequest } from "@voxstudio/contracts";
+import { writeWav } from "@voxstudio/audio";
 import { AsrClient, EngineHttpError, LlmClient, TtsClient, type Fetch } from "./index";
 
 function json(value: unknown, init: ResponseInit = {}): Response {
@@ -139,6 +140,47 @@ describe("engine HTTP clients", () => {
     const deltas: string[] = [];
     for await (const delta of client.chatStream([{ role: "user", content: "hi" }])) deltas.push(delta);
     expect(deltas).toEqual(["整段回复"]);
+  });
+
+  test("speechStream yields PCM pieces from a chunked audio/pcm response", async () => {
+    // Two pieces whose byte boundary deliberately splits a float in half.
+    const samples = Float32Array.from([0.1, -0.2, 0.3, -0.4, 0.5]);
+    const bytes = new Uint8Array(samples.buffer.slice(0));
+    const fetch: Fetch = async (_input, init) => {
+      expect((JSON.parse(String(init?.body)) as { stream?: boolean }).stream).toBe(true);
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes.slice(0, 6));
+          controller.enqueue(bytes.slice(6));
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        headers: { "content-type": "audio/pcm", "x-sample-rate": "48000" },
+      });
+    };
+    const client = new TtsClient({ baseUrl: "https://voice.example", model: "voxcpm2" }, fetch);
+    const pieces: number[][] = [];
+    for await (const piece of client.speechStream({
+      input: "你好", voice: "laok", response_format: "wav", cfg_value: 2, timesteps: 10,
+    })) {
+      expect(piece.sampleRate).toBe(48_000);
+      pieces.push([...piece.samples].map(value => Number(value.toFixed(1))));
+    }
+    expect(pieces.flat()).toEqual([0.1, -0.2, 0.3, -0.4, 0.5]);
+    expect(pieces.length).toBeGreaterThan(1);
+  });
+
+  test("speechStream degrades to one piece when the engine answers a whole WAV", async () => {
+    const wav = writeWav(Float32Array.from([0.5, 0.5]), 48_000);
+    const fetch: Fetch = async () => new Response(new Uint8Array(wav));
+    const client = new TtsClient({ baseUrl: "https://voice.example", model: "voxcpm2" }, fetch);
+    const pieces = [];
+    for await (const piece of client.speechStream({
+      input: "你好", voice: "laok", response_format: "wav", cfg_value: 2, timesteps: 10,
+    })) pieces.push(piece);
+    expect(pieces).toHaveLength(1);
+    expect(pieces[0]?.samples.length).toBe(2);
   });
 
   test("non-success responses throw normalized errors", async () => {

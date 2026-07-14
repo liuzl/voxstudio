@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import soundfile as sf
 import torch
 from fastapi import FastAPI, Response, Form, UploadFile, File, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 from voxcpm import VoxCPM
 from continuations import ContinuationStore, SESSION_ID_RE
@@ -104,6 +104,61 @@ def _generate_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
             torch.cuda.empty_cache()
     buf = io.BytesIO(); sf.write(buf, wav.squeeze(0).cpu().numpy(), SR, format="WAV"); buf.seek(0)
     return buf.read()
+
+def _stream_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
+    """Chunked f32le PCM while generation runs: first audio leaves before the reply is
+    finished. Upstream disables badcase retries in streaming mode; the ratio-derived
+    max_len still bounds a runaway generation. The lock spans the whole stream — the model
+    is serial anyway — and a client disconnect releases it through the finally."""
+    if not SESSION_ID_RE.fullmatch(session_id):
+        raise HTTPException(400, {"error": {"code": "invalid_continuation_id",
+            "message": "continuation_id must contain only letters, digits, underscores, or hyphens.",
+            "type": "invalid_request_error"}})
+
+    def pcm():
+        with lock:
+            _continuations.prune()
+            cache = _continuations.get(session_id)
+            if cache is None:
+                if prompt:
+                    cache = _prompt_caches.get_or_build(
+                        prompt_cache_key(ref, prompt),
+                        lambda: model.tts_model.build_prompt_cache(
+                            prompt_text=prompt[1], prompt_wav_path=prompt[0], reference_wav_path=ref))
+                elif ref:
+                    cache = _prompt_caches.get_or_build(
+                        prompt_cache_key(ref, None),
+                        lambda: model.tts_model.build_prompt_cache(reference_wav_path=ref))
+                else:
+                    cache = None
+            generator = model.tts_model.generate_with_prompt_cache_streaming(
+                target_text=text, prompt_cache=cache, cfg_value=cfg, inference_timesteps=ts,
+                seed=seed)
+            # The per-yield feature list is truncated to streaming_prefix_len after each
+            # step, so the final yield does not carry the full history. Each yield appends
+            # exactly one new entry before yielding; collecting those tail entries and
+            # concatenating on dim=1 rebuilds precisely what the non-streaming path hands
+            # to merge_prompt_cache.
+            new_features = []
+            try:
+                for chunk, _tokens, features in generator:
+                    if features:
+                        new_features.append(features[-1])
+                    yield chunk.reshape(-1).numpy().astype("<f4").tobytes()
+            finally:
+                generator.close()
+                if new_features:
+                    next_cache = model.tts_model.merge_prompt_cache(
+                        cache, text, torch.cat(new_features, dim=1))
+                    if end:
+                        _continuations.pop(session_id)
+                    else:
+                        _continuations.put(session_id, next_cache)
+                if _CUDA:
+                    torch.cuda.empty_cache()
+
+    return pcm()
+
 
 def _ref_from_upload(up: UploadFile):
     """保存上传音频 -> ffmpeg 转 16k mono wav, 返回临时路径(调用方负责删)。"""
@@ -284,11 +339,22 @@ class OAIReq(BaseModel):
     prosody_prompt: bool = False   # condition on the voice's reference transcript too
     continuation_id: str | None = None
     continuation_end: bool = False
+    stream: bool = False
 
 @app.post("/v1/audio/speech")
 def oai_speech(r: OAIReq):
     ref = resolve_voice(r.voice)   # clone(默认音) / design(零样本) / <已注册 id>
     prompt = resolve_prompt(r.voice) if r.prosody_prompt else None
+    if r.stream:
+        if not r.continuation_id:
+            raise HTTPException(400, {"error": {"code": "invalid_request",
+                "message": "stream requires continuation_id: streamed audio is part of a continuation session.",
+                "type": "invalid_request_error"}})
+        return StreamingResponse(
+            _stream_continuation(r.input, ref, r.cfg_value, r.timesteps, prompt,
+                                 r.seed, r.continuation_id, r.continuation_end),
+            media_type="audio/pcm",
+            headers={"X-Sample-Rate": str(SR), "X-Sample-Format": "f32le"})
     if r.continuation_id:
         return Response(_generate_continuation(r.input, ref, r.cfg_value, r.timesteps, prompt,
                         r.seed, r.continuation_id, r.continuation_end), media_type="audio/wav")

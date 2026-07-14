@@ -15,6 +15,8 @@ import { chunkText, estSeconds, SentenceAssembler } from "@voxstudio/text";
 
 export interface SpeechEngine {
   speech(input: SpeechInput, signal?: AbortSignal): Promise<ArrayBuffer | Uint8Array>;
+  /** Streamed synthesis: PCM pieces while generation runs. Batch-only engines omit it. */
+  speechStream?(input: SpeechInput, signal?: AbortSignal): AsyncIterable<PcmAudio>;
 }
 
 export type OnChunk = (
@@ -35,6 +37,12 @@ export interface SynthesisOptions {
   continuationId?: string;
   onChunk?: OnChunk;
   signal?: AbortSignal;
+  /**
+   * Render through the engine's streaming endpoint when it has one. Opt-in per caller:
+   * conversation wants the early audio; long-form reading keeps the batch path whose
+   * seam-hiding machinery needs whole chunks.
+   */
+  streaming?: boolean;
 }
 
 function speechInput(text: string, options: SynthesisOptions, end: boolean): SpeechInput {
@@ -69,6 +77,22 @@ async function* synthesizeChunks(
   chunks: AsyncIterable<TextChunk> | Iterable<TextChunk>,
   options: SynthesisOptions,
 ): AsyncGenerator<PcmAudio> {
+  // A streaming engine renders each chunk as PCM pieces while it generates. The pieces are
+  // forwarded untouched: within one continuation session the model produces continuous
+  // audio across chunks, so the trim/loudness/pause machinery below — which exists to hide
+  // seams between independent batch generations — has nothing to fix and would need
+  // lookahead the stream cannot give.
+  if (options.streaming && tts.speechStream) {
+    for await (const chunk of chunks) {
+      options.signal?.throwIfAborted();
+      for await (const piece of tts.speechStream(speechInput(chunk.text, options, chunk.last), options.signal)) {
+        options.signal?.throwIfAborted();
+        if (piece.samples.length > 0) yield piece;
+      }
+    }
+    return;
+  }
+
   const gapMs = Math.max(0, options.chunking.joinPauseMs - 2 * options.chunking.edgePadMs);
   let pause: Float32Array | null = null;
   let targetDb: number | null = null;

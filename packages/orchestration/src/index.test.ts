@@ -131,6 +131,43 @@ describe("streaming reply orchestration", () => {
   });
 });
 
+describe("streaming synthesis", () => {
+  class StreamingTts extends FakeTts {
+    readonly streamed: string[] = [];
+
+    async *speechStream(input: SpeechInput): AsyncGenerator<{ samples: Float32Array; sampleRate: number }> {
+      this.streamed.push(input.input);
+      yield { samples: new Float32Array(100).fill(0.1), sampleRate: 48_000 };
+      yield { samples: new Float32Array(100).fill(0.2), sampleRate: 48_000 };
+    }
+  }
+
+  async function* one(text: string): AsyncGenerator<string> {
+    yield text;
+  }
+
+  test("streams pieces through the engine's streaming endpoint when opted in", async () => {
+    const tts = new StreamingTts();
+    const pieces = [];
+    for await (const piece of streamReply(tts, one("第一句。"), {
+      ...options, chunking: { ...chunking, maxSeconds: 15, firstMaxSeconds: 8 }, streaming: true,
+    })) pieces.push(piece);
+    expect(tts.streamed).toEqual(["第一句。"]);
+    expect(tts.calls).toEqual([]); // the batch endpoint was never touched
+    expect(pieces).toHaveLength(2);
+  });
+
+  test("without the opt-in a streaming-capable engine still takes the batch path", async () => {
+    const tts = new StreamingTts();
+    const pieces = [];
+    for await (const piece of streamReply(tts, one("第一句。"), {
+      ...options, chunking: { ...chunking, maxSeconds: 15, firstMaxSeconds: 8 },
+    })) pieces.push(piece);
+    expect(tts.streamed).toEqual([]);
+    expect(tts.calls.length).toBe(1);
+  });
+});
+
 describe("long-text orchestration", () => {
   test("requests chunks serially in order with stable wire fields", async () => {
     const tts = new FakeTts();

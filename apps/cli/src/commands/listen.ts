@@ -274,6 +274,7 @@ export async function runListen(
           ...(voice === "clone" || voice === "design" ? {} : { prosodyPrompt: true }),
           continuationId: crypto.randomUUID(),
           signal: turn.signal,
+          streaming: true,
           transformChunk: text => sanitizeForTts(text).text,
         })) {
           if (turn.signal.aborted) return;
