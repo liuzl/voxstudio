@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from voxcpm import VoxCPM
 from continuations import ContinuationStore, SESSION_ID_RE
+from prompt_caches import PromptCacheStore, prompt_cache_key
 from fingerprint import audio_fingerprint
 from runtime import model_identity, model_manifest_sha256
 
@@ -43,6 +44,7 @@ app = FastAPI()
 
 _CUDA = torch.cuda.is_available()
 _continuations = ContinuationStore()
+_prompt_caches = PromptCacheStore()
 MODEL_ID = model_identity()
 MODEL_MANIFEST_SHA256 = model_manifest_sha256()
 
@@ -75,11 +77,19 @@ def _generate_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
         _continuations.prune()
         cache = _continuations.get(session_id)
         if cache is None:
+            # Building a prompt cache encodes the reference audio through the VAE — the
+            # dominant fixed cost of a reply's first chunk. It is deterministic per
+            # reference, so it is built once per voice and shared: generation only reads
+            # it, and merges build new dicts around it.
             if prompt:
-                cache = model.tts_model.build_prompt_cache(
-                    prompt_text=prompt[1], prompt_wav_path=prompt[0], reference_wav_path=ref)
+                cache = _prompt_caches.get_or_build(
+                    prompt_cache_key(ref, prompt),
+                    lambda: model.tts_model.build_prompt_cache(
+                        prompt_text=prompt[1], prompt_wav_path=prompt[0], reference_wav_path=ref))
             elif ref:
-                cache = model.tts_model.build_prompt_cache(reference_wav_path=ref)
+                cache = _prompt_caches.get_or_build(
+                    prompt_cache_key(ref, None),
+                    lambda: model.tts_model.build_prompt_cache(reference_wav_path=ref))
             else:
                 cache = None
         wav, _, audio_features = model.tts_model.generate_with_prompt_cache(

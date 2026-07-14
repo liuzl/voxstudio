@@ -82,3 +82,11 @@ Notes:
   the unit sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` so a long generation does
   not ratchet the reserved pool up and keep it there. Without both, one long generation
   raises the pool ~10x and never gives it back. See `docs/chunking.md`.
+- Continuation sessions reuse a per-voice **prompt cache** (`prompt_caches.py`): building
+  one encodes the reference audio through the VAE — measured at ~3s of fixed latency per
+  request — and is deterministic per reference, so it is built once per voice and shared
+  across sessions. Content-addressed keys mean re-registered voices and identical uploads
+  behave correctly. Restart the service after deploying to pick this up.
+- Upstream exposes `generate_with_prompt_cache_streaming`; serving chunked audio from it is
+  the next latency step after the prompt cache (streamed first audio instead of a full WAV
+  per chunk).
