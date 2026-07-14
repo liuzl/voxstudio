@@ -459,6 +459,53 @@ describe("listen command", () => {
     expect(second).toBeGreaterThan(first);
   });
 
+  test("carries the conversation history into later turns", async () => {
+    const requests: { role: string; content: string }[][] = [];
+    const capture: PcmCapture = {
+      frames: (async function* () {
+        for (const base of [0, 100]) {
+          yield { samples: new Float32Array(320).fill(0.2), sampleRate: 16_000, timestampMs: base };
+          yield { samples: new Float32Array(320).fill(0.2), sampleRate: 16_000, timestampMs: base + 20 };
+          yield { samples: new Float32Array(320), sampleRate: 16_000, timestampMs: base + 40 };
+          // Let the first turn finish completely before the second utterance begins.
+          while (requests.length < (base === 0 ? 1 : 2)) await Bun.sleep(2);
+        }
+      })(),
+      close: async () => {},
+    };
+    const platform: ListenPlatform = {
+      capture: async () => capture,
+      createPlayer: () => ({ write: async () => {}, close: async () => {} }),
+    };
+    const fetch: Fetch = async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/v1/audio/transcriptions") return Response.json({ text: "新加坡有多少华人？" });
+      if (path === "/v1/chat/completions") {
+        requests.push((JSON.parse(String(init?.body)) as { messages: { role: string; content: string }[] }).messages);
+        return Response.json({ choices: [{ message: { content: "大约三百万。" } }] });
+      }
+      if (path === "/v1/audio/speech") return new Response(new Uint8Array(response()));
+      throw new Error(`unexpected path ${path}`);
+    };
+    const config = parseConfig({
+      engines: {
+        asr: { base_url: "http://asr.test" },
+        llm: { base_url: "http://llm.test" },
+        tts: { base_url: "http://tts.test" },
+      },
+    });
+
+    await expect(runListen([
+      "--barge-in", "--threshold", "0.1", "--min-speech-ms", "40", "--silence-ms", "20", "--voice", "demo",
+    ], config, { out: () => {}, err: () => {} }, fetch, platform)).resolves.toBe(0);
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.map(message => message.role)).toEqual(["user"]);
+    // The second turn sees the first exchange.
+    expect(requests[1]?.map(message => message.role)).toEqual(["user", "assistant", "user"]);
+    expect(requests[1]?.[1]?.content).toBe("大约三百万。");
+  });
+
   test("validates realtime VAD and token options before opening the microphone", async () => {
     const config = parseConfig({});
     const platform: ListenPlatform = {

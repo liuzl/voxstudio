@@ -211,6 +211,11 @@ export async function runListen(
   const llm = new LlmClient(engine(config, "llm"), fetch);
   const tts = new TtsClient(engine(config, "tts"), fetch);
   const work = new Set<Promise<void>>();
+  // Conversation memory: without it, "那总人口呢？" after a question about Singapore gets
+  // answered with the population of Earth. Superseded revisions and interrupted turns that
+  // never spoke leave no trace; only exchanges the user actually heard become context.
+  const history: { role: "user" | "assistant"; content: string }[] = [];
+  const historyLimit = 16; // 8 exchanges
   let activeTurn: DuplexTurn | undefined;
   let activePlayer: ListenPlayer | undefined;
   let stopping = false;
@@ -253,6 +258,7 @@ export async function runListen(
       const deltas = (async function* (): AsyncGenerator<string> {
         for await (const delta of llm.chatStream([
           ...(options.system === undefined ? [] : [{ role: "system" as const, content: options.system }]),
+          ...history,
           { role: "user", content: transcript },
         ], options.maxTokens, undefined, turn.signal)) {
           if (replyText === "") session.mark(turn.id, "llm_first");
@@ -296,6 +302,12 @@ export async function runListen(
           return;
         }
         if (!turn.signal.aborted) io.out(`reply: ${replyText}`);
+        if (replyText.trim()) {
+          // Reached only when generation finished: a barge-in during the audible tail still
+          // lands here (the user heard the reply's start), one mid-generation does not.
+          history.push({ role: "user", content: transcript }, { role: "assistant", content: replyText });
+          while (history.length > historyLimit) history.splice(0, 2);
+        }
         // The last byte entering the player is not the reply being finished: sinks render
         // at realtime after near-instant writes. Completing before close() flipped the
         // session to listening while the speaker was still talking, so speech during the
