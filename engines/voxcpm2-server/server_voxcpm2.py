@@ -143,7 +143,10 @@ def _stream_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
             try:
                 for chunk, _tokens, features in generator:
                     if features:
-                        new_features.append(features[-1])
+                        # Off the GPU immediately: the built prompt cache keeps its
+                        # features on CPU, and merge concatenates the two — mixed devices
+                        # fail only in the post-stream finally, where the 200 already left.
+                        new_features.append(features[-1].detach().cpu())
                     yield chunk.reshape(-1).numpy().astype("<f4").tobytes()
             finally:
                 generator.close()
