@@ -151,8 +151,10 @@ def _stream_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
             finally:
                 generator.close()
                 if new_features:
+                    # (1, t, p, d) -> (t, p, d): the cache convention is batchless, and
+                    # generation cats it against 3-D reference features.
                     next_cache = model.tts_model.merge_prompt_cache(
-                        cache, text, torch.cat(new_features, dim=1))
+                        cache, text, torch.cat(new_features, dim=1).squeeze(0))
                     if end:
                         _continuations.pop(session_id)
                     else:
