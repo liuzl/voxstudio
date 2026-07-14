@@ -18,6 +18,7 @@
     <key>FUNASR_PORT</key><string>18098</string>
     <key>FUNASR_HUB</key><string>hf</string>
     <key>FUNASR_MODEL</key><string>FunAudioLLM/SenseVoiceSmall</string>
+    <key>FUNASR_DEVICE</key><string>mps</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

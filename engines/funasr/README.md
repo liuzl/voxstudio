@@ -20,7 +20,7 @@ Environment:
 | Variable | Default | Meaning |
 |---|---|---|
 | `FUNASR_MODEL` | `iic/SenseVoiceSmall` | any FunASR model id |
-| `FUNASR_DEVICE` | `cpu` | `cuda:0` on a GPU host |
+| `FUNASR_DEVICE` | `cpu` | `mps` on Apple Silicon — measured 18× faster (SenseVoice utterance 475ms → 26ms, the FSMN conv1d stack dominates on CPU); `cuda:0` on a GPU host |
 | `FUNASR_HOST` / `FUNASR_PORT` | `127.0.0.1` / `18088` | bind address |
 | `FUNASR_QUEUE_LIMIT` | `8` | concurrent transcriptions admitted |
 | `FUNASR_MAX_UPLOAD_BYTES` | 64 MiB | upload cap |
