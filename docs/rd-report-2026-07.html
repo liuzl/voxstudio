@@ -1,0 +1,561 @@
+<title>VoxStudio：自托管中文优先语音交互系统 —— 研究开发报告</title>
+<style>
+  :root {
+    --bg: #fbfcfe;
+    --surface: #f2f5f9;
+    --surface-2: #e9eef5;
+    --ink: #17202b;
+    --muted: #5a6a80;
+    --faint: #8595ab;
+    --accent: #0369a1;
+    --accent-soft: #0369a114;
+    --line: #d8e0ea;
+    --ok: #15803d;
+    --warn: #b45309;
+    --bad: #b91c1c;
+    --code-bg: #eef2f7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0d10;
+      --surface: #101318;
+      --surface-2: #171b22;
+      --ink: #e6eaf2;
+      --muted: #9aa5bb;
+      --faint: #6b7891;
+      --accent: #38bdf8;
+      --accent-soft: #38bdf81a;
+      --line: #232936;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --bad: #f87171;
+      --code-bg: #171b22;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #fbfcfe; --surface: #f2f5f9; --surface-2: #e9eef5; --ink: #17202b;
+    --muted: #5a6a80; --faint: #8595ab; --accent: #0369a1; --accent-soft: #0369a114;
+    --line: #d8e0ea; --ok: #15803d; --warn: #b45309; --bad: #b91c1c; --code-bg: #eef2f7;
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0d10; --surface: #101318; --surface-2: #171b22; --ink: #e6eaf2;
+    --muted: #9aa5bb; --faint: #6b7891; --accent: #38bdf8; --accent-soft: #38bdf81a;
+    --line: #232936; --ok: #34d399; --warn: #fbbf24; --bad: #f87171; --code-bg: #171b22;
+  }
+
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.85;
+    font-size: 16px;
+    margin: 0;
+  }
+  .paper { max-width: 46rem; margin: 0 auto; padding: 3rem 1.25rem 6rem; }
+
+  h1, h2, h3, h4, .serif {
+    font-family: Georgia, "Songti SC", "Noto Serif CJK SC", "SimSun", serif;
+    text-wrap: balance;
+    line-height: 1.4;
+  }
+  h1 { font-size: 1.9rem; margin: 0.4rem 0 0.6rem; font-weight: 700; }
+  h2 { font-size: 1.42rem; margin: 3.2rem 0 0.9rem; padding-top: 1.2rem; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.14rem; margin: 2.1rem 0 0.6rem; }
+  h4 { font-size: 1rem; margin: 1.6rem 0 0.4rem; }
+  h2 .no, h3 .no { color: var(--accent); margin-right: 0.55em; font-variant-numeric: tabular-nums; }
+  p { margin: 0.75rem 0; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover, a:focus-visible { text-decoration: underline; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+  strong { font-weight: 650; }
+  ul, ol { padding-left: 1.4em; margin: 0.7rem 0; }
+  li { margin: 0.3rem 0; }
+
+  .kicker {
+    font-size: 0.78rem; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--accent); font-weight: 600;
+  }
+  .subtitle { color: var(--muted); font-size: 1.05rem; margin-top: 0; }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.6rem;
+    border-block: 1px solid var(--line); padding: 0.8rem 0; margin: 1.6rem 0 0;
+    font-size: 0.85rem; color: var(--muted);
+  }
+  .meta b { color: var(--ink); font-weight: 600; }
+  .meta code { font-size: 0.82rem; }
+
+  .abstract {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1.3rem 1.5rem; margin: 2rem 0;
+  }
+  .abstract h2 { border: 0; margin: 0 0 0.5rem; padding: 0; font-size: 1.05rem; }
+  .abstract p { font-size: 0.95rem; }
+
+  .toc {
+    columns: 2; column-gap: 2.5rem; font-size: 0.92rem;
+    padding: 0.4rem 0 0.2rem; margin: 0.5rem 0 0;
+    list-style: none;
+  }
+  .toc li { break-inside: avoid; margin: 0.34rem 0; }
+  .toc .no { color: var(--accent); font-variant-numeric: tabular-nums; margin-right: 0.5em; }
+  @media (max-width: 640px) { .toc { columns: 1; } }
+
+  code, pre, .mono {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.86em;
+  }
+  code { background: var(--code-bg); border-radius: 4px; padding: 0.1em 0.35em; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--line); border-radius: 8px;
+    padding: 0.9rem 1.1rem; overflow-x: auto; line-height: 1.6;
+  }
+  pre code { background: none; padding: 0; }
+
+  .figure { margin: 1.8rem 0; }
+  .figure .frame {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1rem; overflow-x: auto;
+  }
+  figcaption, .caption {
+    font-size: 0.84rem; color: var(--muted); margin-top: 0.55rem; line-height: 1.6;
+  }
+  figcaption b, .caption b { color: var(--ink); }
+  pre.mermaid { background: transparent; border: 0; padding: 0; display: flex; justify-content: center; }
+
+  .tablewrap { overflow-x: auto; margin: 1.2rem 0 0.4rem; }
+  table {
+    border-collapse: collapse; width: 100%; font-size: 0.88rem;
+    font-variant-numeric: tabular-nums;
+  }
+  th, td { padding: 0.5rem 0.75rem; text-align: left; vertical-align: top; }
+  thead th {
+    font-size: 0.78rem; letter-spacing: 0.06em; color: var(--muted); font-weight: 600;
+    border-bottom: 2px solid var(--line); white-space: nowrap;
+  }
+  tbody tr { border-bottom: 1px solid var(--line); }
+  tbody tr:last-child { border-bottom: 0; }
+  td.n, th.n { text-align: right; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .warn { color: var(--warn); font-weight: 600; }
+  .bad { color: var(--bad); font-weight: 600; }
+
+  .callout {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    border-radius: 0 8px 8px 0; padding: 0.8rem 1.1rem; margin: 1.2rem 0;
+    font-size: 0.93rem;
+  }
+  .callout .tag {
+    font-size: 0.74rem; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); font-weight: 700; display: block; margin-bottom: 0.2rem;
+  }
+
+  .lesson {
+    border-left-color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 9%, transparent);
+  }
+  .lesson .tag { color: var(--warn); }
+
+  dl.kv { margin: 0.8rem 0; }
+  dl.kv div { display: grid; grid-template-columns: 11rem 1fr; gap: 1rem; padding: 0.32rem 0; border-bottom: 1px dashed var(--line); }
+  dl.kv dt { color: var(--muted); font-size: 0.88rem; }
+  dl.kv dd { margin: 0; font-size: 0.92rem; }
+  @media (max-width: 560px) { dl.kv div { grid-template-columns: 1fr; gap: 0.1rem; } }
+
+  .refs { font-size: 0.9rem; }
+  .refs li { margin: 0.45rem 0; }
+  .footnote { color: var(--faint); font-size: 0.82rem; }
+  sup a { font-size: 0.75em; }
+</style>
+
+<div class="paper">
+  <header>
+    <div class="kicker">研究开发报告 · Research &amp; Development Report</div>
+    <h1>VoxStudio：自托管中文优先语音交互系统的设计、实现与实证评估</h1>
+    <p class="subtitle">统一 OpenAI 兼容契约下的多引擎语音栈、全双工对话内核、实时网关与浏览器工作台</p>
+    <div class="meta">
+      <span>版本 <b>1.0</b></span>
+      <span>报告日期 <b>2026-07-15</b></span>
+      <span>代码范围 <b><code>voxstudio@main</code></b>（截至 <code>3e42988</code>）</span>
+      <span>开发周期 <b>2026-07-11 – 2026-07-15</b></span>
+    </div>
+  </header>
+
+  <section class="abstract">
+    <h2>摘要</h2>
+    <p>
+      本报告系统性地整理 VoxStudio —— 一个自托管、中文优先的语音输入/输出产品系统 —— 的架构设计、关键算法、工程决策与实证测量。系统将 ASR、LLM、TTS 三类引擎统一在一层 OpenAI 兼容契约之后，其上构建平台无关的全双工对话内核（VAD 分段、暂定式打断确认、投机式话轮转换）、带幂等与断线重连语义的实时 WebSocket 网关，以及覆盖对话、生成、音色管理与可复现性审计的浏览器工作台。报告给出全部关键指标的实测值：扬声器双工回声门测（能量与 Silero 两种检测器均实现 0 次自打断、12/12 操作者打断命中）、对话端到端延迟从 8.5 s 优化至全本地栈 p50 ≈ 2.1 s 的完整路径、中文 ASR 字符错误率 5.8%、设计音色的逐字节可复现验证等。报告还包含四起有科研价值的故障案例分析——流式请求断连引发的双引擎同日死锁、自回归 TTS 续段条件反馈导致的音色/语速漂移、播放时钟归属错误、以及推测解码收益的跨后端误判——并总结「实测门禁」工程方法论。所有结论均标注测量日期与环境。
+    </p>
+    <p class="footnote">关键词：语音交互；全双工对话；语音活动检测；打断（barge-in）；流式合成；可复现性；OpenAI 兼容契约；自托管</p>
+  </section>
+
+  <nav aria-label="目录">
+    <h2 style="border:0; padding-top:0; margin-top:1.4rem;">目录</h2>
+    <ul class="toc">
+      <li><span class="no">1</span><a href="#s1">引言</a></li>
+      <li><span class="no">2</span><a href="#s2">系统总体架构</a></li>
+      <li><span class="no">3</span><a href="#s3">引擎层与引擎注册表</a></li>
+      <li><span class="no">4</span><a href="#s4">全双工对话内核</a></li>
+      <li><span class="no">5</span><a href="#s5">实时网关与会话协议 v1</a></li>
+      <li><span class="no">6</span><a href="#s6">Web Studio 浏览器工作台</a></li>
+      <li><span class="no">7</span><a href="#s7">可复现性体系</a></li>
+      <li><span class="no">8</span><a href="#s8">实证评估</a></li>
+      <li><span class="no">9</span><a href="#s9">故障案例研究</a></li>
+      <li><span class="no">10</span><a href="#s10">工程方法论</a></li>
+      <li><span class="no">11</span><a href="#s11">局限与未来工作</a></li>
+      <li><span class="no">12</span><a href="#s12">结论</a></li>
+      <li><span class="no">A</span><a href="#sa">附录 A：协议事件与命令</a></li>
+      <li><span class="no">B</span><a href="#sb">参考文献与相关仓库</a></li>
+    </ul>
+  </nav>
+
+  <h2 id="s1"><span class="no">1</span>引言</h2>
+  <p>
+    托管语音 API 在中文场景下存在三类结构性问题：数据出域、广域链路延迟（本地工作站与远程 GPU 主机之间实测 RTT 400–1300 ms）、以及模型与音色的不可控演化。VoxStudio 的目标是构建一个<strong>完全自托管</strong>的语音交互系统，满足四项设计目标：
+  </p>
+  <ol>
+    <li><strong>引擎可替换</strong>：任何 ASR/LLM/TTS 引擎在托管与本地之间切换应当只是一次 base-URL 变更；</li>
+    <li><strong>全双工对话</strong>：支持真实打断（barge-in）与自然话轮转换，且不因扬声器回声产生自打断；</li>
+    <li><strong>可复现性</strong>：声音设计产物（design profiles）在同一运行时上可逐字节重现，并可被审计；</li>
+    <li><strong>实测门禁</strong>：任何涉及体验与安全的特性不以主观演示验收，而以带数字的真机测量门（gate）验收。</li>
+  </ol>
+  <p>
+    设计谱系上，系统对标 <a href="https://github.com/jamiepine/voicebox">jamiepine/voicebox</a>（信息架构参考；其自述为批处理生成、无双向对话）与 Hugging Face <code>speech-to-speech</code>（级联式管线的最佳实践步骤），并以「实时全双工对话」作为与谱系的核心差异点。
+  </p>
+
+  <h2 id="s2"><span class="no">2</span>系统总体架构</h2>
+  <p>
+    系统分为三层：<strong>引擎层</strong>（各自独立的 OpenAI 兼容 HTTP 服务）、<strong>核心编排层</strong>（平台无关 TypeScript 包）、<strong>表面层</strong>（CLI、实时网关、浏览器工作台）。核心永不直接感知具体引擎品牌，只面向契约端点：<code>/v1/audio/speech</code>、<code>/v1/audio/transcriptions</code>、<code>/v1/chat/completions</code> 与扩展 <code>/v1/voices</code>、<code>/v1/design-profiles</code>。
+  </p>
+
+  <figure class="figure">
+    <div class="frame">
+<pre class="mermaid">
+flowchart TB
+  subgraph surfaces["表面层"]
+    CLI["vox CLI<br/>(编译单文件二进制)"]
+    WEB["Web Studio<br/>(React / apps/web)"]
+  end
+  GW["realtime-gateway<br/>WS /v1/realtime + REST facade<br/>凭据注入 · 引擎路由 · 聚合"]
+  subgraph core["核心编排层 (packages/)"]
+    CONV["conversation<br/>共享对话循环"]
+    DUP["duplex-session<br/>话轮状态机 · VAD"]
+    ORCH["orchestration<br/>分块 · 流水线合成"]
+    CLIENTS["clients / config / contracts<br/>text / audio"]
+  end
+  subgraph engines["引擎层 (OpenAI 兼容)"]
+    K["kokoro TTS<br/>本机 · 快车道"]
+    V["VoxCPM2 TTS<br/>远程 GPU · 克隆/设计"]
+    S["SenseVoice ASR<br/>本机 MPS"]
+    M["moss-transcribe<br/>长文本/多说话人"]
+    G["gemma llama-server<br/>本机 LLM"]
+  end
+  CLI --> CONV
+  WEB -->|"WebSocket + REST"| GW
+  GW --> CONV
+  CONV --> DUP
+  CONV --> ORCH
+  CONV --> CLIENTS
+  CLIENTS -->|"/v1/* 契约"| K & V & S & M & G
+</pre>
+    </div>
+    <figcaption><b>图 1</b>　系统分层。浏览器只与网关通信，引擎地址与密钥永不到达客户端；CLI 与网关共享同一份对话循环实现（§4），认证过的生命周期只有一份代码。</figcaption>
+  </figure>
+
+  <h3><span class="no">2.1</span>关键边界约定</h3>
+  <ul>
+    <li><strong>公开仓边界</strong>：密钥、内网拓扑、机器细节不入公开仓；运维事件记录于内部 oplog 仓。</li>
+    <li><strong>无空目录交付</strong>：每个交付阶段以「第一个被测试的模块」引入，不预建空壳。</li>
+    <li><strong>认证生命周期不分叉</strong>：VAD 分段、打断策略等经过门测认证的逻辑抽取为共享实现（<code>VadSegmentAssembler</code>、<code>packages/conversation</code>），检测器与表面各自适配、绝不复制。</li>
+  </ul>
+
+  <h2 id="s3"><span class="no">3</span>引擎层与引擎注册表</h2>
+
+  <h3><span class="no">3.1</span>引擎注册表：实例 / 角色 / 能力</h3>
+  <p>
+    单一槽位（每类一个引擎）在现实中迅速失效：对话需要低延迟 TTS 的同时，音色注册需要克隆型 TTS；实时 ASR 与长文本转写是两个引擎。注册表设计（<code>docs/engine-registry.md</code>，2026-07-15 定案）将<strong>实例</strong>与<strong>角色</strong>分离：<code>engines:</code> 声明任意命名实例（携带 <code>kind</code> 与 <code>capabilities</code> 标签），<code>roles:</code> 将实例指派给产品角色。选择语义为三级：<strong>显式指定</strong>（<code>?engine=</code>、会话级 <code>ttsEngine</code>，拼写错误返回 400 而非误路由）→ <strong>能力路由</strong>（音色注册自动路由到首个声明 <code>clone</code> 的实例）→ <strong>角色默认</strong>。旧式配置（以角色命名实例）是新模式的退化情形，完全向后兼容。
+  </p>
+
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>实例</th><th>类型</th><th>模型</th><th>部署位置</th><th>角色</th><th>能力标签</th></tr></thead>
+    <tbody>
+      <tr><td>kokoro</td><td>tts</td><td>Kokoro-82M-v1.1-zh</td><td>本机（M3 Max，CPU）</td><td><code>tts</code>（对话快车道）</td><td>preset, fast</td></tr>
+      <tr><td>voxcpm2</td><td>tts</td><td>VoxCPM2（48 kHz）</td><td>远程 GPU 主机</td><td>—（按能力路由）</td><td>clone, design, streaming</td></tr>
+      <tr><td>sensevoice</td><td>asr</td><td>SenseVoice-Small</td><td>本机（MPS）</td><td><code>asr</code></td><td>—</td></tr>
+      <tr><td>moss</td><td>asr</td><td>moss-transcribe-diarize</td><td>本机</td><td><code>asr_longform</code></td><td>longform, diarize</td></tr>
+      <tr><td>gemma</td><td>llm</td><td>gemma4-12B-it-qat（llama-server）</td><td>本机</td><td><code>llm</code></td><td>—</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>表 1</b>　报告日的生产引擎注册表。网关端点 <code>GET /v1/engines</code> 输出该表的脱敏形式（含实时健康与运行时模型身份，不含地址与密钥）。</p>
+
+  <h3><span class="no">3.2</span>VoxCPM2 服务（自研 wrapper）</h3>
+  <p>对质量线 TTS 的工程化包含四项关键机制：</p>
+  <ul>
+    <li><strong>Prompt cache 复用</strong>：参考音经 VAE 编码是首块回复的主导固定成本；按内容寻址（音频指纹 + prompt 文本）建 LRU 缓存，同一音色只编码一次。</li>
+    <li><strong>流式合成</strong>：<code>stream: true</code> 时以 chunked <code>f32le</code> PCM 输出（<code>X-Sample-Rate</code> 头声明采样率），首音频先于整段生成完成离开服务器。远程链路场景下首音频从 ~5 s 降至 ~1 s。</li>
+    <li><strong>续段（continuation）会话</strong>：多块合成共享一个 <code>continuation_id</code>，块间韵律连续。<em>合并策略为本报告的关键修正点，见 §9.2。</em></li>
+    <li><strong>断连安全</strong>：拿锁超时 + 异步 body 迭代器确定性关闭，见 §9.1。</li>
+  </ul>
+
+  <h3><span class="no">3.3</span>本机引擎与替代方案评估</h3>
+  <ul>
+    <li><strong>Kokoro-82M-v1.1-zh</strong>：103 个中文音色的固定音色库；英文夹杂经 <code>en_callable</code> 路由至英文 G2P（否则英文词被中文管线读坏，实测确认后修复）。作为对话快车道，首音频约 0.2 s。</li>
+    <li><strong>SenseVoice-Small</strong>：对话位 ASR。MPS（Metal）加速使单条推理从 475 ms 降至 26 ms（18×），使「流式 ASR」这一 backlog 项失去必要性——批式已足够快。</li>
+    <li><strong>VoxCPM.cpp</strong>（GGUF q4_k，CPU）：实测 M3 Max 全流程 RTF 1.78（8 线程、timesteps 10）与 1.11（12 线程、timesteps 6），均超过实时线，<strong>不适合对话流式</strong>；定位为离线克隆合成与 GPU 主机不可用时的兜底。</li>
+    <li><strong>macOS <code>say</code></strong>：同句对比（10 s 音频，合成 0.71 s vs Kokoro 0.95 s 含 HTTP）速度相当，但参数式与神经式的音质代差明显；结论为不作为产品引擎，保留为零依赖系统提示音。</li>
+  </ul>
+
+  <h2 id="s4"><span class="no">4</span>全双工对话内核</h2>
+
+  <h3><span class="no">4.1</span>话轮状态机与取消语义</h3>
+  <p>
+    <code>DuplexSession</code> 是平台无关的话轮内核：严格状态迁移、每话轮独立 <code>AbortSignal</code>、序号化事件流、有界播放队列。任何被取代的工作（被打断的回复、被 reopen 取代的修订）通过 abort 传播取消，杜绝「僵尸回复」。
+  </p>
+
+  <figure class="figure">
+    <div class="frame">
+<pre class="mermaid">
+stateDiagram-v2
+  direction LR
+  [*] --> listening
+  listening --> speech_started : speech.confirmed
+  speech_started --> finalizing : 静默达到阈值<br/>(soft-finalize 可重开)
+  finalizing --> thinking : ASR 分发
+  thinking --> speaking : 首个合成块
+  speaking --> listening : 播放可听完成<br/>turn.completed
+  finalizing --> speech_started : reopen(修订+1)
+  thinking --> speech_started : reopen(修订+1)
+  speaking --> listening : barge-in / cancel<br/>turn.interrupted
+</pre>
+    </div>
+    <figcaption><b>图 2</b>　话轮状态机（简化）。<code>speaking</code> 是投机策略的「承诺点」：此后恢复的用户语音走打断路径而非 reopen。<code>turn.timing</code> 事件在话轮以任何方式结束时发出，携带 vad_end / asr_done / llm_first / tts_first_audio / playback_first 等毫秒偏移。</figcaption>
+  </figure>
+
+  <h3><span class="no">4.2</span>VAD：双检测器与共享分段生命周期</h3>
+  <p>
+    分段生命周期（pre-roll 保留、暂定 start、<code>minSpeechMs</code> 确认、静默/超长结束、噪声丢弃）由 <code>VadSegmentAssembler</code> 单一实现，两种检测器仅提供「一段音频是否有声」的判断：
+  </p>
+  <ul>
+    <li><strong>能量检测器</strong>：RMS 阈值（默认 0.01）。</li>
+    <li><strong>Silero VAD v5.1.2（ONNX）</strong>：512 样本窗（32 ms），进入/离开语音的滞回概率阈值 0.5/0.35。模型按版本与 SHA-256 双钉固定，首次使用时取入本地校验缓存，哈希不符拒绝加载；单窗推理亚毫秒级。</li>
+    <li><strong>电平前置门（level pre-gate）</strong>：Silero 前加 RMS 门（默认 0.01）。这是<strong>实测出的必要项而非优化</strong>：回声消除后的残余回声本质上是「小声的语音」，优秀的语音模型恰恰能识别它——用认证门测录音重打分显示 Silero 会将能量检测器根本看不见的残余回声确认为自打断。</li>
+  </ul>
+
+  <h3><span class="no">4.3</span>暂定式打断（provisional barge-in）</h3>
+  <p>
+    <code>speech.start</code> 由单帧越阈触发——一次 20 ms 的键盘敲击或回声尖峰即可引发。若以 start 即断播放，整条回复毁于一次瞬态。策略为：<strong>播放只在 <code>speech.confirmed</code>（累计 minSpeechMs 有声音频）时停止</strong>；未确认的触发记为 <code>turn.false_barge_in</code>，回复继续。VAD 的 pre-roll 保证确认前的语音不丢失。
+  </p>
+
+  <h3><span class="no">4.4</span>投机式话轮转换（speculative turn-taking）</h3>
+  <p>
+    保守策略等待 650 ms 静默才结束话轮，这笔延迟全额进入每次回复。投机策略在 150 ms 静默即<strong>软结束</strong>并立刻分发（ASR→LLM→TTS 全链提前起跑）；若用户在 reopen 窗口（默认 7 s）内继续说话，话轮<strong>重开</strong>（修订号 +1，中止被取代修订的在途工作），以合并后的完整话语重新分发。承诺点为 <code>speaking</code>：一旦回复开播，恢复语音即为打断而非 reopen——打断保持其认证标准（须确认），而 reopen 只需单帧触发（错误 reopen 的代价只是一次被中止的投机分发，无可听损失）。转正门测：0 次错误 reopen；停话→首音频 p50 1.67 s，较保守策略改善约 0.46 s（2026-07-14，14 轮实测 18 次 reopen 全部正确）。
+  </p>
+
+  <h3><span class="no">4.5</span>流式回复管线</h3>
+  <p>
+    LLM 以 SSE 流式输出（对只回整段 JSON 的引擎自动退化为单增量）；<code>SentenceAssembler</code> 从增量流中组装完整句子；<strong>首个完整句立即合成</strong>（它就是回复的首音频延迟），后续句子按增长上限聚块，全程共享一个 TTS 续段会话。对话场景首块上限压至 2.5 s 估计语速（长文场景为 8 s）——首块每多 1 s 就是 1 s 死寂，而句间拼缝在对话里不可闻。块增长上限为 8 s（原 15 s，压低原因见 §9.2）。
+  </p>
+
+  <h2 id="s5"><span class="no">5</span>实时网关与会话协议 v1</h2>
+  <p>
+    <code>apps/realtime-gateway</code> 在既有单发引擎之上提供实时会话（而非给每个引擎加 WebRTC 语义）。控制走 JSON 文本帧，媒体走二进制帧（绝不 base64）：客户端上行为裸 <code>f32le</code> 16 kHz 单声道 PCM（时间戳由服务端按样本数打，客户端时钟不进协议）；服务端下行回复音频的采样率由前置 <code>playback.format</code> 事件声明。
+  </p>
+  <ul>
+    <li><strong>信封</strong>：每个事件携带协议版本、单调 <code>sequence</code>、<code>sessionId</code>、时间戳。</li>
+    <li><strong>幂等命令</strong>：每条命令带 <code>idempotencyKey</code>；重放只回 <code>command.duplicate</code>、不重执行；指向已过期话轮的 <code>turn.interrupt</code> 被拒为 <code>stale_turn</code>——「重连后不得重放过期命令」由服务端强制而非信任客户端。</li>
+    <li><strong>断线重连</strong>：会话在 socket 断开后存活一个宽限期（默认 30 s）；客户端 <code>session.attach</code> 后由推送的 <code>session.snapshot</code> 重同步（无事件重放缓冲，快照即重同步机制）。</li>
+    <li><strong>端点拥有可听时钟（playbackAck）</strong>：网关听不见客户端的扬声器。启用 <code>playbackAck</code> 后，最后一块发出并不结束话轮——话轮保持 <code>speaking</code>（可被打断）直到客户端上报 <code>playback.complete</code>，超时上限为音频自身时长加余量（哑客户端无法卡死会话）。该机制是 §9.3 CLI 教训的协议化。</li>
+    <li><strong>REST facade</strong>：契约端点经网关代理，凭据服务端注入；<code>GET /v1/voices</code> 返回跨引擎<strong>联合音色库</strong>（逐条引擎归属；单引擎宕机不清空全库，缺席可从 <code>/v1/engines</code> 看到）。</li>
+    <li><strong>安全默认</strong>：默认仅绑定 loopback；对外暴露是部署决策（隧道 + 访问控制），可选 bearer token 门禁。</li>
+  </ul>
+
+  <h2 id="s6"><span class="no">6</span>Web Studio 浏览器工作台</h2>
+  <p>
+    五面板结构（对话 / 生成 / 音色 / 素材库 / 设置），对话为头牌——这是设计谱系（voicebox）明确不具备的能力。React + TypeScript + Tailwind + Zustand；桌面左栏导航，移动端为顶栏 + 底部安全区 tab 栏，全站统一 <code>max-w-6xl</code> 内容列与动态视口高度（<code>100dvh</code>）。
+  </p>
+  <ul>
+    <li><strong>对话面板</strong>：AudioWorklet 采集（请求 AEC/NS/AGC）经流式线性重采样至 16 kHz 协议帧；无缝流式 PCM 播放调度（纯函数时间线可测）；实时字幕气泡带话轮状态、续说合并 ×N、忽略杂音 ×N 标记与逐轮延迟 chips；协商到的 AEC/NS/AGC 能力快照上屏。音色为按引擎分组的选择器，<strong>选择即路由</strong>：选克隆音色则该会话 TTS 走质量线。</li>
+    <li><strong>生成面板</strong>：文本→音频，时长/分块预估（共享 <code>packages/text</code> 直接跑在浏览器），takes 历史（内联播放器、下载、删除）。</li>
+    <li><strong>音色面板</strong>：联合音色库（搜索 + 按 ID 前缀自动归类 + 引擎徽章 + 固定高度滚动网格）；音色注册支持文件上传与<strong>现场录制</strong>（录制刻意关闭 AEC/NS/AGC——参考音要原始信号；浏览器内编码 WAV）并可一键 ASR 生成逐字稿草稿；设计档区见 §7。</li>
+    <li><strong>设置面板</strong>：网关健康、引擎注册表表格（角色徽章、能力标签、健康点、运行时身份）、端点能力快照。</li>
+  </ul>
+
+  <h2 id="s7"><span class="no">7</span>可复现性体系</h2>
+  <p>
+    设计音色（design profile）= 英文声音描述 + 锚文本 + seed + cfg + timesteps 固定的零样本音色，随档记录生成模型身份、模型清单 SHA-256 与锚音频 SHA-256。三类操作构成审计闭环：
+  </p>
+  <ul>
+    <li><strong>audit</strong>：档案记录的模型身份/清单指纹 vs 引擎实时自报身份（Web 端为每档案一枚实时徽章：一致 / 模型漂移 / 清单漂移）；</li>
+    <li><strong>verify（reproduce）</strong>：同参数在一次性 ID 下重新生成、比对音频指纹、清理临时档——逐字节可复现性的实证检验；</li>
+    <li><strong>audition / select</strong>：固定文本与 seed 的候选试听与人工选型记录。</li>
+  </ul>
+  <div class="callout">
+    <span class="tag">实测结果</span>
+    CLI 于 2026-07-12 创建的 <code>design-calm-clear</code>，2026-07-15 经 Web 路径（浏览器 → 网关 facade → 引擎）同参数重现，音频指纹 <code>ecf6b51e5dc66f89…</code> <strong>逐字节一致</strong>——同时证明本周对引擎的流式、prompt cache 与锁修复未破坏批式路径的确定性。7/7 个存量设计档审计徽章全绿。
+  </div>
+
+  <h2 id="s8"><span class="no">8</span>实证评估</h2>
+
+  <h3><span class="no">8.1</span>扬声器双工回声门测（AEC gates）</h3>
+  <p>
+    扬声器模式（<code>--speaker-duplex</code>，macOS AVAudioEngine Voice Processing 助手）以真机测量门验收，测量项包括：底噪、语音处理衰减（明确<em>不是</em>纯 AEC ERLE）、自打断率（对照静默基线）、捕获到静音延迟（旁路模式）、双讲（双音提示引导真人插话）与阈值扫描。门程序对不完整或合成激励的运行拒绝给出 PASS。
+  </p>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>指标</th><th class="n">能量检测器（2026-07-13）</th><th class="n">Silero（2026-07-14）</th></tr></thead>
+    <tbody>
+      <tr><td>确认自打断（真实 TTS 远端播放中）</td><td class="n"><span class="ok">0 次</span>（13.2 次/分钟原始触发被确认机制吸收）</td><td class="n"><span class="ok">0 次</span>（5.6 次/分钟原始模型触发被电平门+确认吸收）</td></tr>
+      <tr><td>操作者打断命中</td><td class="n"><span class="ok">12/12</span>，无漏无误</td><td class="n"><span class="ok">12/12</span>，无漏无误</td></tr>
+      <tr><td>打断检测延迟 p50</td><td class="n">643 ms</td><td class="n"><b>574 ms</b>（−69 ms）</td></tr>
+      <tr><td>捕获→静音 p95</td><td class="n">186 ms</td><td class="n">同路复用</td></tr>
+      <tr><td>直达路径语音处理衰减</td><td class="n">26.5 dB</td><td class="n">同路复用</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>表 2</b>　内置 MacBook Pro 扬声器/麦克风、真实语音激励下的门测记录。Silero 为 ONNX 运行时可用时的默认检测器；不可用时大声降级到同样过门的能量检测器。</p>
+
+  <h3><span class="no">8.2</span>对话延迟工程</h3>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>优化步骤</th><th>机制</th><th class="n">效果（实测）</th></tr></thead>
+    <tbody>
+      <tr><td>基线（2026-07-13）</td><td>整段 LLM → 整段 TTS，广域引擎</td><td class="n">停话→首音频 ≈ 8.5 s</td></tr>
+      <tr><td>首块上限 2.5 s</td><td>对话场景压缩首个合成块</td><td class="n">首音频等待大幅缩短（换一处不可闻句间缝）</td></tr>
+      <tr><td>句级流水线</td><td>SSE 增量 → 首句立即合成，生成与合成重叠</td><td class="n">消除「等整段」串行</td></tr>
+      <tr><td>VoxCPM2 prompt cache + 流式</td><td>参考音编码复用；chunked PCM 先行</td><td class="n">远程链路首音频 5 s → ≈1 s</td></tr>
+      <tr><td>栈本地化（迁至本地工作站）</td><td>Kokoro TTS（首音频 ≈0.22 s）+ SenseVoice MPS + 本机 llama-server</td><td class="n">消除 400–1300 ms 结构性广域 RTT</td></tr>
+      <tr><td>投机话轮转换转默认</td><td>150 ms 软结束 + reopen（§4.4）</td><td class="n">−0.46 s；停话→首音频 p50 1.67 s</td></tr>
+      <tr><td><b>收敛状态（2026-07-14）</b></td><td>全本地链</td><td class="n"><b>停话→听见回复 p50 ≈ 2.1 s</b></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>表 3</b>　延迟优化路径。另附当日（07-15）网关端到端无头重放的一次典型 <code>turn.timing</code>：自用户开口起 vad_end +1171 ms、asr_done +1275 ms、llm_first +1659 ms、tts_first_audio +2734 ms（含 1.17 s 说话时长本身）。</p>
+
+  <h3><span class="no">8.3</span>ASR 与 LLM</h3>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>测量</th><th>条件</th><th class="n">结果</th></tr></thead>
+    <tbody>
+      <tr><td>中文 CER：SenseVoice-Small</td><td>10 条真实用户话语参考集（人工修订）</td><td class="n"><b>5.8%</b></td></tr>
+      <tr><td>中文 CER：nemotron-3.5-asr（原对话位）</td><td>同上（修正语言参数与标签剥离后）</td><td class="n">17.9%</td></tr>
+      <tr><td>SenseVoice 单条推理</td><td>CPU → MPS（Metal）</td><td class="n">475 ms → <b>26 ms</b>（18×）；HTTP 往返 ≈90 ms</td></tr>
+      <tr><td>gemma4-12B-qat 首 token</td><td>本机 llama-server（源码构建）</td><td class="n"><b>166 ms</b>（brew b9960 版为 265 ms）</td></tr>
+      <tr><td>MTP 推测解码（同一模型对）</td><td>CUDA（GPU 主机，2026-06 系统性 A/B）</td><td class="n">100 → <b>375 tok/s</b>（显著正收益）</td></tr>
+      <tr><td>MTP 推测解码（同一模型对）</td><td>Metal（M3 Max，2026-07-14）</td><td class="n">60 → 19 字符/s（<span class="bad">净减速</span>）</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="caption"><b>表 4</b>　识别与生成侧测量。MTP 行的方法论含义见 §9.4。</p>
+
+  <h3><span class="no">8.4</span>测试与验证覆盖</h3>
+  <ul>
+    <li>TypeScript 工作区：<strong>236 个测试 / 26 文件</strong>（报告日全绿），覆盖话轮内核、VAD 组装、对话循环（模拟端到端）、网关协议（真 WebSocket 上的模拟双工、重连/幂等/过期宽限、facade 路由与凭据注入、多引擎注册表路由）、Web 客户端（模拟 socket 的重连状态机、流式重采样器与播放时间线的数学不变量）。</li>
+    <li>引擎侧：Kokoro 服务 8 个 pytest（含两项死锁回归，§9.1）；VoxCPM2 辅助模块（续段存储、指纹、prompt cache 键）单测，锁定文件仅解析 x86_64-linux，存储断言在 GPU 主机实际环境执行。</li>
+    <li>调试基建：<code>tools/live-replay.ts</code>（真引擎无头端到端重放，§9.1 的定位工具）；网关会话事件运维日志（只记里程碑与错误，不记转写文本）。</li>
+  </ul>
+
+  <h2 id="s9"><span class="no">9</span>故障案例研究</h2>
+  <p>以下四起故障均在本开发周期内发生、定位、修复并回归验证，其机理具有超出本系统的一般性。</p>
+
+  <h3><span class="no">9.1</span>案例一：流式断连引发的服务死锁（双引擎同日）</h3>
+  <dl class="kv">
+    <div><dt>现象</dt><dd>对话回复「先有声后无声」，会话永远停在思考中；服务进程存活、端口监听，但包括 <code>/health</code> 在内的一切请求超时。Kokoro（本机）与 VoxCPM2（GPU 主机）同日先后中招。</dd></div>
+    <div><dt>机理</dt><dd>两个服务的合成路径均为「<strong>跨 yield 持 <code>threading.Lock</code> 的同步生成器</strong>」喂给 StreamingResponse。全双工对话的每次打断都会中止流式请求；被遗弃的生成器悬置在 yield 处，<code>with lock:</code> 永不退出。Starlette 对<em>同步</em> body 迭代器在断连时不保证关闭——原代码注释「client disconnect releases it through the finally」正是被证伪的假设。<code>/health</code> 与生成共享同一把无超时锁，故整个服务对外死亡。</dd></div>
+    <div><dt>修复</dt><dd>① 响应开始前先「引燃」首块（锁超时表现为真 503 <code>pipeline_busy</code>，而非假 200 断流）；② 改用<strong>异步</strong> body 迭代器（Starlette 断连时确定性关闭）+ <code>finally</code> 显式关闭合成生成器→锁必然释放；③ 所有拿锁走超时上下文；④ <code>/health</code> 最多等锁 2 s，忙时报 <code>busy: true</code> 而不排队。</dd></div>
+    <div><dt>回归验证</dt><dd>单测：遗弃流后下一请求必须能合成。真机：中止 2 s 流式合成后 <code>/health</code> 53 ms 应答、后续合成 0.49 s 返回 200（修复前同操作 = 永久木化）。</dd></div>
+  </dl>
+  <div class="callout lesson">
+    <span class="tag">教训 9.1</span>
+    持锁生成器 + StreamingResponse(同步迭代器) = 客户端断连即死锁。流式引擎 wrapper 的铁律：异步 body 迭代器 + finally 显式 close + 拿锁超时；健康检查绝不与生成路径抢同一把无超时锁——健康端点失联正是木化的第一信号。
+  </div>
+
+  <h3><span class="no">9.2</span>案例二：续段条件反馈导致的音色与语速漂移</h3>
+  <dl class="kv">
+    <div><dt>现象</dt><dd>克隆音色长回复「越往后越不像、越说越快」。</dd></div>
+    <div><dt>机理</dt><dd>两因叠加。<b>(a)</b> 续段合并以<strong>滚动缓存</strong>为基底：第 N 块的条件里堆叠着前面所有块的<strong>合成音频特征</strong>，干净参考音被逐块稀释——自回归系统经典的暴露偏差反馈回路，音色与语速同源漂移。<b>(b)</b> 对话分块从 2.5 s 翻倍增长至 15 s 上限，<strong>最长的块（单次生成内部漂移也最大）恰好落在长回复末尾</strong>，两处漂移在结尾叠加。</dd></div>
+    <div><dt>修复</dt><dd>① 续段存储增加<strong>基准锚</strong>（克隆=纯参考缓存；设计音色=首块），每次合并重新锚定：第 N 块只以「参考 + 第 N−1 块」为条件——衔接韵律保留（来自紧邻前块），漂移最多传一跳；② 对话块长上限 15 s → 8 s。</dd></div>
+    <div><dt>验证</dt><dd>存储逻辑于 GPU 主机环境断言通过；三块续段会话机械验证；用户实听确认长回复音色/语速稳定（2026-07-15）。</dd></div>
+  </dl>
+  <div class="callout lesson">
+    <span class="tag">教训 9.2</span>
+    自回归 TTS 的续段设计里，「以滚动缓存为条件」是漂移放大器；「锚定到不可变参考 + 一跳邻接」在保住块间连续性的同时阻断累积。语速漂移与音色漂移同源，一并治愈。
+  </div>
+
+  <h3><span class="no">9.3</span>案例三：播放时钟归属错误（「无法打断」）</h3>
+  <dl class="kv">
+    <div><dt>现象</dt><dd>CLI 扬声器模式下回复的可听尾段无法被打断；打断触发了新话轮却停不下正在播的音频。</dd></div>
+    <div><dt>机理</dt><dd>「最后一字节进入播放管道」被误当作「回复播完」：会话提前翻回 listening，尾段期间的语音开了新话轮而非打断，且无人负责停掉旧音频。</dd></div>
+    <div><dt>修复与推广</dt><dd>CLI 侧：话轮保持 speaking 直到播放器 close()（播放器获得真实音频时钟）。协议侧：该教训被<strong>协议化</strong>为 <code>playbackAck</code>/<code>playback.complete</code>——网关听不见客户端扬声器，可听时钟归端点所有；服务端以音频自身时长+余量为超时上限，哑客户端不会卡死会话。</dd></div>
+  </dl>
+  <div class="callout lesson">
+    <span class="tag">教训 9.3</span>
+    分布式音频系统里「发送完成」≠「可听完成」。可听时钟必须归属能听见它的一端，并以物理时长为兜底上限。
+  </div>
+
+  <h3><span class="no">9.4</span>案例四：推测解码收益的跨后端误判（方法论事故）</h3>
+  <dl class="kv">
+    <div><dt>事件</dt><dd>依据 Metal 平台 14–20% 的草稿接受率，一度得出「GPU 主机上的 MTP 是死重、建议移除」的结论；与既有系统性测试冲突，经用户纠正后复核 CUDA 记录（100 → 375 tok/s）并公开更正。</dd></div>
+    <div><dt>机理</dt><dd><strong>接受率是错误指标</strong>。正确框架是「平均接受长度 × 单位验证成本」：同一模型对，CUDA 的批式验证近乎免费，平均接受长度 1.7–3.5 即为 3× 以上净收益；Metal 的验证成本结构使同样的接受统计变为净减速（60 → 19 字符/s）。推测解码的收益是<strong>后端属性</strong>，不是模型对属性。</dd></div>
+  </dl>
+  <div class="callout lesson">
+    <span class="tag">教训 9.4</span>
+    跨机器/跨后端的性能结论必须在目标主机上做端到端 A/B，不能由单一代理指标外推。该更正已写回运维记录与引擎文档。
+  </div>
+
+  <h2 id="s10"><span class="no">10</span>工程方法论</h2>
+  <ul>
+    <li><strong>实测门禁（measured gates）</strong>：体验与安全特性以带数字的真机门验收（§8.1 的 AEC 门、投机策略转正门、Phase 3 的指纹一致门）。门程序主动防作弊：空捕获=假完美衰减→判失败；未测底噪不得声称界限；AEC 收敛期（3 s）从所有统计中剔除。</li>
+    <li><strong>文档先行，决策编号</strong>：<code>docs/</code> 下每份设计（duplex、web-studio、engine-registry、chunking）以「编号决策 + 非目标 + 分期 + 每期验收门」成文；实现偏离时修文档而非留漂移。</li>
+    <li><strong>认证逻辑单实现</strong>：VAD 生命周期、对话循环等过门代码抽取共享（CLI 与网关同驱 <code>packages/conversation</code>，提炼后原有 10 个模拟双工测试零改动全过）。</li>
+    <li><strong>显式降级</strong>：Silero 不可用时大声降级到同样过门的能量检测器；显式指定则大声失败。任何静默兜底（如空音色兜到 <code>clone</code>）一经实测暴露即改为「留空由引擎自决」。</li>
+    <li><strong>事后剖析入册</strong>：每起真机事故以「现象/机理/修复/回归/教训」格式记入运维仓，教训回写产品文档与代码注释。</li>
+  </ul>
+
+  <h2 id="s11"><span class="no">11</span>局限与未来工作</h2>
+  <ul>
+    <li><strong>浏览器双讲门测未跑</strong>：对话面板已实现并可用，但宣布 supported 前需按 macOS 门同等纪律完成真浏览器/真路由的 double-talk 与打断测量（含协商能力快照入册）。</li>
+    <li><strong>素材库（Phase 4）未建</strong>：对话录音→转写→行内修正→升级为音色样本的沉淀闭环，需网关侧 SQLite 持久化。</li>
+    <li><strong>部署（Phase 5）未做</strong>：目标为 Cloudflare Pages + Tunnel + Access 的私有部署（移动端因 getUserMedia 需 HTTPS 而依赖此步）；公开 demo 是独立的滥用/成本评审决策。</li>
+    <li><strong>无实例间容错</strong>：注册表明确不做负载均衡与故障转移（实例宕机=大声失败）；对话链引擎调用沿用 600 s 客户端超时，对实时场景过宽，应收紧为分级超时。</li>
+    <li><strong>其余已知项</strong>：音频路由变更处理、独立二进制的 ONNX 运行时打包、块内残余漂移（可再压块长或对非首块提高 timesteps）、Windows/Linux 端点的原生语音处理评估。</li>
+  </ul>
+
+  <h2 id="s12"><span class="no">12</span>结论</h2>
+  <p>
+    VoxStudio 证明了在单一 OpenAI 兼容契约的纪律下，自托管中文语音交互可以同时取得：<strong>可用的全双工体验</strong>（0 自打断、12/12 打断命中、停话→回复 p50 ≈ 2.1 s 全本地）、<strong>可审计的可复现性</strong>（设计音色跨表面逐字节重现）、以及<strong>可演化的多引擎架构</strong>（角色/能力路由使「对话走快车道、克隆走质量线」成为配置而非代码）。本周期内四起故障的共同形态——流式生命周期与资源持有的交互——提示实时语音系统的可靠性核心不在模型而在<strong>取消语义</strong>：谁持有锁、谁拥有时钟、谁在断连时负责清理。这些答案如今都编码在协议与测试里。
+  </p>
+
+  <h2 id="sa"><span class="no">A</span>附录 A：协议事件与命令（v1）</h2>
+  <div class="tablewrap">
+  <table>
+    <thead><tr><th>方向</th><th>类型</th><th>要点</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="2">客户端→服务端（命令，均携幂等键）</td><td class="mono">session.start / session.attach / session.snapshot.request / session.stop</td><td>会话生命周期；attach 后推送快照重同步</td></tr>
+      <tr><td class="mono">turn.interrupt {turnId} / playback.complete {turnId}</td><td>话轮作用域；过期话轮拒为 stale_turn；可听时钟上报</td></tr>
+      <tr><td rowspan="4">服务端→客户端（事件，单调序号）</td><td class="mono">session.state / session.snapshot / session.notice</td><td>状态机镜像与重同步</td></tr>
+      <tr><td class="mono">turn.started|interrupted|completed|false_barge_in|reopened / vad.end / turn.timing</td><td>话轮全生命周期与逐轮延迟剖面</td></tr>
+      <tr><td class="mono">transcript.final / response.text.delta|final（携 revision）</td><td>字幕流；修订号防止被取代分发的陈旧文本上屏</td></tr>
+      <tr><td class="mono">playback.format|ended|interrupted / audio.* / command.accepted|duplicate|rejected / error</td><td>媒体格式声明、队列与命令回执</td></tr>
+      <tr><td>REST facade</td><td class="mono">/v1/audio/speech · /v1/audio/transcriptions · /v1/chat/completions · /v1/voices[/{id}] · /v1/design-profiles · /v1/engines</td><td>均支持 <code>?engine=</code> 显式路由；凭据服务端注入</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="sb"><span class="no">B</span>参考文献与相关仓库</h2>
+  <ol class="refs">
+    <li>VoxStudio 设计文档：<code>docs/duplex-audio-architecture.md</code>（会话契约、VAD 政策、门测记录）、<code>docs/web-studio.md</code>（面板与分期）、<code>docs/engine-registry.md</code>（多引擎路由）、<code>docs/chunking.md</code>（长文分块的经验依据）。</li>
+    <li>Pine, J. <i>voicebox</i>. MIT License. — 信息架构谱系参考。<span class="mono">github.com/jamiepine/voicebox</span></li>
+    <li>Hugging Face. <i>speech-to-speech</i>. — 级联式语音对话管线实践参考。</li>
+    <li>OpenBMB. <i>VoxCPM2</i>；上游 C++ 移植 <span class="mono">liuzl/VoxCPM.cpp</span>（fork of bluryar/VoxCPM.cpp）。</li>
+    <li>hexgrad. <i>Kokoro-82M-v1.1-zh</i>；FunAudioLLM. <i>SenseVoice-Small</i>；Silero Team. <i>Silero VAD v5.1.2</i>（MIT，SHA-256 钉固分发）。</li>
+    <li>ggml-org. <i>llama.cpp</i>（gemma4 架构支持 ≥ b9960）。</li>
+  </ol>
+
+  <p class="footnote" style="margin-top:3rem; border-top:1px solid var(--line); padding-top:1rem;">
+    本报告由开发过程的第一手记录（设计文档、门测输出、提交历史、运维事件记录）整理而成；所有数字均为标注日期与环境的实测值，未经外推。测量环境：Apple M3 Max 64 GB（macOS）本地工作站与单卡 CUDA 远程 GPU 主机（私有组网）。
+  </p>
+</div>
