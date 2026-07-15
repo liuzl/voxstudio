@@ -1,5 +1,5 @@
 import { estSeconds, chunkText } from "@voxstudio/text";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { listVoices, synthesize } from "../lib/api";
 import { useStudio } from "../store";
 
@@ -9,26 +9,36 @@ function VoicePicker({ value, engine, onChange }: {
   onChange: (voice: string, engine?: string) => void;
 }) {
   const voicesList = useStudio(state => state.voicesList);
+  const byEngine = useMemo(() => {
+    const groups = new Map<string, string[]>();
+    for (const entry of voicesList) {
+      groups.set(entry.engine, [...(groups.get(entry.engine) ?? []), entry.id]);
+    }
+    return [...groups.entries()];
+  }, [voicesList]);
   return (
     <label className="flex items-center gap-2 text-xs text-ink-300">
       音色
-      <input
-        list="voice-bank"
-        value={value}
+      <select
+        value={value ? `${engine}::${value}` : ""}
         onChange={event => {
-          const next = event.target.value;
-          // Picking a bank entry carries its engine; free text falls to the role default.
-          onChange(next, voicesList.find(voice => voice.id === next)?.engine);
+          const [nextEngine, id] = event.target.value.split("::");
+          // Picking a voice carries its owning engine; 默认 falls to the role default.
+          onChange(id ?? "", nextEngine || undefined);
         }}
-        placeholder="引擎默认"
-        className="w-36 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100"
-      />
-      {engine && <span className="rounded bg-ink-800 px-1.5 py-0.5 text-[10px] text-ink-500">{engine}</span>}
-      <datalist id="voice-bank">
-        {voicesList.map(voice => (
-          <option key={`${voice.engine}/${voice.id}`} value={voice.id}>{voice.engine}</option>
+        className="max-w-48 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100"
+      >
+        <option value="">默认（{byEngine[0]?.[0] || "引擎默认"}）</option>
+        {byEngine.map(([groupEngine, ids]) => (
+          <optgroup key={groupEngine} label={groupEngine}>
+            {ids.map(id => (
+              <option key={`${groupEngine}::${id}`} value={`${groupEngine}::${id}`}>
+                {id}
+              </option>
+            ))}
+          </optgroup>
         ))}
-      </datalist>
+      </select>
     </label>
   );
 }
