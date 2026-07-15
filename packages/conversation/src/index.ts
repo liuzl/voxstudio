@@ -172,8 +172,15 @@ export async function runConversation(
           // audio arrives when the first chunk finishes synthesizing (engine RTF ≈ 1), so
           // an 8s first chunk is 8s of dead air. A tight first cap trades an earlier seam
           // — inaudible between conversational sentences — for most of that wait; growth
-          // restores full-size chunks immediately after.
-          chunking: { ...options.chunking, firstMaxSeconds: Math.min(options.chunking.firstMaxSeconds, 2.5) },
+          // restores larger chunks immediately after, but capped at 8s: a single VoxCPM
+          // generation drifts from the reference as it runs, and the growth policy was
+          // putting the longest chunks at the end of long replies, exactly where the
+          // accumulated drift already peaked.
+          chunking: {
+            ...options.chunking,
+            firstMaxSeconds: Math.min(options.chunking.firstMaxSeconds, 2.5),
+            maxSeconds: Math.min(options.chunking.maxSeconds, 8),
+          },
           ttsDefaults: options.ttsDefaults,
           voice,
           ...(voice === "clone" || voice === "design" ? {} : { prosodyPrompt: true }),

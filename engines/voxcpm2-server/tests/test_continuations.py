@@ -17,3 +17,18 @@ def test_evicts_oldest_when_capacity_is_reached():
     store.put("c", {"value": 3}, now=3)
     assert store.get("a") is None
     assert store.stats() == {"active": 2, "capacity": 2}
+
+
+def test_base_anchor_survives_the_session():
+    store = ContinuationStore()
+    base = {"reference": True}
+    merged1 = {"reference": True, "chunk": 1}
+    store.put("s", merged1, base)
+    assert store.get("s") == merged1
+    assert store.get_base("s") is base
+    # Later chunks keep re-anchoring to the same base, never to a previous merge.
+    merged2 = {"reference": True, "chunk": 2}
+    store.put("s", merged2, base)
+    assert store.get("s") == merged2
+    assert store.get_base("s") is base
+    assert store.get_base("missing") is None

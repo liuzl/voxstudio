@@ -105,6 +105,7 @@ def _generate_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
     with _pipeline():
         _continuations.prune()
         cache = _continuations.get(session_id)
+        base = _continuations.get_base(session_id)
         if cache is None:
             # Building a prompt cache encodes the reference audio through the VAE — the
             # dominant fixed cost of a reply's first chunk. It is deterministic per
@@ -121,14 +122,20 @@ def _generate_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
                     lambda: model.tts_model.build_prompt_cache(reference_wav_path=ref))
             else:
                 cache = None
+            base = cache
         wav, _, audio_features = model.tts_model.generate_with_prompt_cache(
             target_text=text, prompt_cache=cache, cfg_value=cfg, inference_timesteps=ts,
             retry_badcase=True, seed=seed)
-        next_cache = model.tts_model.merge_prompt_cache(cache, text, audio_features)
+        # Anchor the merge to the base, not the rolling cache: chunk N conditions on the
+        # clean reference plus chunk N-1 only. Merging onto the previous merge stacked
+        # every earlier chunk's synthesized audio into the prompt, and long replies
+        # drifted audibly away from the reference voice.
+        next_cache = model.tts_model.merge_prompt_cache(
+            base if base is not None else cache, text, audio_features)
         if end:
             _continuations.pop(session_id)
         else:
-            _continuations.put(session_id, next_cache)
+            _continuations.put(session_id, next_cache, base if base is not None else next_cache)
         if _CUDA:
             torch.cuda.empty_cache()
     buf = io.BytesIO(); sf.write(buf, wav.squeeze(0).cpu().numpy(), SR, format="WAV"); buf.seek(0)
@@ -156,6 +163,7 @@ def _stream_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
         try:
             _continuations.prune()
             cache = _continuations.get(session_id)
+            base = _continuations.get_base(session_id)
             if cache is None:
                 if prompt:
                     cache = _prompt_caches.get_or_build(
@@ -168,6 +176,7 @@ def _stream_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
                         lambda: model.tts_model.build_prompt_cache(reference_wav_path=ref))
                 else:
                     cache = None
+                base = cache
             generator = model.tts_model.generate_with_prompt_cache_streaming(
                 target_text=text, prompt_cache=cache, cfg_value=cfg, inference_timesteps=ts,
                 seed=seed)
@@ -189,13 +198,16 @@ def _stream_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
                 generator.close()
                 if new_features:
                     # (1, t, p, d) -> (t, p, d): the cache convention is batchless, and
-                    # generation cats it against 3-D reference features.
+                    # generation cats it against 3-D reference features. The merge anchors
+                    # to the base (see _generate_continuation): reference + this chunk
+                    # only, so timbre drift cannot accumulate across a long reply.
                     next_cache = model.tts_model.merge_prompt_cache(
-                        cache, text, torch.cat(new_features, dim=1).squeeze(0))
+                        base if base is not None else cache, text,
+                        torch.cat(new_features, dim=1).squeeze(0))
                     if end:
                         _continuations.pop(session_id)
                     else:
-                        _continuations.put(session_id, next_cache)
+                        _continuations.put(session_id, next_cache, base if base is not None else next_cache)
                 if _CUDA:
                     torch.cuda.empty_cache()
         finally:
