@@ -12,11 +12,13 @@ voice 取值: clone(默认音) / design(零样本,text 前加 (English 描述)) 
 单 GPU 模型, threading.Lock 串行化生成.
 """
 import io, os, re, json, threading, tempfile, subprocess, shutil
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import soundfile as sf
 import torch
 from fastapi import FastAPI, Response, Form, UploadFile, File, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from voxcpm import VoxCPM
 from continuations import ContinuationStore, SESSION_ID_RE
@@ -40,7 +42,34 @@ model = VoxCPM.from_pretrained(MODEL_PATH, load_denoiser=False)
 SR = model.tts_model.sample_rate
 print(f"VoxCPM2 loaded, sample_rate={SR}", flush=True)
 lock = threading.Lock()
+LOCK_TIMEOUT = float(os.getenv("VOXCPM2_LOCK_TIMEOUT", "120"))
 app = FastAPI()
+
+
+class PipelineBusyError(RuntimeError):
+    """The generation pipeline could not be acquired in time."""
+
+
+def _busy(error):
+    return HTTPException(503, {"error": {"code": "pipeline_busy",
+        "message": str(error), "type": "server_error"}})
+
+
+@contextmanager
+def _pipeline():
+    """Serialize on the single GPU pipeline, refusing (503) instead of queueing forever."""
+    if not lock.acquire(timeout=LOCK_TIMEOUT):
+        raise PipelineBusyError(f"generation pipeline still busy after {LOCK_TIMEOUT}s")
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+@app.exception_handler(PipelineBusyError)
+async def _pipeline_busy_handler(request, exc):
+    return JSONResponse(status_code=503, content={"error": {"code": "pipeline_busy",
+        "message": str(exc), "type": "server_error"}})
 
 _CUDA = torch.cuda.is_available()
 _continuations = ContinuationStore()
@@ -53,7 +82,7 @@ def _generate(text, ref, cfg, ts, prompt=None, seed=None):
     """prompt = (wav_path, transcript). Conditions on an aligned text/audio example, which
     the model follows for tempo; `ref` alone only carries timbre. Output excludes the prompt."""
     kw = {"prompt_wav_path": prompt[0], "prompt_text": prompt[1]} if prompt else {}
-    with lock:
+    with _pipeline():
         wav = model.generate(text=text, reference_wav_path=ref, cfg_value=cfg,
                              inference_timesteps=ts, seed=seed, **kw)
         if _CUDA:
@@ -73,7 +102,7 @@ def _generate_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
         raise HTTPException(400, {"error": {"code": "invalid_continuation_id",
             "message": "continuation_id must contain only letters, digits, underscores, or hyphens.",
             "type": "invalid_request_error"}})
-    with lock:
+    with _pipeline():
         _continuations.prune()
         cache = _continuations.get(session_id)
         if cache is None:
@@ -109,14 +138,22 @@ def _stream_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
     """Chunked f32le PCM while generation runs: first audio leaves before the reply is
     finished. Upstream disables badcase retries in streaming mode; the ratio-derived
     max_len still bounds a runaway generation. The lock spans the whole stream — the model
-    is serial anyway — and a client disconnect releases it through the finally."""
+    is serial anyway. Do NOT hold it with a plain `with` across yields: a streaming client
+    that disconnects mid-reply (every barge-in does) abandons this generator suspended at
+    a yield, the lock is never released, and the whole server — /health included — wedges
+    until restart. Observed live on 2026-07-15 (this server and the kokoro one, same day,
+    same shape). The acquire timeout turns that worst case into a 503, and the endpoint
+    drives this generator through an async body iterator whose finally closes it
+    deterministically, which is what actually releases the lock on disconnect."""
     if not SESSION_ID_RE.fullmatch(session_id):
         raise HTTPException(400, {"error": {"code": "invalid_continuation_id",
             "message": "continuation_id must contain only letters, digits, underscores, or hyphens.",
             "type": "invalid_request_error"}})
 
     def pcm():
-        with lock:
+        if not lock.acquire(timeout=LOCK_TIMEOUT):
+            raise PipelineBusyError(f"generation pipeline still busy after {LOCK_TIMEOUT}s")
+        try:
             _continuations.prune()
             cache = _continuations.get(session_id)
             if cache is None:
@@ -161,6 +198,8 @@ def _stream_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
                         _continuations.put(session_id, next_cache)
                 if _CUDA:
                     torch.cuda.empty_cache()
+        finally:
+            lock.release()
 
     return pcm()
 
@@ -215,11 +254,18 @@ def resolve_prompt(voice):
 
 @app.get("/health")
 def health():
-    with lock:
-        _continuations.prune()
-        sessions = _continuations.stats()
+    # Health must never queue behind generation: a long synthesis (or, before the fix
+    # above, a wedged lock) made the whole server look dead to probes. Busy is healthy.
+    if lock.acquire(timeout=2):
+        try:
+            _continuations.prune()
+            sessions = _continuations.stats()
+        finally:
+            lock.release()
+    else:
+        sessions = None
     return {"status": "ok", "model": MODEL_ID, "model_manifest_sha256": MODEL_MANIFEST_SHA256,
-            "sample_rate": SR, "continuations": sessions}
+            "sample_rate": SR, "continuations": sessions, "busy": sessions is None}
 
 @app.post("/v1/voices", status_code=201)
 def create_voice(id: str = Form(...), text: str = Form(...), audio: UploadFile = File(...)):
@@ -347,7 +393,7 @@ class OAIReq(BaseModel):
     stream: bool = False
 
 @app.post("/v1/audio/speech")
-def oai_speech(r: OAIReq):
+async def oai_speech(r: OAIReq):
     ref = resolve_voice(r.voice)   # clone(默认音) / design(零样本) / <已注册 id>
     prompt = resolve_prompt(r.voice) if r.prosody_prompt else None
     if r.stream:
@@ -355,16 +401,48 @@ def oai_speech(r: OAIReq):
             raise HTTPException(400, {"error": {"code": "invalid_request",
                 "message": "stream requires continuation_id: streamed audio is part of a continuation session.",
                 "type": "invalid_request_error"}})
+        # Prime the first chunk before the response starts: lock timeouts surface as a
+        # real 503 instead of a broken 200 stream.
+        iterator = _stream_continuation(r.input, ref, r.cfg_value, r.timesteps, prompt,
+                                        r.seed, r.continuation_id, r.continuation_end)
+        sentinel = object()
+        try:
+            first = await run_in_threadpool(next, iterator, sentinel)
+        except PipelineBusyError as error:
+            raise _busy(error)
+        except BaseException:
+            await run_in_threadpool(iterator.close)
+            raise
+
+        # Async body iterator on purpose: Starlette closes async iterators
+        # deterministically when the client disconnects, and the finally closes the
+        # synthesis generator — releasing the pipeline lock. A sync generator abandoned
+        # in the threadpool held it forever (the 2026-07-15 wedge).
+        async def body():
+            piece = first
+            try:
+                while piece is not sentinel:
+                    yield piece
+                    piece = await run_in_threadpool(next, iterator, sentinel)
+            finally:
+                await run_in_threadpool(iterator.close)
         return StreamingResponse(
-            _stream_continuation(r.input, ref, r.cfg_value, r.timesteps, prompt,
-                                 r.seed, r.continuation_id, r.continuation_end),
+            body(),
             media_type="audio/pcm",
             headers={"X-Sample-Rate": str(SR), "X-Sample-Format": "f32le"})
-    if r.continuation_id:
-        return Response(_generate_continuation(r.input, ref, r.cfg_value, r.timesteps, prompt,
-                        r.seed, r.continuation_id, r.continuation_end), media_type="audio/wav")
-    return Response(_generate(r.input, ref, r.cfg_value, r.timesteps, prompt, seed=r.seed),
-                    media_type="audio/wav")
+    # Batch generation blocks under the lock for the whole synthesis; keep it off the
+    # event loop exactly as the previous sync-def endpoint did.
+    try:
+        if r.continuation_id:
+            wav = await run_in_threadpool(_generate_continuation, r.input, ref, r.cfg_value,
+                                          r.timesteps, prompt, r.seed, r.continuation_id,
+                                          r.continuation_end)
+        else:
+            wav = await run_in_threadpool(_generate, r.input, ref, r.cfg_value, r.timesteps,
+                                          prompt, seed=r.seed)
+    except PipelineBusyError as error:
+        raise _busy(error)
+    return Response(wav, media_type="audio/wav")
 
 @app.get("/", response_class=HTMLResponse)
 def index():
