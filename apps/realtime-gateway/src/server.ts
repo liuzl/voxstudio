@@ -36,8 +36,18 @@ const facadeRoutes: Record<string, { slot: string; methods: string[] }> = {
   "/v1/audio/speech": { slot: "tts", methods: ["POST"] },
   "/v1/audio/transcriptions": { slot: "asr", methods: ["POST"] },
   "/v1/chat/completions": { slot: "llm", methods: ["POST"] },
-  "/v1/voices": { slot: "tts", methods: ["GET"] },
+  "/v1/voices": { slot: "tts", methods: ["GET", "POST"] },
 };
+
+/** Voice registry entries: /v1/voices/{id} on the TTS engine (list/create live above). */
+const voiceEntryPattern = /^\/v1\/voices\/[A-Za-z0-9._-]{1,64}$/;
+
+function facadeRoute(pathname: string): { slot: string; methods: string[] } | undefined {
+  const exact = facadeRoutes[pathname];
+  if (exact) return exact;
+  if (voiceEntryPattern.test(pathname)) return { slot: "tts", methods: ["GET", "DELETE"] };
+  return undefined;
+}
 
 function rejection(sessionId: string, reason: string, command?: GatewayCommand): string {
   return JSON.stringify({
@@ -159,7 +169,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         if (server.upgrade(request, { data })) return undefined;
         return new Response("expected a WebSocket upgrade", { status: 426 });
       }
-      const route = facadeRoutes[url.pathname];
+      const route = facadeRoute(url.pathname);
       if (route) {
         if (!route.methods.includes(request.method)) return new Response("method not allowed", { status: 405 });
         return proxy(request, route.slot, url.pathname);

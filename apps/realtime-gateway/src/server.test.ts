@@ -308,8 +308,50 @@ describe("realtime gateway", () => {
 
     const missing = await fetch(new URL("/v1/other", gateway.url));
     expect(missing.status).toBe(404);
-    const wrongMethod = await fetch(new URL("/v1/voices", gateway.url), { method: "POST" });
+    const wrongMethod = await fetch(new URL("/v1/voices", gateway.url), { method: "PUT" });
     expect(wrongMethod.status).toBe(405);
+  });
+
+  test("the facade proxies voice registration and per-voice entries", async () => {
+    const seen: { method: string; path: string; contentType: string | null }[] = [];
+    gateway = startGateway({
+      config,
+      port: 0,
+      fetch: engineFetch({
+        "/v1/voices": async request => {
+          seen.push({
+            method: request.method,
+            path: new URL(request.url).pathname,
+            contentType: request.headers.get("content-type"),
+          });
+          if (request.method === "POST") {
+            const form = await request.formData();
+            return Response.json({ id: form.get("id") }, { status: 201 });
+          }
+          return Response.json({ voices: [] });
+        },
+        "/v1/voices/laok": async request => {
+          seen.push({ method: request.method, path: new URL(request.url).pathname, contentType: null });
+          return request.method === "DELETE" ? Response.json({ deleted: true }) : Response.json({ id: "laok" });
+        },
+      }),
+    });
+
+    const form = new FormData();
+    form.set("id", "laok");
+    form.set("text", "参考音的逐字稿");
+    form.set("audio", new File([new Uint8Array(16)], "ref.wav", { type: "audio/wav" }));
+    const created = await fetch(new URL("/v1/voices", gateway.url), { method: "POST", body: form });
+    expect(created.status).toBe(201);
+    expect(await created.json()).toEqual({ id: "laok" });
+    // Multipart bodies stream through intact, boundary and all.
+    expect(seen[0]?.contentType).toStartWith("multipart/form-data");
+
+    expect((await fetch(new URL("/v1/voices/laok", gateway.url))).status).toBe(200);
+    expect((await fetch(new URL("/v1/voices/laok", gateway.url), { method: "DELETE" })).status).toBe(200);
+    // Path traversal and malformed ids never reach an engine.
+    expect((await fetch(new URL("/v1/voices/laok/extra", gateway.url))).status).toBe(404);
+    expect(seen.map(entry => entry.method)).toEqual(["POST", "GET", "DELETE"]);
   });
 
   test("a configured token gates both the facade and the realtime endpoint", async () => {

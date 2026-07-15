@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { ConversationPanel } from "./panels/ConversationPanel";
+import { GeneratePanel } from "./panels/GeneratePanel";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
+import { VoicesPanel } from "./panels/VoicesPanel";
 import { useStudio } from "./store";
 
 type Tab = "conversation" | "generate" | "voices" | "library" | "settings";
@@ -38,20 +40,8 @@ export function App() {
   const panel = (
     <>
       {tab === "conversation" && <ConversationPanel />}
-      {tab === "generate" && (
-        <PlaceholderPanel
-          title="生成"
-          phase="Web Studio Phase 3"
-          description="文本进、音频出：音色/设计档选择、能力开关（克隆 / 设计 / 快车道）、长文本分块预览、每条提示词的 takes 历史。REST facade 已就绪（/v1/audio/speech 经网关代理），面板随 Phase 3 交付。"
-        />
-      )}
-      {tab === "voices" && (
-        <PlaceholderPanel
-          title="音色"
-          phase="Web Studio Phase 3"
-          description="注册音色与设计档，带 SHA-256 指纹徽章与 audit 状态；create / reproduce / verify / audition 流程对齐 CLI 动词。"
-        />
-      )}
+      {tab === "generate" && <GeneratePanel />}
+      {tab === "voices" && <VoicesPanel />}
       {tab === "library" && (
         <PlaceholderPanel
           title="素材库"

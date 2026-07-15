@@ -104,6 +104,14 @@ below rather than relitigated per feature.
    before the panel is declared supported.
 3. **Generate + Voices panels**: REST facade parity with `say`/`voices`/`profiles`.
    Gate: every CLI verb reachable and producing identical artifacts (fingerprints match).
+   **Generate and voice-bank flows delivered 2026-07-15**: the facade now proxies the
+   full voice registry (list/register/delete, credential-injecting, traversal-safe), the
+   生成 panel synthesizes through it with a voice picker, duration/chunk estimate, and a
+   takes history, and the 音色 panel lists the bank with one-click audition, registration
+   (clone engines), and delete — verified live against the local stack. Still open for
+   this phase's gate: design-profile workflows (they need a gateway-side profile
+   registry; profiles live in the CLI's filesystem today) and the fingerprint-parity
+   check against CLI artifacts.
 4. **Library panel**: SQLite persistence, capture ingest from gateway sessions,
    promote-to-sample. Gate: the ASR reference-correction workflow runs end-to-end in UI.
 5. **Settings & hosting**: health surface; voxstudio.cc deployment behind Access.

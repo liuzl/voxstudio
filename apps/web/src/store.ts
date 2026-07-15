@@ -21,6 +21,15 @@ export interface NoticeView {
   text: string;
 }
 
+/** One generation result: the prompt, the audio (object URL), and how it was made. */
+export interface TakeView {
+  id: string;
+  text: string;
+  voice: string;
+  at: number;
+  url: string;
+}
+
 interface StudioState {
   connection: ConnectionState;
   sessionState: string;
@@ -32,7 +41,13 @@ interface StudioState {
   capability: EndpointCapability | undefined;
   voice: string;
   language: string;
+  /** Generation takes, newest first. Object URLs are revoked on eviction/removal. */
+  takes: TakeView[];
+  voicesList: string[];
 
+  addTake(take: TakeView): void;
+  removeTake(id: string): void;
+  setVoicesList(voices: string[]): void;
   setConnection(connection: ConnectionState): void;
   setActive(active: boolean): void;
   setMuted(muted: boolean): void;
@@ -46,6 +61,7 @@ interface StudioState {
 
 const maxTurns = 50;
 const maxNotices = 30;
+const maxTakes = 30;
 
 function updateTurn(turns: TurnView[], turnId: string, update: (turn: TurnView) => TurnView): TurnView[] {
   const index = turns.findIndex(turn => turn.id === turnId);
@@ -158,7 +174,22 @@ export const useStudio = create<StudioState>((set, get) => ({
   capability: undefined,
   voice: "",
   language: "zh",
+  takes: [],
+  voicesList: [],
 
+  addTake: take =>
+    set(state => {
+      const next = [take, ...state.takes];
+      for (const evicted of next.slice(maxTakes)) URL.revokeObjectURL(evicted.url);
+      return { takes: next.slice(0, maxTakes) };
+    }),
+  removeTake: id =>
+    set(state => {
+      const removed = state.takes.find(take => take.id === id);
+      if (removed) URL.revokeObjectURL(removed.url);
+      return { takes: state.takes.filter(take => take.id !== id) };
+    }),
+  setVoicesList: voicesList => set({ voicesList }),
   setConnection: connection => set({ connection }),
   setActive: active => set({ active }),
   setMuted: muted => set({ muted }),
