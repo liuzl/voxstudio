@@ -2,6 +2,18 @@
 # ${VAR} is expanded from the environment; an unset var resolves to empty.
 # Every key can also be overridden by env: VOXSTUDIO_<ENGINE>_<KEY>, VOXSTUDIO_CHUNK_<KEY>.
 
+# Engines are named instances; multiple per kind are welcome. An instance named
+# exactly like a role (tts/asr/llm/asr_longform) is that role's default unless the
+# optional `roles:` section says otherwise. Instances may declare `kind` and
+# `capabilities` (clone/design/preset/fast/streaming/longform/diarize) for routing —
+# e.g. voice registration goes to the first tts with `clone`, and requests can pin an
+# instance with `?engine=NAME` at the gateway. See docs/engine-registry.md.
+#
+#   engines:
+#     kokoro:   { kind: tts, base_url: "http://127.0.0.1:18089", model: kokoro, capabilities: [preset, fast] }
+#     voxcpm2:  { kind: tts, base_url: "http://gpu-host:8880",   model: voxcpm2, capabilities: [clone, design, streaming] }
+#   roles:
+#     tts: kokoro
 engines:
   tts:
     base_url: http://127.0.0.1:8880

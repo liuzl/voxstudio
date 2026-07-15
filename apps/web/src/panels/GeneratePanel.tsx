@@ -3,7 +3,11 @@ import { useEffect, useState } from "react";
 import { listVoices, synthesize } from "../lib/api";
 import { useStudio } from "../store";
 
-function VoicePicker({ value, onChange }: { value: string; onChange: (voice: string) => void }) {
+function VoicePicker({ value, engine, onChange }: {
+  value: string;
+  engine: string;
+  onChange: (voice: string, engine?: string) => void;
+}) {
   const voicesList = useStudio(state => state.voicesList);
   return (
     <label className="flex items-center gap-2 text-xs text-ink-300">
@@ -11,13 +15,18 @@ function VoicePicker({ value, onChange }: { value: string; onChange: (voice: str
       <input
         list="voice-bank"
         value={value}
-        onChange={event => onChange(event.target.value)}
+        onChange={event => {
+          const next = event.target.value;
+          // Picking a bank entry carries its engine; free text falls to the role default.
+          onChange(next, voicesList.find(voice => voice.id === next)?.engine);
+        }}
         placeholder="引擎默认"
         className="w-36 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100"
       />
+      {engine && <span className="rounded bg-ink-800 px-1.5 py-0.5 text-[10px] text-ink-500">{engine}</span>}
       <datalist id="voice-bank">
-        {voicesList.map(id => (
-          <option key={id} value={id} />
+        {voicesList.map(voice => (
+          <option key={`${voice.engine}/${voice.id}`} value={voice.id}>{voice.engine}</option>
         ))}
       </datalist>
     </label>
@@ -27,6 +36,7 @@ function VoicePicker({ value, onChange }: { value: string; onChange: (voice: str
 export function GeneratePanel() {
   const [text, setText] = useState("");
   const voice = useStudio(state => state.generateVoice);
+  const engine = useStudio(state => state.generateEngine);
   const setVoice = useStudio(state => state.setGenerateVoice);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -46,8 +56,14 @@ export function GeneratePanel() {
     setBusy(true);
     setError("");
     try {
-      const url = await synthesize({ input: text.trim(), voice });
-      addTake({ id: crypto.randomUUID(), text: text.trim(), voice: voice || "默认", at: Date.now(), url });
+      const url = await synthesize({ input: text.trim(), voice, ...(engine ? { engine } : {}) });
+      addTake({
+        id: crypto.randomUUID(),
+        text: text.trim(),
+        voice: `${voice || "默认"}${engine ? ` @${engine}` : ""}`,
+        at: Date.now(),
+        url,
+      });
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
@@ -68,7 +84,7 @@ export function GeneratePanel() {
           className="w-full resize-y rounded-lg border border-ink-700 bg-ink-800 px-3 py-2.5 text-sm leading-relaxed text-ink-100 placeholder:text-ink-500"
         />
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <VoicePicker value={voice} onChange={setVoice} />
+          <VoicePicker value={voice} engine={engine} onChange={setVoice} />
           {text.trim() && (
             <span className="text-[11px] text-ink-500">
               预计 {seconds}s{chunks > 1 ? ` · 长文将按 ${chunks} 块合成（CLI 长文管线）` : ""}

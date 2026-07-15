@@ -50,11 +50,11 @@ export function VoicesPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const audition = async (id: string) => {
+  const audition = async (id: string, engine: string) => {
     setAuditioning(id);
     setStatus(undefined);
     try {
-      const url = await synthesize({ input: auditionText, voice: id });
+      const url = await synthesize({ input: auditionText, voice: id, ...(engine ? { engine } : {}) });
       player.current?.pause();
       const audio = new Audio(url);
       player.current = audio;
@@ -67,10 +67,10 @@ export function VoicesPanel() {
     }
   };
 
-  const remove = async (id: string) => {
+  const remove = async (id: string, engine: string) => {
     if (!window.confirm(`删除音色 ${id}？引擎侧的参考音会一并删除。`)) return;
     try {
-      await deleteVoice(id);
+      await deleteVoice(id, engine || undefined);
       setStatus({ kind: "info", text: `已删除 ${id}` });
       await refresh();
     } catch (error) {
@@ -170,16 +170,18 @@ export function VoicesPanel() {
 
   const categories = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const id of voicesList) {
-      const key = categoryOf(id);
+    for (const voice of voicesList) {
+      const key = categoryOf(voice.id);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
   }, [voicesList]);
 
-  const filtered = voicesList.filter(id =>
-    (category === "全部" || categoryOf(id) === category)
-    && (query === "" || id.toLowerCase().includes(query.toLowerCase())));
+  const multiEngine = new Set(voicesList.map(voice => voice.engine)).size > 1;
+  const filtered = voicesList.filter(voice =>
+    (category === "全部" || categoryOf(voice.id) === category)
+    && (query === "" || voice.id.toLowerCase().includes(query.toLowerCase())
+      || voice.engine.toLowerCase().includes(query.toLowerCase())));
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 md:px-8 md:py-10">
@@ -223,23 +225,26 @@ export function VoicesPanel() {
           {voicesList.length === 0 && <p className="text-sm text-ink-500">引擎没有返回音色；克隆型引擎可用下方表单注册。</p>}
           {voicesList.length > 0 && filtered.length === 0 && <p className="text-sm text-ink-500">没有匹配的音色。</p>}
           <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
-            {filtered.map(id => (
+            {filtered.map(voice => (
               <div
-                key={id}
+                key={`${voice.engine}/${voice.id}`}
                 className="group flex items-center gap-1 rounded-lg border border-ink-700/60 bg-ink-800/60 px-2 py-1.5 text-xs"
               >
                 <button
-                  onClick={() => void audition(id)}
+                  onClick={() => void audition(voice.id, voice.engine)}
                   disabled={auditioning !== ""}
                   className="min-w-0 flex-1 truncate text-left text-ink-100 hover:text-accent-500 disabled:opacity-40"
-                  title={`试听 ${id}`}
+                  title={`试听 ${voice.id}（${voice.engine}）`}
                 >
-                  {auditioning === id ? "▶ 合成中…" : id}
+                  {auditioning === voice.id ? "▶ 合成中…" : voice.id}
                 </button>
+                {multiEngine && voice.engine && (
+                  <span className="shrink-0 rounded bg-ink-700/80 px-1 text-[10px] text-ink-300">{voice.engine}</span>
+                )}
                 <button
                   onClick={() => {
-                    setGenerateVoice(id);
-                    setStatus({ kind: "info", text: `已将 ${id} 设为「生成」页的音色` });
+                    setGenerateVoice(voice.id, voice.engine);
+                    setStatus({ kind: "info", text: `已将 ${voice.id} 设为「生成」页的音色` });
                   }}
                   className="shrink-0 rounded px-1 text-ink-500 hover:text-accent-500"
                   title="设为生成音色"
@@ -247,7 +252,7 @@ export function VoicesPanel() {
                   用
                 </button>
                 <button
-                  onClick={() => void remove(id)}
+                  onClick={() => void remove(voice.id, voice.engine)}
                   className="shrink-0 rounded px-1 text-ink-500 hover:text-red-300"
                   title="删除"
                 >

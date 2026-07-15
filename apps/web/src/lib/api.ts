@@ -11,13 +11,35 @@ async function fail(response: Response, what: string): Promise<never> {
   throw new Error(`${what}失败（${response.status}${detail ? `：${detail}` : ""}）`);
 }
 
-export async function listVoices(): Promise<string[]> {
+export interface VoiceEntry {
+  id: string;
+  /** Which TTS instance owns the id — the union bank spans engines. */
+  engine: string;
+}
+
+export async function listVoices(): Promise<VoiceEntry[]> {
   const response = await fetch("/v1/voices");
   if (!response.ok) await fail(response, "获取音色列表");
-  const payload = await response.json() as { voices?: ({ id?: string } | string)[] };
+  const payload = await response.json() as { voices?: { id?: string; engine?: string }[] };
   return (payload.voices ?? [])
-    .map(entry => typeof entry === "string" ? entry : entry.id ?? "")
-    .filter(Boolean);
+    .map(entry => ({ id: entry.id ?? "", engine: entry.engine ?? "" }))
+    .filter(entry => entry.id !== "");
+}
+
+export interface EngineEntry {
+  name: string;
+  kind: string | null;
+  model: string;
+  capabilities: string[];
+  roles: string[];
+  healthy: boolean;
+}
+
+export async function listEngines(): Promise<EngineEntry[]> {
+  const response = await fetch("/v1/engines");
+  if (!response.ok) await fail(response, "获取引擎列表");
+  const payload = await response.json() as { engines?: EngineEntry[] };
+  return payload.engines ?? [];
 }
 
 export async function registerVoice(id: string, text: string, audio: File): Promise<void> {
@@ -29,8 +51,9 @@ export async function registerVoice(id: string, text: string, audio: File): Prom
   if (!response.ok) await fail(response, "注册音色");
 }
 
-export async function deleteVoice(id: string): Promise<void> {
-  const response = await fetch(`/v1/voices/${encodeURIComponent(id)}`, { method: "DELETE" });
+export async function deleteVoice(id: string, engine?: string): Promise<void> {
+  const query = engine ? `?engine=${encodeURIComponent(engine)}` : "";
+  const response = await fetch(`/v1/voices/${encodeURIComponent(id)}${query}`, { method: "DELETE" });
   if (!response.ok) await fail(response, "删除音色");
 }
 
@@ -49,6 +72,8 @@ export async function transcribe(audio: File, language = "auto"): Promise<string
 export interface SynthesisParams {
   input: string;
   voice: string;
+  /** Instance override; unset uses the configured tts role default. */
+  engine?: string;
   cfgValue?: number;
   timesteps?: number;
   seed?: number;
@@ -56,7 +81,8 @@ export interface SynthesisParams {
 
 /** Batch synthesis through the facade; returns an object URL for playback/download. */
 export async function synthesize(params: SynthesisParams): Promise<string> {
-  const response = await fetch("/v1/audio/speech", {
+  const query = params.engine ? `?engine=${encodeURIComponent(params.engine)}` : "";
+  const response = await fetch(`/v1/audio/speech${query}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

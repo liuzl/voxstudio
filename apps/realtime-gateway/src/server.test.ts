@@ -294,7 +294,8 @@ describe("realtime gateway", () => {
 
     const voices = await fetch(new URL("/v1/voices", gateway.url));
     expect(voices.status).toBe(200);
-    expect(await voices.json()).toEqual({ voices: [{ id: "laok" }] });
+    // The bank is aggregated with engine attribution even for a single instance.
+    expect(await voices.json()).toEqual({ voices: [{ id: "laok", engine: "tts" }] });
     // The engine key was injected by the gateway, never supplied by the client.
     expect(seenAuth).toEqual(["Bearer sk-engine-secret"]);
 
@@ -310,6 +311,77 @@ describe("realtime gateway", () => {
     expect(missing.status).toBe(404);
     const wrongMethod = await fetch(new URL("/v1/voices", gateway.url), { method: "PUT" });
     expect(wrongMethod.status).toBe(405);
+  });
+
+  test("routes across a multi-engine registry: aggregation, capability, explicit override", async () => {
+    // Two TTS instances: the fast lane serves the tts role; the clone line declares clone.
+    const registry = parseConfig({
+      engines: {
+        kokoro: { kind: "tts", base_url: "http://kokoro.test", model: "kokoro", capabilities: ["preset", "fast"] },
+        voxcpm2: { kind: "tts", base_url: "http://voxcpm2.test", model: "voxcpm2", capabilities: ["clone", "design"] },
+        asr: { base_url: "http://asr.test" },
+        llm: { base_url: "http://llm.test" },
+      },
+      roles: { tts: "kokoro" },
+    });
+    const hits: string[] = [];
+    gateway = startGateway({
+      config: registry,
+      port: 0,
+      fetch: async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : String(input));
+        hits.push(`${init?.method ?? (input instanceof Request ? input.method : "GET")} ${url.host}${url.pathname}`);
+        if (url.pathname === "/v1/voices" && url.host === "kokoro.test") {
+          return Response.json({ voices: [{ id: "zf_001" }] });
+        }
+        if (url.pathname === "/v1/voices" && url.host === "voxcpm2.test") {
+          return url.searchParams.toString() === "" && (init?.method ?? "GET") === "POST"
+            ? Response.json({ id: "laok" }, { status: 201 })
+            : Response.json({ voices: [{ id: "laok" }] });
+        }
+        if (url.pathname === "/health") return Response.json({ status: "ok" });
+        if (url.pathname === "/v1/audio/speech") return new Response(new Uint8Array(8));
+        throw new Error(`unexpected ${url.href}`);
+      },
+    });
+
+    // The bank is the union, each entry attributed to its engine.
+    const bank = await (await fetch(new URL("/v1/voices", gateway.url))).json() as { voices: { id: string; engine: string }[] };
+    expect(bank.voices).toEqual([
+      { id: "zf_001", engine: "kokoro" },
+      { id: "laok", engine: "voxcpm2" },
+    ]);
+
+    // Registration auto-routes to the clone-capable instance, not the fast lane.
+    const form = new FormData();
+    form.set("id", "laok");
+    form.set("text", "参考音");
+    form.set("audio", new File([new Uint8Array(8)], "ref.wav"));
+    expect((await fetch(new URL("/v1/voices", gateway.url), { method: "POST", body: form })).status).toBe(201);
+    expect(hits.some(hit => hit === "POST voxcpm2.test/v1/voices")).toBe(true);
+
+    // Synthesis defaults to the role engine; ?engine= overrides; wrong names are 400.
+    const base = gateway.url;
+    const speak = (query = "") => fetch(new URL(`/v1/audio/speech${query}`, base), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: "你好" }),
+    });
+    expect((await speak()).status).toBe(200);
+    expect(hits.at(-1)).toBe("POST kokoro.test/v1/audio/speech");
+    expect((await speak("?engine=voxcpm2")).status).toBe(200);
+    expect(hits.at(-1)).toBe("POST voxcpm2.test/v1/audio/speech");
+    expect((await speak("?engine=ghost")).status).toBe(400);
+    expect((await speak("?engine=asr")).status).toBe(400);
+
+    // The sanitized registry: names, kinds, capabilities, roles, health — no addresses.
+    const listed = await (await fetch(new URL("/v1/engines", gateway.url))).json() as { engines: Record<string, unknown>[] };
+    const names = listed.engines.map(entry => entry.name);
+    expect(names).toContain("kokoro");
+    expect(names).toContain("voxcpm2");
+    const kokoro = listed.engines.find(entry => entry.name === "kokoro");
+    expect(kokoro).toMatchObject({ kind: "tts", roles: ["tts"], healthy: true, capabilities: ["preset", "fast"] });
+    expect(JSON.stringify(listed)).not.toContain("kokoro.test");
   });
 
   test("the facade proxies voice registration and per-voice entries", async () => {

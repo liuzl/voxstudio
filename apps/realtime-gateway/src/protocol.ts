@@ -30,6 +30,10 @@ export interface SessionStartOptions {
   threshold?: number;
   silenceMs?: number;
   minSpeechMs?: number;
+  /** Engine instance overrides (see /v1/engines); unset means the configured role default. */
+  asrEngine?: string;
+  llmEngine?: string;
+  ttsEngine?: string;
   /**
    * The endpoint owns the audible-playback clock: after the last piece of a reply is sent,
    * the turn stays `speaking` until the client's `playback.complete` for that turn (or a
@@ -128,6 +132,9 @@ function parseStartOptions(value: unknown): SessionStartOptions {
   const language = optionalString(value, "language");
   const system = optionalString(value, "system");
   const voice = optionalString(value, "voice");
+  const asrEngine = optionalString(value, "asrEngine");
+  const llmEngine = optionalString(value, "llmEngine");
+  const ttsEngine = optionalString(value, "ttsEngine");
   const turnTaking = optionalChoice(value, "turnTaking", ["conservative", "speculative"] as const);
   const vad = optionalChoice(value, "vad", ["energy", "silero"] as const);
   const reopenMs = optionalNumber(value, "reopenMs");
@@ -136,6 +143,9 @@ function parseStartOptions(value: unknown): SessionStartOptions {
   const minSpeechMs = optionalNumber(value, "minSpeechMs");
   if (language !== undefined) options.language = language;
   if (system !== undefined) options.system = system;
+  if (asrEngine !== undefined) options.asrEngine = asrEngine;
+  if (llmEngine !== undefined) options.llmEngine = llmEngine;
+  if (ttsEngine !== undefined) options.ttsEngine = ttsEngine;
   if (maxTokens !== undefined) options.maxTokens = maxTokens;
   if (voice !== undefined) options.voice = voice;
   if (bargeIn !== undefined) options.bargeIn = bargeIn;

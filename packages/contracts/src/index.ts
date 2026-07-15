@@ -1,17 +1,24 @@
 export type EngineName = "asr" | "llm" | "tts";
 
+/** What an engine instance is. Unset means "not declared"; role-named legacy entries infer it. */
+export type EngineKind = "asr" | "llm" | "tts";
+
 export interface EngineConfig {
   baseUrl: string;
   model: string;
   apiKey?: string;
   healthPath?: string;
   maxTokens?: number;
+  kind?: EngineKind;
+  /** What the instance can do (well-known tags: clone, design, preset, fast, streaming, longform, diarize). */
+  capabilities?: string[];
 }
 
 export interface ResolvedEngineConfig extends EngineConfig {
   apiKey: string;
   healthPath: string;
   maxTokens: number;
+  capabilities: string[];
 }
 
 export interface TtsDefaults {
@@ -33,6 +40,8 @@ export interface ChunkConfig {
 
 export interface VoxConfig {
   engines: Record<string, ResolvedEngineConfig>;
+  /** Role → instance name. A role without an entry falls back to an instance named like it. */
+  roles: Record<string, string>;
   ttsDefaults: TtsDefaults;
   chunking: ChunkConfig;
 }

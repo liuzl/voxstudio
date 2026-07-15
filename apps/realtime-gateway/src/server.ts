@@ -1,6 +1,6 @@
 import type { Fetch } from "@voxstudio/clients";
-import { engine } from "@voxstudio/config";
-import type { VoxConfig } from "@voxstudio/contracts";
+import { engine, engineByCapability, enginesOfKind, roleInstance } from "@voxstudio/config";
+import type { EngineKind, ResolvedEngineConfig, VoxConfig } from "@voxstudio/contracts";
 import type { SpeechProbabilityModel } from "@voxstudio/duplex-session";
 import type { ServerWebSocket } from "bun";
 import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand } from "./protocol";
@@ -32,21 +32,17 @@ interface SocketData {
 }
 
 /** Engine endpoints the facade forwards, keyed by public path. The browser sees only these. */
-const facadeRoutes: Record<string, { slot: string; methods: string[] }> = {
-  "/v1/audio/speech": { slot: "tts", methods: ["POST"] },
-  "/v1/audio/transcriptions": { slot: "asr", methods: ["POST"] },
-  "/v1/chat/completions": { slot: "llm", methods: ["POST"] },
-  "/v1/voices": { slot: "tts", methods: ["GET", "POST"] },
+const facadeRoutes: Record<string, { kind: EngineKind; role: string; methods: string[] }> = {
+  "/v1/audio/speech": { kind: "tts", role: "tts", methods: ["POST"] },
+  "/v1/audio/transcriptions": { kind: "asr", role: "asr", methods: ["POST"] },
+  "/v1/chat/completions": { kind: "llm", role: "llm", methods: ["POST"] },
 };
 
 /** Voice registry entries: /v1/voices/{id} on the TTS engine (list/create live above). */
 const voiceEntryPattern = /^\/v1\/voices\/[A-Za-z0-9._-]{1,64}$/;
 
-function facadeRoute(pathname: string): { slot: string; methods: string[] } | undefined {
-  const exact = facadeRoutes[pathname];
-  if (exact) return exact;
-  if (voiceEntryPattern.test(pathname)) return { slot: "tts", methods: ["GET", "DELETE"] };
-  return undefined;
+function badEngine(reason: string): Response {
+  return Response.json({ error: { message: reason, code: "unknown_engine" } }, { status: 400 });
 }
 
 function rejection(sessionId: string, reason: string, command?: GatewayCommand): string {
@@ -74,8 +70,33 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     return request.headers.get("authorization") === `Bearer ${options.token}`;
   };
 
-  const proxy = async (request: Request, slot: string, path: string): Promise<Response> => {
-    const target = engine(options.config, slot);
+  /**
+   * Explicit-first, capability-second, role-default-last (engine-registry doc). Returns
+   * a 400 Response for a named instance that does not exist or is the wrong kind.
+   */
+  const selectEngine = (
+    url: URL,
+    kind: EngineKind,
+    role: string,
+    capability?: string,
+  ): [string, ResolvedEngineConfig] | Response => {
+    const requested = url.searchParams.get("engine");
+    if (requested) {
+      const found = enginesOfKind(options.config, kind).find(([name]) => name === requested);
+      return found ?? badEngine(`no ${kind} engine named ${requested}; see /v1/engines`);
+    }
+    if (capability) {
+      const capable = engineByCapability(options.config, kind, capability);
+      if (capable) return capable;
+    }
+    try {
+      return [roleInstance(options.config, role), engine(options.config, role)];
+    } catch (error) {
+      return badEngine(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const proxy = async (request: Request, target: ResolvedEngineConfig, path: string, slot: string): Promise<Response> => {
     const headers = new Headers();
     const contentType = request.headers.get("content-type");
     if (contentType) headers.set("content-type", contentType);
@@ -100,6 +121,66 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       if (value) passthrough.set(name, value);
     }
     return new Response(upstream.body, { status: upstream.status, headers: passthrough });
+  };
+
+  /** Union voice bank: every TTS instance's registry, entries attributed to their engine. */
+  const aggregatedVoices = async (): Promise<Response> => {
+    const instances = enginesOfKind(options.config, "tts");
+    const collected = await Promise.all(instances.map(async ([name, target]) => {
+      try {
+        const headers = new Headers();
+        if (target.apiKey) headers.set("authorization", `Bearer ${target.apiKey}`);
+        const upstream = await fetchImpl(new URL("/v1/voices", target.baseUrl), {
+          headers,
+          signal: AbortSignal.timeout(3_000),
+        });
+        if (!upstream.ok) return [];
+        const payload = await upstream.json() as { voices?: ({ id?: string } | string)[] };
+        return (payload.voices ?? [])
+          .map(entry => typeof entry === "string" ? entry : entry.id ?? "")
+          .filter(Boolean)
+          .map(id => ({ id, engine: name }));
+      } catch (error) {
+        // One dead engine must not empty the whole bank; its absence is visible in /v1/engines.
+        log(`voices: ${name} unreachable: ${error instanceof Error ? error.message : String(error)}`);
+        return [];
+      }
+    }));
+    return Response.json({ voices: collected.flat() });
+  };
+
+  /** The registry, sanitized: names, kinds, capabilities, roles, live health — never addresses. */
+  const engineList = async (): Promise<Response> => {
+    const roleEntries = Object.entries(options.config.roles);
+    const legacyRoles = ["tts", "asr", "llm", "asr_longform"]
+      .filter(role => options.config.roles[role] === undefined && options.config.engines[role]?.baseUrl);
+    const instances = Object.entries(options.config.engines).filter(([, target]) => target.baseUrl);
+    const engines = await Promise.all(instances.map(async ([name, target]) => {
+      let healthy = false;
+      try {
+        const headers = new Headers();
+        if (target.apiKey) headers.set("authorization", `Bearer ${target.apiKey}`);
+        const upstream = await fetchImpl(new URL(target.healthPath, target.baseUrl), {
+          headers,
+          signal: AbortSignal.timeout(2_000),
+        });
+        healthy = upstream.ok;
+      } catch {
+        healthy = false;
+      }
+      return {
+        name,
+        kind: target.kind ?? null,
+        model: target.model,
+        capabilities: target.capabilities,
+        roles: [
+          ...roleEntries.filter(([, instance]) => instance === name).map(([role]) => role),
+          ...(legacyRoles.includes(name) ? [name] : []),
+        ],
+        healthy,
+      };
+    }));
+    return Response.json({ engines });
   };
 
   const sinkFor = (ws: ServerWebSocket<SocketData>): EventSink => {
@@ -169,10 +250,30 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         if (server.upgrade(request, { data })) return undefined;
         return new Response("expected a WebSocket upgrade", { status: 426 });
       }
-      const route = facadeRoute(url.pathname);
+      if (url.pathname === "/v1/engines") {
+        if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
+        return engineList();
+      }
+      if (url.pathname === "/v1/voices") {
+        if (request.method === "GET") return aggregatedVoices();
+        if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+        // Registration needs a registry: route to the clone-capable instance by default.
+        const selected = selectEngine(url, "tts", "tts", "clone");
+        if (selected instanceof Response) return selected;
+        return proxy(request, selected[1], url.pathname, selected[0]);
+      }
+      if (voiceEntryPattern.test(url.pathname)) {
+        if (!["GET", "DELETE"].includes(request.method)) return new Response("method not allowed", { status: 405 });
+        const selected = selectEngine(url, "tts", "tts", "clone");
+        if (selected instanceof Response) return selected;
+        return proxy(request, selected[1], url.pathname, selected[0]);
+      }
+      const route = facadeRoutes[url.pathname];
       if (route) {
         if (!route.methods.includes(request.method)) return new Response("method not allowed", { status: 405 });
-        return proxy(request, route.slot, url.pathname);
+        const selected = selectEngine(url, route.kind, route.role);
+        if (selected instanceof Response) return selected;
+        return proxy(request, selected[1], url.pathname, selected[0]);
       }
       return new Response("not found", { status: 404 });
     },

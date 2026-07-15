@@ -1,7 +1,7 @@
 import { AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
-import { engine } from "@voxstudio/config";
+import { engine, enginesOfKind } from "@voxstudio/config";
 import { runConversation, type ConversationFrame, type ConversationPlayer } from "@voxstudio/conversation";
-import type { VoxConfig } from "@voxstudio/contracts";
+import type { EngineKind, ResolvedEngineConfig, VoxConfig } from "@voxstudio/contracts";
 import {
   DuplexSession,
   EnergyVadSegmenter,
@@ -137,15 +137,23 @@ export class GatewaySession {
     const vad = await this.createVad(start);
     const turnTaking = start.turnTaking ?? "speculative";
     const config = this.options.config;
+    // Engine overrides are validated against the registry before the session runs; a
+    // typo rejects the start instead of wiring the conversation to a misroute.
+    const pick = (kind: EngineKind, role: string, requested: string | undefined): ResolvedEngineConfig => {
+      if (requested === undefined) return engine(config, role);
+      const found = enginesOfKind(config, kind).find(([name]) => name === requested);
+      if (!found) throw new TypeError(`no ${kind} engine named ${requested}; see /v1/engines`);
+      return found[1];
+    };
     this.duplex.start();
     this.conversation = runConversation({
       session: this.duplex,
       vad,
       frames: this.frames,
       createPlayer: turn => this.createPlayer(turn.id, turn.revision),
-      asr: new AsrClient(engine(config, "asr"), this.options.fetch),
-      llm: new LlmClient(engine(config, "llm"), this.options.fetch),
-      tts: new TtsClient(engine(config, "tts"), this.options.fetch),
+      asr: new AsrClient(pick("asr", "asr", start.asrEngine), this.options.fetch),
+      llm: new LlmClient(pick("llm", "llm", start.llmEngine), this.options.fetch),
+      tts: new TtsClient(pick("tts", "tts", start.ttsEngine), this.options.fetch),
     }, {
       language: start.language ?? "auto",
       ...(start.system === undefined ? {} : { system: start.system }),

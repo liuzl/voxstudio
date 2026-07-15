@@ -1,6 +1,7 @@
 import type {
   ChunkConfig,
   EngineConfig,
+  EngineKind,
   ResolvedEngineConfig,
   TtsDefaults,
   VoxConfig,
@@ -11,9 +12,9 @@ type Environment = Readonly<Record<string, string | undefined>>;
 type UnknownRecord = Record<string, unknown>;
 
 const defaultEngines: Record<string, ResolvedEngineConfig> = {
-  tts: { baseUrl: "http://127.0.0.1:8880", model: "voxcpm2", apiKey: "", healthPath: "/health", maxTokens: 4096 },
-  asr: { baseUrl: "http://127.0.0.1:18086", model: "nemotron-asr", apiKey: "", healthPath: "/health", maxTokens: 4096 },
-  llm: { baseUrl: "http://127.0.0.1:8080", model: "gemma", apiKey: "", healthPath: "/health", maxTokens: 4096 },
+  tts: { baseUrl: "http://127.0.0.1:8880", model: "voxcpm2", apiKey: "", healthPath: "/health", maxTokens: 4096, kind: "tts", capabilities: [] },
+  asr: { baseUrl: "http://127.0.0.1:18086", model: "nemotron-asr", apiKey: "", healthPath: "/health", maxTokens: 4096, kind: "asr", capabilities: [] },
+  llm: { baseUrl: "http://127.0.0.1:8080", model: "gemma", apiKey: "", healthPath: "/health", maxTokens: 4096, kind: "llm", capabilities: [] },
 };
 
 const defaultTts: TtsDefaults = {
@@ -95,17 +96,41 @@ function staleBudget(oldKey: string, newKey: string): never {
   );
 }
 
-function engineFromRaw(base: EngineConfig | undefined, value: unknown): ResolvedEngineConfig {
+/** Legacy role-named instances imply their kind; `asr_longform` was the original second slot. */
+const impliedKinds: Record<string, EngineKind> = {
+  tts: "tts", asr: "asr", llm: "llm", asr_longform: "asr",
+};
+
+function kindFromRaw(name: string, value: unknown): EngineKind | undefined {
+  if (value === undefined) return impliedKinds[name];
+  if (value !== "tts" && value !== "asr" && value !== "llm") {
+    throw new ConfigError(`\`engines.${name}.kind\` must be tts, asr, or llm, not ${String(value)}`);
+  }
+  return value;
+}
+
+function capabilitiesFromRaw(name: string, value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some(entry => typeof entry !== "string")) {
+    throw new ConfigError(`\`engines.${name}.capabilities\` must be a list of strings`);
+  }
+  return value as string[];
+}
+
+function engineFromRaw(name: string, base: EngineConfig | undefined, value: unknown): ResolvedEngineConfig {
   const raw = record(value);
   if (!base && typeof raw.base_url !== "string") {
     throw new ConfigError("custom engine requires `base_url`");
   }
+  const kind = kindFromRaw(name, raw.kind);
   return {
     baseUrl: stringValue(raw.base_url, base?.baseUrl ?? ""),
     model: stringValue(raw.model, base?.model ?? ""),
     apiKey: stringValue(raw.api_key, base?.apiKey ?? ""),
     healthPath: stringValue(raw.health_path, base?.healthPath ?? "/health"),
     maxTokens: integerValue(raw.max_tokens, base?.maxTokens ?? 4096),
+    ...(kind === undefined ? {} : { kind }),
+    capabilities: capabilitiesFromRaw(name, raw.capabilities),
   };
 }
 
@@ -116,6 +141,7 @@ function applyEngineEnvironment(
 ): ResolvedEngineConfig {
   const prefix = `VOXSTUDIO_${name.toUpperCase()}_`;
   return {
+    ...engine,
     baseUrl: env[`${prefix}BASE_URL`] ?? engine.baseUrl,
     model: env[`${prefix}MODEL`] ?? engine.model,
     apiKey: env[`${prefix}API_KEY`] ?? engine.apiKey,
@@ -124,6 +150,21 @@ function applyEngineEnvironment(
       ? engine.maxTokens
       : integerValue(env[`${prefix}MAX_TOKENS`], engine.maxTokens ?? 4096),
   };
+}
+
+function rolesFromRaw(value: unknown, engines: Record<string, ResolvedEngineConfig>): Record<string, string> {
+  const raw = record(value);
+  const roles: Record<string, string> = {};
+  for (const [role, instance] of Object.entries(raw)) {
+    if (typeof instance !== "string" || !instance) {
+      throw new ConfigError(`\`roles.${role}\` must name an engine instance`);
+    }
+    if (!engines[instance]) {
+      throw new ConfigError(`\`roles.${role}\` names unknown engine \`${instance}\``);
+    }
+    roles[role] = instance;
+  }
+  return roles;
 }
 
 function chunkingFromRaw(value: unknown, env: Environment): ChunkConfig {
@@ -177,9 +218,16 @@ export function parseConfig(input: unknown = {}, env: Environment = {}): VoxConf
   for (const name of new Set([...Object.keys(defaultEngines), ...Object.keys(rawEngines)])) {
     engines[name] = applyEngineEnvironment(
       name,
-      engineFromRaw(defaultEngines[name], rawEngines[name]),
+      engineFromRaw(name, defaultEngines[name], rawEngines[name]),
       env,
     );
+  }
+  const roles = rolesFromRaw(raw.roles, engines);
+  // Built-in defaults exist so a bare config still resolves the three roles. Once a
+  // role is explicitly assigned, an undeclared default-named instance is a phantom —
+  // it would show up in the registry (and be routable) while pointing at nothing real.
+  for (const name of Object.keys(defaultEngines)) {
+    if (rawEngines[name] === undefined && roles[name] !== undefined) delete engines[name];
   }
 
   const rawTts = record(raw.tts_defaults);
@@ -190,11 +238,53 @@ export function parseConfig(input: unknown = {}, env: Environment = {}): VoxConf
     responseFormat: stringValue(rawTts.response_format, defaultTts.responseFormat),
   };
 
-  return { engines, ttsDefaults, chunking: chunkingFromRaw(raw.chunking, env) };
+  return { engines, roles, ttsDefaults, chunking: chunkingFromRaw(raw.chunking, env) };
 }
 
-export function engine(config: VoxConfig, name: string): ResolvedEngineConfig {
-  const value = config.engines[name];
-  if (!value) throw new ConfigError(`no \`engines.${name}\` in config; see config.example.yaml`);
+/**
+ * Resolve a role to its engine: `roles.<role>` first, then a legacy instance named
+ * like the role. See docs/engine-registry.md.
+ */
+export function engine(config: VoxConfig, role: string): ResolvedEngineConfig {
+  const assigned = config.roles[role];
+  if (assigned) {
+    const instance = config.engines[assigned];
+    if (!instance) throw new ConfigError(`\`roles.${role}\` names unknown engine \`${assigned}\``);
+    return instance;
+  }
+  const value = config.engines[role];
+  if (!value) throw new ConfigError(`no \`engines.${role}\` or \`roles.${role}\` in config; see config.example.yaml`);
   return value;
+}
+
+/** The instance name a role resolves to (for attribution and routing). */
+export function roleInstance(config: VoxConfig, role: string): string {
+  return config.roles[role] ?? role;
+}
+
+/** Every instance of a kind, role defaults first, then declaration order. */
+export function enginesOfKind(config: VoxConfig, kind: EngineKind): [string, ResolvedEngineConfig][] {
+  const defaults = new Set(Object.values(config.roles));
+  const entries = Object.entries(config.engines).filter(([name, instance]) =>
+    (instance.kind ?? impliedKinds[name]) === kind && instance.baseUrl !== "");
+  return entries.sort(([a], [b]) => Number(defaults.has(b)) - Number(defaults.has(a)));
+}
+
+/**
+ * First instance of the kind declaring the capability; the kind's role default wins
+ * when it qualifies. Undefined when nothing declares it — callers decide whether that
+ * is an error or a fallback to the role default.
+ */
+export function engineByCapability(
+  config: VoxConfig,
+  kind: EngineKind,
+  capability: string,
+): [string, ResolvedEngineConfig] | undefined {
+  const candidates = enginesOfKind(config, kind);
+  const preferred = config.roles[kind];
+  if (preferred) {
+    const instance = config.engines[preferred];
+    if (instance && instance.capabilities.includes(capability)) return [preferred, instance];
+  }
+  return candidates.find(([, instance]) => instance.capabilities.includes(capability));
 }

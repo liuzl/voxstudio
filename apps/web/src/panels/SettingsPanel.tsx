@@ -1,10 +1,72 @@
 import { useEffect, useState } from "react";
+import { listEngines, type EngineEntry } from "../lib/api";
 import { useStudio } from "../store";
 
 interface Health {
   ok: boolean;
   protocol: number;
   sessions: number;
+}
+
+function EnginesTable() {
+  const [engines, setEngines] = useState<EngineEntry[] | "error" | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    listEngines()
+      .then(entries => { if (!cancelled) setEngines(entries); })
+      .catch(() => { if (!cancelled) setEngines("error"); });
+    return () => { cancelled = true; };
+  }, []);
+
+  return (
+    <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
+      <h2 className="text-sm font-medium text-ink-300">引擎（注册表）</h2>
+      {engines === undefined && <p className="mt-2 text-sm text-ink-500">探测中…</p>}
+      {engines === "error" && <p className="mt-2 text-sm text-red-300">无法获取引擎列表（/v1/engines）</p>}
+      {Array.isArray(engines) && (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="text-xs text-ink-500">
+                <th className="pb-2 pr-3 font-normal">实例</th>
+                <th className="pb-2 pr-3 font-normal">类型</th>
+                <th className="pb-2 pr-3 font-normal">模型</th>
+                <th className="pb-2 pr-3 font-normal">角色</th>
+                <th className="pb-2 pr-3 font-normal">能力</th>
+                <th className="pb-2 font-normal">状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {engines.map(entry => (
+                <tr key={entry.name} className="border-t border-ink-700/60">
+                  <td className="py-2 pr-3 font-medium">{entry.name}</td>
+                  <td className="py-2 pr-3 text-ink-300">{entry.kind ?? "—"}</td>
+                  <td className="py-2 pr-3 text-ink-300">{entry.model || "—"}</td>
+                  <td className="py-2 pr-3">
+                    {entry.roles.length === 0 ? <span className="text-ink-500">—</span> : entry.roles.map(role => (
+                      <span key={role} className="mr-1 rounded bg-accent-600/20 px-1.5 py-0.5 text-[10px] text-accent-500">{role}</span>
+                    ))}
+                  </td>
+                  <td className="py-2 pr-3">
+                    {entry.capabilities.length === 0 ? <span className="text-ink-500">—</span> : entry.capabilities.map(capability => (
+                      <span key={capability} className="mr-1 rounded bg-ink-800 px-1.5 py-0.5 text-[10px] text-ink-300">{capability}</span>
+                    ))}
+                  </td>
+                  <td className="py-2">
+                    <span className={`inline-block size-2 rounded-full ${entry.healthy ? "bg-emerald-400" : "bg-red-400"}`} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="mt-3 text-xs text-ink-500">
+        实例与角色在网关侧配置（见 docs/engine-registry.md）；地址与密钥不出网关。
+      </p>
+    </section>
+  );
 }
 
 export function SettingsPanel() {
@@ -54,6 +116,8 @@ export function SettingsPanel() {
           引擎地址与凭据只存在于网关侧；浏览器仅访问 /v1 契约与 /v1/realtime。
         </p>
       </section>
+
+      <EnginesTable />
 
       <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
         <h2 className="text-sm font-medium text-ink-300">端点能力（本次会话协商结果）</h2>

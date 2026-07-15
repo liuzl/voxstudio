@@ -1,4 +1,5 @@
 import type { GatewayEvent } from "@voxstudio/realtime-gateway/protocol";
+import type { VoiceEntry } from "./lib/api";
 import { create } from "zustand";
 import type { EndpointCapability } from "./lib/audio";
 import type { ConnectionState } from "./lib/client";
@@ -43,14 +44,15 @@ interface StudioState {
   language: string;
   /** Generation takes, newest first. Object URLs are revoked on eviction/removal. */
   takes: TakeView[];
-  voicesList: string[];
-  /** The 生成 panel's voice, settable from the 音色 bank. */
+  voicesList: VoiceEntry[];
+  /** The 生成 panel's voice (and owning engine), settable from the 音色 bank. */
   generateVoice: string;
+  generateEngine: string;
 
-  setGenerateVoice(voice: string): void;
+  setGenerateVoice(voice: string, engine?: string): void;
   addTake(take: TakeView): void;
   removeTake(id: string): void;
-  setVoicesList(voices: string[]): void;
+  setVoicesList(voices: VoiceEntry[]): void;
   setConnection(connection: ConnectionState): void;
   setActive(active: boolean): void;
   setMuted(muted: boolean): void;
@@ -180,8 +182,9 @@ export const useStudio = create<StudioState>((set, get) => ({
   takes: [],
   voicesList: [],
   generateVoice: "",
+  generateEngine: "",
 
-  setGenerateVoice: generateVoice => set({ generateVoice }),
+  setGenerateVoice: (generateVoice, engine) => set({ generateVoice, generateEngine: engine ?? "" }),
   addTake: take =>
     set(state => {
       const next = [take, ...state.takes];
