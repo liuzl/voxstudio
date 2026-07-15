@@ -150,13 +150,17 @@ export function VoicesPanel() {
     setRegistering(true);
     setStatus(undefined);
     try {
-      await registerVoice(newId.trim(), newText.trim(), file);
-      setStatus({ kind: "info", text: `已注册 ${newId.trim()}` });
+      const registered = newId.trim();
+      await registerVoice(registered, newText.trim(), file);
+      setStatus({ kind: "info", text: `已注册 ${registered} —— 见上方音色库，可试听或直接用于生成。` });
       setNewId("");
       setNewText("");
       if (fileInput.current) fileInput.current.value = "";
       discardRecording();
       await refresh();
+      // Surface the new voice immediately: filter the bank to it.
+      setCategory("全部");
+      setQuery(registered);
     } catch (error) {
       setStatus({ kind: "error", text: error instanceof Error ? error.message : String(error) });
     } finally {
