@@ -317,7 +317,42 @@ enforces this rather than trusting it — every command carries an idempotency
 key (replays are acknowledged as `command.duplicate`, never re-executed), and a
 `turn.interrupt` naming a superseded turn is rejected as stale.
 
-Event types (v1 implements all but the annotated ones):
+### Wire format
+
+Two frame types share the one socket; media is never base64-wrapped in JSON:
+
+```text
+text frame    JSON control message (commands up, events down)
+binary frame  raw mono float32 PCM
+                up:   microphone samples @ 16 kHz (server stamps timestamps)
+                down: reply audio @ the rate the last playback.format announced
+```
+
+**Client → server — commands.** Every command carries the protocol version `v`
+and a non-empty `idempotencyKey`; a replay is answered `command.duplicate` and
+never re-run. Envelope and the six types:
+
+```text
+{ "v": 1, "type": "...", "idempotencyKey": "...", ...typeFields }
+
+session.start            { options?: SessionStartOptions }
+session.attach           { sessionId }        # reconnect to a live session
+session.snapshot.request { }                  # ask for a fresh session.snapshot
+turn.interrupt           { turnId }           # stale turnId -> command.rejected
+playback.complete        { turnId }           # audible-clock ack (playbackAck)
+session.stop             { }
+```
+
+`SessionStartOptions` (all optional): `language`, `system`, `maxTokens`,
+`voice`, `bargeIn`, `turnTaking` (`conservative`|`speculative`), `reopenMs`,
+`vad` (`energy`|`silero`), `threshold`, `silenceMs`, `minSpeechMs`,
+`playbackAck`, and the engine-instance overrides `asrEngine`/`llmEngine`/
+`ttsEngine` (unset = the configured role default; an unknown name is a
+`400`/rejection, never a silent fallback). An unknown command type, wrong `v`,
+or missing `idempotencyKey` is rejected without touching session state.
+
+**Server → client — events.** Every event carries `v`, a monotonic `sequence`,
+`sessionId`, and `timestampMs`. Types (v1 implements all but the annotated ones):
 
 ```text
 session.state       { state, previous }
@@ -339,12 +374,27 @@ transcript.partial  { turnId, text }                  # deferred: streaming ASR 
 endpoint.capability { aec, ns, agc, route, sampleRate } # deferred to the browser endpoint
 ```
 
-A REST facade (`/v1/audio/speech`, `/v1/audio/transcriptions`,
-`/v1/chat/completions`, `/v1/voices`) forwards one-shot work to the configured
-engines with credentials injected server-side, so engine addresses and keys
-never reach a browser. The gateway binds loopback by default and takes an
-optional bearer token; exposure is a deployment decision (a tunnel, Access at
-the door). The endpoint owns the audible-playback clock: with the
+Alongside the socket, a REST facade forwards one-shot work over ordinary
+OpenAI-compatible HTTP, so the same gateway serves batch and management calls
+without WebRTC semantics:
+
+```text
+GET  /v1/realtime            WebSocket upgrade (426 without it) — the protocol above
+POST /v1/audio/speech        TTS   (OpenAI-compatible)
+POST /v1/audio/transcriptions ASR  (multipart audio)
+POST /v1/chat/completions    LLM   (JSON, SSE when streamed)
+GET|POST|DELETE /v1/voices   /v1/voices/{id}  — multi-engine voice bank (aggregated)
+POST /v1/design-profiles     design-profile voices
+GET  /v1/engines             engine registry with live health + runtime
+GET  /healthz                liveness probe
+```
+
+The facade injects engine credentials server-side and routes by role/capability
+across the registry, so engine addresses and keys never reach a browser. The
+gateway binds loopback by default and takes an optional bearer token — required
+on every request and the WebSocket upgrade (browsers that cannot set headers may
+pass it on the query string); exposure is a deployment decision (a tunnel,
+Access at the door). The endpoint owns the audible-playback clock: with the
 `playbackAck` session option, the turn stays `speaking` after the last piece
 is sent until the client's `playback.complete` command for that turn (capped
 by the audio's own duration plus slack, so a silent client cannot wedge the
