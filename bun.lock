@@ -20,10 +20,27 @@
         "@voxstudio/clients": "workspace:*",
         "@voxstudio/config": "workspace:*",
         "@voxstudio/contracts": "workspace:*",
+        "@voxstudio/conversation": "workspace:*",
         "@voxstudio/duplex-session": "workspace:*",
         "@voxstudio/orchestration": "workspace:*",
         "@voxstudio/platform-bun": "workspace:*",
         "@voxstudio/text": "workspace:*",
+      },
+    },
+    "apps/realtime-gateway": {
+      "name": "@voxstudio/realtime-gateway",
+      "version": "0.1.0",
+      "bin": {
+        "vox-gateway": "./src/main.ts",
+      },
+      "dependencies": {
+        "@voxstudio/audio": "workspace:*",
+        "@voxstudio/clients": "workspace:*",
+        "@voxstudio/config": "workspace:*",
+        "@voxstudio/contracts": "workspace:*",
+        "@voxstudio/conversation": "workspace:*",
+        "@voxstudio/duplex-session": "workspace:*",
+        "@voxstudio/platform-bun": "workspace:*",
       },
     },
     "packages/audio": {
@@ -49,6 +66,17 @@
     "packages/contracts": {
       "name": "@voxstudio/contracts",
       "version": "0.1.0",
+    },
+    "packages/conversation": {
+      "name": "@voxstudio/conversation",
+      "version": "0.1.0",
+      "dependencies": {
+        "@voxstudio/audio": "workspace:*",
+        "@voxstudio/contracts": "workspace:*",
+        "@voxstudio/duplex-session": "workspace:*",
+        "@voxstudio/orchestration": "workspace:*",
+        "@voxstudio/text": "workspace:*",
+      },
     },
     "packages/duplex-session": {
       "name": "@voxstudio/duplex-session",
@@ -103,6 +131,8 @@
 
     "@voxstudio/contracts": ["@voxstudio/contracts@workspace:packages/contracts"],
 
+    "@voxstudio/conversation": ["@voxstudio/conversation@workspace:packages/conversation"],
+
     "@voxstudio/duplex-session": ["@voxstudio/duplex-session@workspace:packages/duplex-session"],
 
     "@voxstudio/orchestration": ["@voxstudio/orchestration@workspace:packages/orchestration"],
@@ -110,6 +140,8 @@
     "@voxstudio/platform-bun": ["@voxstudio/platform-bun@workspace:platforms/bun"],
 
     "@voxstudio/platform-macos-audio": ["@voxstudio/platform-macos-audio@workspace:platforms/macos-audio"],
+
+    "@voxstudio/realtime-gateway": ["@voxstudio/realtime-gateway@workspace:apps/realtime-gateway"],
 
     "@voxstudio/text": ["@voxstudio/text@workspace:packages/text"],
 

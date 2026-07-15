@@ -1,0 +1,19 @@
+{
+  "name": "@voxstudio/realtime-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "vox-gateway": "./src/main.ts"
+  },
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@voxstudio/audio": "workspace:*",
+    "@voxstudio/clients": "workspace:*",
+    "@voxstudio/config": "workspace:*",
+    "@voxstudio/conversation": "workspace:*",
+    "@voxstudio/contracts": "workspace:*",
+    "@voxstudio/duplex-session": "workspace:*",
+    "@voxstudio/platform-bun": "workspace:*"
+  }
+}

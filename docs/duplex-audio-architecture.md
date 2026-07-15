@@ -299,40 +299,57 @@ semantics to each engine:
 
 ```text
 apps/realtime-gateway
+  -> packages/conversation (the shared loop `vox listen` also runs)
   -> packages/duplex-session
   -> packages/clients (ASR, LLM, TTS adapters)
 ```
 
-The gateway exposes a versioned session event schema over local IPC and, for
-remote clients, a WebSocket/data-track control channel. Media is carried as
-endpoint PCM or WebRTC tracks, not base64 JSON. Every control message has a
-monotonic `sequence`, `sessionId`, and schema version. On reconnect, a client
-requests a state snapshot and must not replay stale `stop` or `commit-turn`
-commands; commands use an idempotency key.
+The gateway (implemented 2026-07-15, protocol v1) exposes the versioned session
+event schema over a WebSocket at `/v1/realtime`. Media is carried as binary PCM
+frames, not base64 JSON: client frames are raw mono float32 at 16kHz —
+timestamps are stamped server-side from the sample count, keeping client clocks
+out of the protocol — and server frames are reply audio at the rate announced
+by the preceding `playback.format` event. Every control message has a monotonic
+`sequence`, `sessionId`, and schema version. On reconnect (the session outlives
+its socket by a grace period), a client reattaches, resynchronizes from the
+pushed `session.snapshot`, and must not replay stale commands; the gateway
+enforces this rather than trusting it — every command carries an idempotency
+key (replays are acknowledged as `command.duplicate`, never re-executed), and a
+`turn.interrupt` naming a superseded turn is rejected as stale.
 
-Minimum event types:
+Event types (v1 implements all but the annotated ones):
 
 ```text
-session.state       { state, sessionId, turnId? }
-audio.level         { rmsDb, clipped, source }
-vad.start|end       { turnId, timestampMs }
-transcript.partial|final { turnId, text, confidence? }
-response.text.delta|final { turnId, text }
-playback.started|ended|interrupted { turnId }
+session.state       { state, previous }
+vad.end             { turnId }
+transcript.final    { turnId, revision, text }
+response.text.delta|final { turnId, revision, text }
+playback.format     { turnId, revision, sampleRate }
+playback.ended|interrupted { turnId }
+turn.started|interrupted|completed|false_barge_in|reopened { turnId, ... }
 turn.timing         { turnId, endReason, offsetsMs: { vad_end, thinking,
-                       asr_done, speaking, tts_first_audio, playback_first } }
-error               { code, recoverable, turnId? }
-endpoint.capability { aec, ns, agc, route, sampleRate }
-session.snapshot    { state, currentTurnId, lastSequence }
+                       asr_done, llm_first, speaking, tts_first_audio, playback_first } }
+audio.queue_overflow|discarded { turnId, queuedMs, maxQueuedMs }
+session.snapshot    { state, currentTurnId?, lastSequence }
+session.notice      { message }
+command.accepted|duplicate|rejected { commandType, idempotencyKey, reason? }
+error               { code, message, recoverable, turnId? }
+audio.level         { rmsDb, clipped, source }        # deferred to the browser endpoint
+transcript.partial  { turnId, text }                  # deferred: streaming ASR upgrade
+endpoint.capability { aec, ns, agc, route, sampleRate } # deferred to the browser endpoint
 ```
 
-The gateway initially adapts the current file-based ASR and one-shot LLM/TTS
-clients: VAD closes a short temporary utterance, ASR transcribes it, then the
-reply is generated and played. Streaming ASR, LLM token streaming, and TTS
-audio streaming are independent adapter upgrades. The session contract stays
-unchanged as those engines improve. The fallback has a maximum utterance
-duration and explicit overflow behavior; it never retains an unbounded live
-recording while waiting for an engine response.
+A REST facade (`/v1/audio/speech`, `/v1/audio/transcriptions`,
+`/v1/chat/completions`, `/v1/voices`) forwards one-shot work to the configured
+engines with credentials injected server-side, so engine addresses and keys
+never reach a browser. The gateway binds loopback by default and takes an
+optional bearer token; exposure is a deployment decision (a tunnel, Access at
+the door). Two Phase 1 limits are explicit: `playback.ended` means the last
+piece was sent, not audibly finished — the browser endpoint owns the
+audible-playback clock (a Web Studio Phase 2 gate item) — and events emitted
+while no socket is attached are dropped by design, the snapshot being the
+resync mechanism. Bounded input buffering (30s, oldest-first drop) means the
+gateway never retains an unbounded live recording while an engine stalls.
 
 ## Provider requirements
 
@@ -396,8 +413,13 @@ supported macOS hardware. Browser and CLI metrics are reported separately.
 
 1. **Session contract and test harness**: `packages/duplex-session` now owns
    strict turn transitions, per-turn `AbortSignal`, sequence-numbered events,
-   and bounded playback queues, with focused unit tests. Endpoint fixtures,
-   reconnect/idempotency transport tests, and timing schema integration remain.
+   and bounded playback queues, with focused unit tests. The reconnect and
+   idempotency transport tests now run against the realtime gateway (2026-07-15):
+   simulated duplex turns over a real WebSocket, snapshot resync after a
+   dropped socket, duplicate-command acknowledgement, and stale-interrupt
+   rejection. The conversation loop itself moved to `packages/conversation`,
+   shared verbatim by `vox listen` and the gateway, so the certified lifecycle
+   has one implementation.
 2. **CLI headset duplex**: `vox listen` now uses continuous FFmpeg PCM capture,
    fallback VAD segmentation, cancellation, bounded playback, and explicit
    headset mode. It has simulated end-to-end coverage, and `--vad silero`
@@ -428,8 +450,13 @@ supported macOS hardware. Browser and CLI metrics are reported separately.
    or false, capture-to-mute p95 186ms, 26.5dB direct path attenuation. Route
    changes, capability reporting, and release packaging remain required
    before speaker duplex is declared supported.
-5. **Web Studio realtime**: add a browser endpoint and LiveKit room/gateway,
-   reusing the same session events, policy, and provider adapters.
+5. **Web Studio realtime**: `apps/realtime-gateway` now speaks the session
+   protocol above (WebSocket control, binary PCM media, snapshot reconnect,
+   idempotent commands) and the REST facade, driving the shared conversation
+   loop — Web Studio Phase 1 in [web-studio.md](./web-studio.md). The browser
+   endpoint (getUserMedia AEC negotiation, `endpoint.capability`, the
+   audible-playback clock) is Web Studio Phase 2 and keeps the measured-gate
+   discipline.
 6. **Cross-platform endpoints**: evaluate native platform voice-processing APIs
    or standalone WebRTC APM for Windows/Linux only after the macOS and browser
    measurements demonstrate a concrete gap.

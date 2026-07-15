@@ -1,6 +1,6 @@
 # Web Studio
 
-Status: Accepted, 2026-07-14. Not yet started; this document scopes the first delivery.
+Status: Accepted, 2026-07-14. Phase 1 (realtime gateway) delivered 2026-07-15.
 
 ## Scope
 
@@ -84,6 +84,12 @@ below rather than relitigated per feature.
 1. **Realtime gateway** (`apps/realtime-gateway`): the duplex doc's session event schema
    over WebSocket, plus the REST facade. Gate: the existing simulated duplex tests run
    against it; reconnect/idempotency tests from the duplex doc's remaining Phase 1 work.
+   **Delivered 2026-07-15.** The conversation loop was extracted into
+   `packages/conversation` (one certified implementation behind `vox listen` and the
+   gateway — the CLI's simulated duplex suite passes unchanged on top of it), and the
+   gateway's own suite covers a simulated turn over a real WebSocket, snapshot resync
+   after a dropped socket, duplicate-command acknowledgement, stale-interrupt rejection,
+   expired-grace teardown, credential-injecting facade proxying, and token gating.
 2. **Conversation panel**: browser endpoint with `getUserMedia` AEC. Gate: the duplex
    doc's browser quality measurements (negotiated-capability snapshot, double-talk and
    barge-in behavior on a real browser/route) — the same discipline as the macOS gate.

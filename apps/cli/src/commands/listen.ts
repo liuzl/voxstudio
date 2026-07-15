@@ -1,18 +1,15 @@
-import { writeWav } from "@voxstudio/audio";
 import { AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
 import { engine } from "@voxstudio/config";
+import { runConversation, type ConversationPlayer } from "@voxstudio/conversation";
 import type { VoxConfig } from "@voxstudio/contracts";
 import {
   DuplexSession,
   EnergyVadSegmenter,
   SileroVadSegmenter,
-  type DuplexTurn,
   type SpeechProbabilityModel,
   type VadSegmenter,
 } from "@voxstudio/duplex-session";
-import { streamReply } from "@voxstudio/orchestration";
 import { capturePcm, FfplaySink, loadSileroVadModel, startMacosAudioHost, type MacosAudioHost, type PcmCapture, type PcmSink } from "@voxstudio/platform-bun";
-import { sanitizeForTts } from "@voxstudio/text";
 import { join } from "node:path";
 import type { CliIo } from "../io";
 
@@ -131,19 +128,6 @@ function parse(args: string[]): ListenOptions {
   return options;
 }
 
-function joinAudio(prefix: Float32Array, samples: Float32Array): Float32Array {
-  const output = new Float32Array(prefix.length + samples.length);
-  output.set(prefix);
-  output.set(samples, prefix.length);
-  return output;
-}
-
-async function stopPlayer(player: ListenPlayer | undefined): Promise<void> {
-  if (!player) return;
-  if (player.abort) await player.abort();
-  else await player.close();
-}
-
 export async function runListen(
   args: string[],
   config: VoxConfig,
@@ -206,141 +190,14 @@ export async function runListen(
   }
   const speakerHost = options.speakerDuplex ? await platform.startSpeakerDuplex?.() : undefined;
   const capture = speakerHost?.capture ?? await platform.capture(options.device);
-  const allowBargeIn = options.bargeIn || options.speakerDuplex;
-  const asr = new AsrClient(engine(config, "asr"), fetch);
-  const llm = new LlmClient(engine(config, "llm"), fetch);
-  const tts = new TtsClient(engine(config, "tts"), fetch);
-  const work = new Set<Promise<void>>();
-  // Conversation memory: without it, "那总人口呢？" after a question about Singapore gets
-  // answered with the population of Earth. Superseded revisions and interrupted turns that
-  // never spoke leave no trace; only exchanges the user actually heard become context.
-  const history: { role: "user" | "assistant"; content: string }[] = [];
-  const historyLimit = 16; // 8 exchanges
-  let activeTurn: DuplexTurn | undefined;
-  let activePlayer: ListenPlayer | undefined;
   let stopping = false;
-  let suppressInputUntil = 0;
-  // Speculative turn-taking state: the last soft-ended turn (reopenable until it speaks)
-  // and, while a continuation is being captured, the audio it continues.
-  let speculative: { turnId: string; samples: Float32Array; softEndedAtMs: number } | undefined;
-  let continuationPrefix: Float32Array | undefined;
-
-  const processTurn = async (turn: DuplexTurn, samples: Float32Array): Promise<void> => {
-    try {
-      if (!session.startThinking(turn.id)) return;
-      const wav = writeWav(samples, 16_000);
-      const transcription = await asr.transcribe(
-        new File([new Uint8Array(wav)], "utterance.wav", { type: "audio/wav" }),
-        "utterance.wav", options.language, {}, turn.signal,
-      );
-      session.mark(turn.id, "asr_done");
-      const transcript = transcription.text.trim();
-      if (options.saveUtterances) {
-        // An explicit opt-in per the privacy rules. The empty-transcript failures are the
-        // most valuable samples in the set, so saving happens regardless of the result.
-        const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-        const base = join(options.saveUtterances, `utterance-${stamp}`);
-        await Bun.write(`${base}.wav`, wav);
-        await Bun.write(`${base}.txt`, `${transcript}\n`);
-        io.err(`listen: saved utterance ${base}.wav`);
-      }
-      if (turn.signal.aborted) return;
-      if (!transcript) {
-        io.err("listen: ASR returned empty text");
-        session.interrupt("cancel");
-        return;
-      }
-      io.out(`transcript: ${transcript}`);
-      // The reply pipelines: sentences flow into TTS while the model is still generating,
-      // so first audio no longer waits for the full completion. The turn stays `thinking`
-      // (still reopenable under the speculative policy) until the first piece exists.
-      let replyText = "";
-      const deltas = (async function* (): AsyncGenerator<string> {
-        for await (const delta of llm.chatStream([
-          ...(options.system === undefined ? [] : [{ role: "system" as const, content: options.system }]),
-          ...history,
-          { role: "user", content: transcript },
-        ], options.maxTokens, undefined, turn.signal)) {
-          if (replyText === "") session.mark(turn.id, "llm_first");
-          replyText += delta;
-          yield delta;
-        }
-      })();
-      const player = speakerHost?.player ?? platform.createPlayer();
-      activePlayer = player;
-      const abort = () => { void stopPlayer(player); };
-      turn.signal.addEventListener("abort", abort, { once: true });
-      try {
-        const voice = options.voice ?? config.ttsDefaults.voice;
-        for await (const piece of streamReply(tts, deltas, {
-          // Conversation is latency-bound where long-form reading is seam-bound: first
-          // audio arrives when the first chunk finishes synthesizing (engine RTF ≈ 1), so
-          // an 8s first chunk is 8s of dead air. A tight first cap trades an earlier seam
-          // — inaudible between conversational sentences — for most of that wait; growth
-          // restores full-size chunks immediately after.
-          chunking: { ...config.chunking, firstMaxSeconds: Math.min(config.chunking.firstMaxSeconds, 2.5) },
-          ttsDefaults: config.ttsDefaults,
-          voice,
-          ...(voice === "clone" || voice === "design" ? {} : { prosodyPrompt: true }),
-          continuationId: crypto.randomUUID(),
-          signal: turn.signal,
-          streaming: true,
-          transformChunk: text => sanitizeForTts(text).text,
-        })) {
-          if (turn.signal.aborted) return;
-          if (session.state === "thinking" && !session.startSpeaking(turn.id)) return;
-          if (!allowBargeIn) suppressInputUntil = Number.POSITIVE_INFINITY;
-          session.mark(turn.id, "tts_first_audio");
-          // Synthesis pieces, not low-latency PCM frames: a single piece can exceed the
-          // session queue duration, so this direct path writes to the player immediately.
-          await player.write(piece);
-          session.mark(turn.id, "playback_first");
-        }
-        if (!turn.signal.aborted && !replyText.trim()) {
-          io.err("listen: model returned empty content");
-          session.interrupt("cancel");
-          return;
-        }
-        if (!turn.signal.aborted) io.out(`reply: ${replyText}`);
-        if (replyText.trim()) {
-          // Reached only when generation finished: a barge-in during the audible tail still
-          // lands here (the user heard the reply's start), one mid-generation does not.
-          history.push({ role: "user", content: transcript }, { role: "assistant", content: replyText });
-          while (history.length > historyLimit) history.splice(0, 2);
-        }
-        // The last byte entering the player is not the reply being finished: sinks render
-        // at realtime after near-instant writes. Completing before close() flipped the
-        // session to listening while the speaker was still talking, so speech during the
-        // audible tail opened a fresh turn instead of barging in — and nothing stopped the
-        // audio. The turn stays `speaking` until the reply is audibly done.
-        if (!turn.signal.aborted) {
-          await player.close();
-          if (!turn.signal.aborted) session.complete(turn.id);
-        }
-      } finally {
-        turn.signal.removeEventListener("abort", abort);
-        if (activePlayer === player) activePlayer = undefined;
-        if (!allowBargeIn) suppressInputUntil = Date.now() + 750;
-      }
-    } catch (error) {
-      if (!turn.signal.aborted) {
-        io.err(`listen: ${error instanceof Error ? error.message : String(error)}`);
-        session.interrupt("cancel");
-      }
-    }
-  };
-
-  const startWork = (turn: DuplexTurn, samples: Float32Array): void => {
-    const task = processTurn(turn, samples);
-    work.add(task);
-    void task.finally(() => work.delete(task));
-  };
 
   const stop = (): void => {
     if (stopping) return;
     stopping = true;
+    // Closing the session aborts the active turn, which stops its player through the
+    // loop's abort handler; closing the capture ends the frame source and the loop.
     session.close();
-    void stopPlayer(activePlayer);
     void capture.close();
   };
 
@@ -348,70 +205,44 @@ export async function runListen(
   session.start();
   io.err(options.speakerDuplex ? "listening with macOS speaker duplex; press Ctrl-C to stop" : "listening with protected speaker mode; press Ctrl-C to stop");
   try {
-    for await (const frame of capture.frames) {
-      if (stopping) break;
-      if (!allowBargeIn && (session.state === "speaking" || frame.timestampMs < suppressInputUntil)) {
-        vad.reset();
-        continue;
-      }
-      for (const event of await vad.push(frame.samples, frame.timestampMs)) {
-        if (event.type === "speech.start") {
-          // Continuation hysteresis: resuming a soft-ended turn takes a single voiced frame,
-          // not full confirmation, because before the commitment point a wrong reopen costs
-          // an aborted speculative dispatch and nothing audible. The kernel refuses the
-          // reopen once the reply is speaking, so barge-in keeps its certified bar.
-          if (speculative && !activeTurn && frame.timestampMs - speculative.softEndedAtMs <= options.reopenMs) {
-            const resumed = session.reopen(speculative.turnId);
-            if (resumed) {
-              activeTurn = resumed;
-              continuationPrefix = speculative.samples;
-              speculative = undefined;
-            }
-          }
-        } else if (event.type === "speech.confirmed") {
-          // An interruption is provisional until confirmed. `speech.start` fires on a single
-          // over-threshold frame — one 20ms residual-echo spike would kill the whole reply —
-          // so a fresh turn starts (and playback stops) only on `speech.confirmed`, after
-          // minSpeechMs of voiced audio. The VAD keeps the pre-roll, so no speech is lost.
-          if (!activeTurn) activeTurn = session.startUserSpeech();
-        } else if (event.type === "speech.dropped") {
-          if (activeTurn && continuationPrefix) {
-            // A reopen that never became speech. Put the superseded dispatch back exactly
-            // as it was: same audio, soft-finalized again, still reopenable.
-            const turn = activeTurn;
-            const samples = continuationPrefix;
-            activeTurn = undefined;
-            continuationPrefix = undefined;
-            if (session.softFinalizeUserSpeech(turn.id)) {
-              speculative = { turnId: turn.id, samples, softEndedAtMs: event.timestampMs };
-              startWork(turn, samples);
-            }
-          } else {
-            session.recordFalseBargeIn();
-          }
-        } else if (event.type === "speech.end" && activeTurn) {
-          const samples = continuationPrefix ? joinAudio(continuationPrefix, event.samples) : event.samples;
-          continuationPrefix = undefined;
-          const turn = activeTurn;
-          if (options.turnTaking === "speculative") {
-            if (session.softFinalizeUserSpeech(turn.id)) {
-              activeTurn = undefined;
-              speculative = { turnId: turn.id, samples, softEndedAtMs: event.timestampMs };
-              startWork(turn, samples);
-            }
-          } else if (session.finalizeUserSpeech(turn.id)) {
-            activeTurn = undefined;
-            startWork(turn, samples);
-          }
-        }
-      }
-    }
-    await Promise.allSettled([...work]);
+    await runConversation({
+      session,
+      vad,
+      frames: capture.frames,
+      createPlayer: (): ConversationPlayer => speakerHost?.player ?? platform.createPlayer(),
+      asr: new AsrClient(engine(config, "asr"), fetch),
+      llm: new LlmClient(engine(config, "llm"), fetch),
+      tts: new TtsClient(engine(config, "tts"), fetch),
+    }, {
+      language: options.language,
+      ...(options.system === undefined ? {} : { system: options.system }),
+      ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
+      ...(options.voice === undefined ? {} : { voice: options.voice }),
+      chunking: config.chunking,
+      ttsDefaults: config.ttsDefaults,
+      allowBargeIn: options.bargeIn || options.speakerDuplex,
+      turnTaking: options.turnTaking,
+      reopenMs: options.reopenMs,
+    }, {
+      onTranscript: text => io.out(`transcript: ${text}`),
+      onReply: text => io.out(`reply: ${text}`),
+      onError: (_code, message) => io.err(`listen: ${message}`),
+      ...(options.saveUtterances === undefined ? {} : {
+        onUtterance: async (wav: Uint8Array, transcript: string) => {
+          // An explicit opt-in per the privacy rules. The empty-transcript failures are the
+          // most valuable samples in the set, so saving happens regardless of the result.
+          const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+          const base = join(options.saveUtterances as string, `utterance-${stamp}`);
+          await Bun.write(`${base}.wav`, wav);
+          await Bun.write(`${base}.txt`, `${transcript}\n`);
+          io.err(`listen: saved utterance ${base}.wav`);
+        },
+      }),
+    });
     return 0;
   } finally {
     process.removeListener("SIGINT", stop);
     stop();
     await speakerHost?.close();
-    await Promise.allSettled([...work]);
   }
 }

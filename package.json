@@ -11,7 +11,7 @@
     "build:cli": "bun run --cwd apps/cli build",
     "measure:aec": "./platforms/macos-audio/build.sh && bun run platforms/macos-audio/aec-measure.ts",
     "test:macos-audio": "./platforms/macos-audio/build.sh && bun run platforms/macos-audio/smoke-test.ts",
-    "test:ts": "bun test packages platforms apps/cli/src",
+    "test:ts": "bun test packages platforms apps/cli/src apps/realtime-gateway/src",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

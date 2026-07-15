@@ -34,9 +34,11 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | `engines/kokoro/` | Local CPU TTS server — the conversation fast lane (fixed voice bank, ~0.2s first audio) |
 | `packages/` | Shared TypeScript contracts, clients, configuration, text, audio, and orchestration |
 | `packages/duplex-session/` | Platform-neutral realtime turn state, cancellation, events, and bounded playback queue |
+| `packages/conversation/` | The shared conversation loop (VAD turns, barge-in policy, speculative turn-taking, streaming replies) behind `vox listen` and the gateway |
 | `platforms/bun/` | Filesystem, process, recording, and playback adapters for Bun apps |
 | `core/` | Transitional Python parity implementation and research-facing core |
 | `apps/cli/` | Compiled TypeScript `vox` CLI plus the transitional Python fallback |
+| `apps/realtime-gateway/` | Web Studio server: the duplex session protocol over WebSocket plus a credential-hiding REST facade |
 | `docs/` | Product design docs |
 
 The product workspace uses Bun 1.3.14. Shared packages use Web APIs and remain independent
@@ -152,8 +154,14 @@ gate passed on built-in MacBook speakers with real speech: zero confirmed self-i
 and 12/12 operator barge-ins heard. The Silero ONNX VAD (v5.1.2, pinned by SHA-256, fetched
 into a verified local cache on first use) passed the same gate with faster detection and is
 the default where the ONNX runtime is available; `listen` falls back loudly to the certified
-energy detector otherwise. Route-change handling, release packaging of the helper and the
-ONNX runtime, and the Web Studio remain separate measured delivery phases.
+energy detector otherwise. The conversation loop is shared: `packages/conversation` drives
+both `vox listen` and the realtime gateway, so the certified turn-taking and barge-in
+lifecycle has one implementation. The gateway (`apps/realtime-gateway`, Web Studio Phase 1)
+speaks the versioned session protocol over WebSocket — binary PCM media, snapshot reconnect,
+idempotent commands — plus a REST facade that keeps engine addresses and credentials
+server-side. Route-change handling, release packaging of the helper and the ONNX runtime,
+and the browser Conversation panel (Web Studio Phase 2) remain separate measured delivery
+phases.
 
 ## Related
 
