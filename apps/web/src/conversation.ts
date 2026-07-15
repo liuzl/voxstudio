@@ -94,3 +94,33 @@ function realtimeUrl(): string {
   base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
   return base.toString();
 }
+
+/**
+ * The one live conversation, app-scoped: it belongs to the session, not to the panel that
+ * happens to be showing it. Switching tabs unmounts the panel; the conversation keeps
+ * running and the sidebar keeps showing its connection state.
+ */
+let current: ConversationController | undefined;
+
+export async function startConversation(): Promise<void> {
+  if (current) return;
+  const next = new ConversationController();
+  current = next;
+  try {
+    await next.start();
+  } catch (error) {
+    current = undefined;
+    await next.stop().catch(() => {});
+    throw error;
+  }
+}
+
+export async function stopConversation(): Promise<void> {
+  const active = current;
+  current = undefined;
+  await active?.stop();
+}
+
+export function conversationControls(): Pick<ConversationController, "setMuted" | "interruptPlayback"> | undefined {
+  return current;
+}

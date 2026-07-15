@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ConversationController } from "../conversation";
+import { conversationControls, startConversation, stopConversation } from "../conversation";
 import { useStudio, type TurnView } from "../store";
 
 const stateLabels: Record<string, { text: string; tone: string }> = {
@@ -77,7 +77,6 @@ function TurnCard({ turn }: { turn: TurnView }) {
 }
 
 export function ConversationPanel() {
-  const controller = useRef<ConversationController | undefined>(undefined);
   const [starting, setStarting] = useState(false);
   const active = useStudio(state => state.active);
   const muted = useStudio(state => state.muted);
@@ -96,16 +95,13 @@ export function ConversationPanel() {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
   }, [turns]);
 
-  useEffect(() => () => {
-    void controller.current?.stop();
-  }, []);
+  // No unmount cleanup on purpose: the conversation is app-scoped and survives tab
+  // switches. It ends on 结束, on session.stop, or with the page.
 
   const start = async () => {
     setStarting(true);
     try {
-      const next = new ConversationController();
-      await next.start();
-      controller.current = next;
+      await startConversation();
     } catch (error) {
       notice("error", `启动失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -114,8 +110,7 @@ export function ConversationPanel() {
   };
 
   const stop = async () => {
-    await controller.current?.stop();
-    controller.current = undefined;
+    await stopConversation();
   };
 
   const state = stateLabels[active ? sessionState : "off"] ?? stateLabels.off as { text: string; tone: string };
@@ -160,7 +155,7 @@ export function ConversationPanel() {
         ) : (
           <>
             <button
-              onClick={() => controller.current?.setMuted(!muted)}
+              onClick={() => conversationControls()?.setMuted(!muted)}
               className={`rounded-lg border px-3 py-1.5 text-sm ${
                 muted ? "border-amber-400 text-amber-300" : "border-ink-700 text-ink-300 hover:text-ink-100"
               }`}
@@ -168,7 +163,7 @@ export function ConversationPanel() {
               {muted ? "已静音" : "静音"}
             </button>
             <button
-              onClick={() => controller.current?.interruptPlayback()}
+              onClick={() => conversationControls()?.interruptPlayback()}
               className="rounded-lg border border-ink-700 px-3 py-1.5 text-sm text-ink-300 hover:text-ink-100"
               title="停止当前回答（也可以直接开口打断）"
             >
