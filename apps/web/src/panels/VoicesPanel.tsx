@@ -1,6 +1,16 @@
 import { writeWav } from "@voxstudio/audio";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { deleteVoice, listVoices, registerVoice, synthesize, transcribe } from "../lib/api";
+import {
+  createDesignProfile,
+  deleteVoice,
+  listEngines,
+  listVoices,
+  registerVoice,
+  synthesize,
+  transcribe,
+  type EngineEntry,
+  type VoiceEntry,
+} from "../lib/api";
 import { VoiceRecorder } from "../lib/audio";
 import { useStudio } from "../store";
 
@@ -354,13 +364,210 @@ export function VoicesPanel() {
         </div>
       </section>
 
-      <section className="rounded-xl border border-ink-700 bg-ink-900 p-4 text-sm leading-relaxed text-ink-300 md:p-5">
-        <h2 className="text-sm font-medium">设计档（design profiles）</h2>
-        <p className="mt-2 text-xs text-ink-500">
-          SHA-256 指纹徽章、audit / reproduce / verify / audition 流程需要网关侧的设计档注册表——
-          目前设计档存于 CLI 本地，随 Phase 3 的网关注册表落地后在此展开（见 docs/web-studio.md）。
-        </p>
-      </section>
+      <ProfilesSection
+        profiles={voicesList.filter(voice => voice.designProfile !== undefined)}
+        onChanged={() => void refresh()}
+        onAudition={(id, engine) => void audition(id, engine)}
+        auditioning={auditioning}
+      />
     </div>
+  );
+}
+
+/** Fingerprint short form: enough to eyeball identity, click-to-copy for the rest. */
+function Fingerprint({ sha }: { sha: string | undefined }) {
+  if (!sha) return <span className="text-ink-500">无指纹</span>;
+  return (
+    <button
+      onClick={() => void navigator.clipboard?.writeText(sha)}
+      title={`${sha}（点击复制）`}
+      className="rounded bg-ink-800 px-1.5 py-0.5 font-mono text-[10px] text-ink-300 hover:text-accent-500"
+    >
+      {sha.slice(0, 8)}
+    </button>
+  );
+}
+
+function ProfilesSection({ profiles, onChanged, onAudition, auditioning }: {
+  profiles: VoiceEntry[];
+  onChanged: () => void;
+  onAudition: (id: string, engine: string) => void;
+  auditioning: string;
+}) {
+  const [engines, setEngines] = useState<EngineEntry[]>([]);
+  const [note, setNote] = useState<{ kind: "info" | "error"; text: string } | undefined>(undefined);
+  const [verifying, setVerifying] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ id: "", description: "", anchorText: "这是一段用于固定音色的锚文本。", seed: "20260715", cfg: "2", timesteps: "10" });
+
+  useEffect(() => {
+    listEngines().then(setEngines).catch(() => {});
+  }, []);
+
+  // Audit: the profile's recorded model identity vs the owning engine's live identity.
+  const auditOf = (profile: VoiceEntry): { label: string; tone: string; title: string } => {
+    const meta = profile.designProfile;
+    const runtime = engines.find(entry => entry.name === profile.engine)?.runtime;
+    if (!meta || !runtime) return { label: "未知", tone: "bg-ink-700 text-ink-300", title: "引擎身份不可达" };
+    if (meta.model !== runtime.model) return { label: "模型漂移", tone: "bg-red-500/20 text-red-300", title: `档案 ${meta.model} ≠ 运行时 ${runtime.model}` };
+    if ((meta.model_manifest_sha256 ?? null) !== runtime.manifestSha256) {
+      return { label: "清单漂移", tone: "bg-amber-500/20 text-amber-300", title: "模型清单指纹与运行时不一致" };
+    }
+    return { label: "与运行时一致", tone: "bg-emerald-500/20 text-emerald-300", title: "模型与清单指纹均一致" };
+  };
+
+  // Verify = reproduce under a throwaway id, compare the audio fingerprint, clean up.
+  const verify = async (profile: VoiceEntry) => {
+    const meta = profile.designProfile;
+    if (!meta || !profile.promptText) {
+      setNote({ kind: "error", text: `${profile.id} 缺少锚文本或指纹，无法验证。` });
+      return;
+    }
+    setVerifying(profile.id);
+    setNote({ kind: "info", text: `正在重现 ${profile.id}（同参数重新生成并比对指纹）…` });
+    const probe = `${profile.id}-vfy-${Date.now().toString(36)}`;
+    try {
+      const copy = await createDesignProfile({
+        id: probe,
+        description: meta.description,
+        anchorText: profile.promptText,
+        seed: meta.seed,
+        cfgValue: meta.cfg_value,
+        timesteps: meta.timesteps,
+      }, profile.engine || undefined);
+      const match = copy.designProfile?.audio_sha256 !== undefined
+        && copy.designProfile.audio_sha256 === meta.audio_sha256;
+      setNote(match
+        ? { kind: "info", text: `✓ ${profile.id} 可逐字节重现（指纹一致）` }
+        : { kind: "error", text: `✗ ${profile.id} 重现结果指纹不一致 —— 运行时已漂移或参数缺失` });
+      await deleteVoice(probe, profile.engine || undefined).catch(() => {});
+    } catch (error) {
+      setNote({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setVerifying("");
+    }
+  };
+
+  const create = async () => {
+    const seed = Number(form.seed);
+    if (!form.id.trim() || !form.description.trim() || !form.anchorText.trim() || !Number.isInteger(seed)) {
+      setNote({ kind: "error", text: "创建需要：ID、英文声音描述、锚文本、整数 seed。" });
+      return;
+    }
+    setCreating(true);
+    setNote({ kind: "info", text: "生成锚音频并登记指纹…" });
+    try {
+      await createDesignProfile({
+        id: form.id.trim(),
+        description: form.description.trim(),
+        anchorText: form.anchorText.trim(),
+        seed,
+        cfgValue: Number(form.cfg) || 2,
+        timesteps: Number(form.timesteps) || 10,
+      });
+      setNote({ kind: "info", text: `已创建设计档 ${form.id.trim()}` });
+      setForm({ ...form, id: "", description: "" });
+      setShowForm(false);
+      onChanged();
+    } catch (error) {
+      setNote({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <section className="rounded-xl border border-ink-700 bg-ink-900 p-4 md:p-5">
+      <div className="flex items-center gap-3">
+        <h2 className="text-sm font-medium text-ink-300">设计档（{profiles.length}）</h2>
+        <div className="flex-1" />
+        <button
+          onClick={() => setShowForm(value => !value)}
+          className="rounded-lg border border-ink-700 px-3 py-1.5 text-xs text-ink-300 hover:text-ink-100"
+        >
+          {showForm ? "收起" : "新建设计档"}
+        </button>
+      </div>
+      <p className="mt-1 text-[11px] text-ink-500">
+        零样本声音设计：描述 + 锚文本 + seed 固定一个可复现的音色；指纹（SHA-256）保证同一运行时可逐字节重现。
+      </p>
+      {note && (
+        <p className={`mt-2 text-xs ${note.kind === "error" ? "text-red-300" : "text-emerald-300"}`}>{note.text}</p>
+      )}
+
+      {showForm && (
+        <div className="mt-3 flex flex-col gap-2 rounded-lg border border-ink-700/60 bg-ink-800/40 p-3">
+          <div className="flex flex-wrap gap-2">
+            <input value={form.id} onChange={event => setForm({ ...form, id: event.target.value })} placeholder="设计档 ID"
+              className="w-40 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100" />
+            <input value={form.description} onChange={event => setForm({ ...form, description: event.target.value })}
+              placeholder="声音描述（英文，如 calm clear female voice）"
+              className="min-w-64 flex-1 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100" />
+          </div>
+          <textarea value={form.anchorText} onChange={event => setForm({ ...form, anchorText: event.target.value })}
+            rows={2} placeholder="锚文本（将被固定为该音色的参考语料）"
+            className="w-full rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100" />
+          <div className="flex flex-wrap items-center gap-3 text-xs text-ink-300">
+            <label className="flex items-center gap-1">seed
+              <input value={form.seed} onChange={event => setForm({ ...form, seed: event.target.value })}
+                className="w-24 rounded border border-ink-700 bg-ink-800 px-2 py-1 text-xs text-ink-100" />
+            </label>
+            <label className="flex items-center gap-1">cfg
+              <input value={form.cfg} onChange={event => setForm({ ...form, cfg: event.target.value })}
+                className="w-14 rounded border border-ink-700 bg-ink-800 px-2 py-1 text-xs text-ink-100" />
+            </label>
+            <label className="flex items-center gap-1">timesteps
+              <input value={form.timesteps} onChange={event => setForm({ ...form, timesteps: event.target.value })}
+                className="w-14 rounded border border-ink-700 bg-ink-800 px-2 py-1 text-xs text-ink-100" />
+            </label>
+            <div className="flex-1" />
+            <button onClick={() => void create()} disabled={creating}
+              className="rounded-lg bg-accent-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-accent-500 disabled:opacity-40">
+              {creating ? "生成中…" : "创建"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-3 space-y-2">
+        {profiles.length === 0 && (
+          <p className="text-sm text-ink-500">还没有设计档；需要具备 design 能力的引擎（见设置页注册表）。</p>
+        )}
+        {profiles.map(profile => {
+          const meta = profile.designProfile;
+          const auditState = auditOf(profile);
+          return (
+            <div key={`${profile.engine}/${profile.id}`} className="rounded-lg border border-ink-700/60 bg-ink-800/40 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium">{profile.id}</span>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] ${auditState.tone}`} title={auditState.title}>
+                  {auditState.label}
+                </span>
+                <Fingerprint sha={meta?.audio_sha256} />
+                {profile.engine && <span className="rounded bg-ink-700/80 px-1.5 py-0.5 text-[10px] text-ink-300">{profile.engine}</span>}
+                <div className="flex-1" />
+                <button onClick={() => onAudition(profile.id, profile.engine)} disabled={auditioning !== ""}
+                  className="rounded border border-ink-700 px-2 py-1 text-[11px] text-ink-300 hover:text-ink-100 disabled:opacity-40">
+                  {auditioning === profile.id ? "合成中…" : "试听"}
+                </button>
+                <button onClick={() => void verify(profile)} disabled={verifying !== ""}
+                  title="同参数重新生成一次并比对音频指纹（可逐字节重现性检验）"
+                  className="rounded border border-ink-700 px-2 py-1 text-[11px] text-ink-300 hover:text-ink-100 disabled:opacity-40">
+                  {verifying === profile.id ? "验证中…" : "验证"}
+                </button>
+              </div>
+              <p className="mt-1.5 text-xs text-ink-300">{meta?.description}</p>
+              <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px] text-ink-500">
+                <span className="rounded bg-ink-800 px-1.5 py-0.5">seed {meta?.seed}</span>
+                <span className="rounded bg-ink-800 px-1.5 py-0.5">cfg {meta?.cfg_value}</span>
+                <span className="rounded bg-ink-800 px-1.5 py-0.5">timesteps {meta?.timesteps}</span>
+                {meta?.model && <span className="rounded bg-ink-800 px-1.5 py-0.5">{meta.model}</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }

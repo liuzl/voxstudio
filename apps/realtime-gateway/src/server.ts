@@ -135,11 +135,20 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           signal: AbortSignal.timeout(3_000),
         });
         if (!upstream.ok) return [];
-        const payload = await upstream.json() as { voices?: ({ id?: string } | string)[] };
+        const payload = await upstream.json() as {
+          voices?: ({ id?: string; prompt_text?: string; design_profile?: unknown } | string)[];
+        };
         return (payload.voices ?? [])
-          .map(entry => typeof entry === "string" ? entry : entry.id ?? "")
-          .filter(Boolean)
-          .map(id => ({ id, engine: name }));
+          .map(entry => typeof entry === "string" ? { id: entry } : entry)
+          .filter(entry => entry.id)
+          .map(entry => ({
+            id: entry.id as string,
+            engine: name,
+            // Design-profile metadata rides along so the studio can show fingerprints
+            // and audit against the runtime without a per-voice round trip.
+            ...(entry.design_profile === undefined ? {} : { design_profile: entry.design_profile }),
+            ...(entry.prompt_text === undefined ? {} : { prompt_text: entry.prompt_text }),
+          }));
       } catch (error) {
         // One dead engine must not empty the whole bank; its absence is visible in /v1/engines.
         log(`voices: ${name} unreachable: ${error instanceof Error ? error.message : String(error)}`);
@@ -157,6 +166,9 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     const instances = Object.entries(options.config.engines).filter(([, target]) => target.baseUrl);
     const engines = await Promise.all(instances.map(async ([name, target]) => {
       let healthy = false;
+      // The engine's self-reported model identity: what design-profile audits compare
+      // against. Identity is not topology — addresses stay server-side.
+      let runtime: { model: string; manifestSha256: string | null } | null = null;
       try {
         const headers = new Headers();
         if (target.apiKey) headers.set("authorization", `Bearer ${target.apiKey}`);
@@ -165,6 +177,15 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           signal: AbortSignal.timeout(2_000),
         });
         healthy = upstream.ok;
+        if (upstream.ok) {
+          const payload = await upstream.json() as { model?: unknown; model_manifest_sha256?: unknown };
+          if (typeof payload.model === "string") {
+            runtime = {
+              model: payload.model,
+              manifestSha256: typeof payload.model_manifest_sha256 === "string" ? payload.model_manifest_sha256 : null,
+            };
+          }
+        }
       } catch {
         healthy = false;
       }
@@ -178,6 +199,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           ...(legacyRoles.includes(name) ? [name] : []),
         ],
         healthy,
+        runtime,
       };
     }));
     return Response.json({ engines });
@@ -253,6 +275,13 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       if (url.pathname === "/v1/engines") {
         if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
         return engineList();
+      }
+      if (url.pathname === "/v1/design-profiles") {
+        if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+        // Zero-shot voice design is an engine capability, not a given.
+        const selected = selectEngine(url, "tts", "tts", "design");
+        if (selected instanceof Response) return selected;
+        return proxy(request, selected[1], url.pathname, selected[0]);
       }
       if (url.pathname === "/v1/voices") {
         if (request.method === "GET") return aggregatedVoices();

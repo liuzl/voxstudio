@@ -337,19 +337,23 @@ describe("realtime gateway", () => {
         if (url.pathname === "/v1/voices" && url.host === "voxcpm2.test") {
           return url.searchParams.toString() === "" && (init?.method ?? "GET") === "POST"
             ? Response.json({ id: "laok" }, { status: 201 })
-            : Response.json({ voices: [{ id: "laok" }] });
+            : Response.json({ voices: [{ id: "laok", design_profile: { description: "calm", seed: 7 } }] });
         }
-        if (url.pathname === "/health") return Response.json({ status: "ok" });
+        if (url.pathname === "/v1/design-profiles") return Response.json({ id: "calm" }, { status: 201 });
+        if (url.pathname === "/health") {
+          return Response.json({ status: "ok", model: `${url.host.split(".")[0]}@1.0`, model_manifest_sha256: "abc123" });
+        }
         if (url.pathname === "/v1/audio/speech") return new Response(new Uint8Array(8));
         throw new Error(`unexpected ${url.href}`);
       },
     });
 
-    // The bank is the union, each entry attributed to its engine.
-    const bank = await (await fetch(new URL("/v1/voices", gateway.url))).json() as { voices: { id: string; engine: string }[] };
+    // The bank is the union, each entry attributed to its engine; design-profile
+    // metadata rides through for fingerprint badges and audits.
+    const bank = await (await fetch(new URL("/v1/voices", gateway.url))).json() as { voices: Record<string, unknown>[] };
     expect(bank.voices).toEqual([
       { id: "zf_001", engine: "kokoro" },
-      { id: "laok", engine: "voxcpm2" },
+      { id: "laok", engine: "voxcpm2", design_profile: { description: "calm", seed: 7 } },
     ]);
 
     // Registration auto-routes to the clone-capable instance, not the fast lane.
@@ -374,13 +378,28 @@ describe("realtime gateway", () => {
     expect((await speak("?engine=ghost")).status).toBe(400);
     expect((await speak("?engine=asr")).status).toBe(400);
 
+    // Design-profile creation routes by the design capability.
+    const created = await fetch(new URL("/v1/design-profiles", gateway.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: "calm", description: "calm voice", anchor_text: "锚文本。", seed: 7 }),
+    });
+    expect(created.status).toBe(201);
+    expect(hits.at(-1)).toBe("POST voxcpm2.test/v1/design-profiles");
+
     // The sanitized registry: names, kinds, capabilities, roles, health — no addresses.
     const listed = await (await fetch(new URL("/v1/engines", gateway.url))).json() as { engines: Record<string, unknown>[] };
     const names = listed.engines.map(entry => entry.name);
     expect(names).toContain("kokoro");
     expect(names).toContain("voxcpm2");
     const kokoro = listed.engines.find(entry => entry.name === "kokoro");
-    expect(kokoro).toMatchObject({ kind: "tts", roles: ["tts"], healthy: true, capabilities: ["preset", "fast"] });
+    expect(kokoro).toMatchObject({
+      kind: "tts",
+      roles: ["tts"],
+      healthy: true,
+      capabilities: ["preset", "fast"],
+      runtime: { model: "kokoro@1.0", manifestSha256: "abc123" },
+    });
     expect(JSON.stringify(listed)).not.toContain("kokoro.test");
   });
 

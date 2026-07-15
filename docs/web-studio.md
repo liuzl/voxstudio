@@ -108,10 +108,16 @@ below rather than relitigated per feature.
    full voice registry (list/register/delete, credential-injecting, traversal-safe), the
    生成 panel synthesizes through it with a voice picker, duration/chunk estimate, and a
    takes history, and the 音色 panel lists the bank with one-click audition, registration
-   (clone engines), and delete — verified live against the local stack. Still open for
-   this phase's gate: design-profile workflows (they need a gateway-side profile
-   registry; profiles live in the CLI's filesystem today) and the fingerprint-parity
-   check against CLI artifacts.
+   (clone engines), and delete — verified live against the local stack.
+   **Design profiles delivered 2026-07-15, closing the phase.** The deferral premise
+   was wrong: profiles live on the TTS engine (voices with `design_profile` metadata),
+   so the facade only needed `/v1/design-profiles` (routed by the `design` capability)
+   and design metadata riding through the union bank. The 音色 panel lists profiles
+   with SHA-256 fingerprint badges, audits each against its engine's live model
+   identity (`/v1/engines` runtime fields), creates new profiles, and verifies
+   reproducibility by regenerating under a throwaway id and comparing fingerprints.
+   **Fingerprint-parity gate passed**: a CLI-created profile (`design-calm-clear`)
+   reproduced byte-identically through the web path against the live engine.
 4. **Library panel**: SQLite persistence, capture ingest from gateway sessions,
    promote-to-sample. Gate: the ASR reference-correction workflow runs end-to-end in UI.
 5. **Settings & hosting**: health surface; voxstudio.cc deployment behind Access.

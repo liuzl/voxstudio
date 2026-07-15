@@ -11,19 +11,73 @@ async function fail(response: Response, what: string): Promise<never> {
   throw new Error(`${what}失败（${response.status}${detail ? `：${detail}` : ""}）`);
 }
 
+export interface DesignProfileMeta {
+  description: string;
+  seed: number;
+  cfg_value: number;
+  timesteps: number;
+  model: string;
+  model_manifest_sha256?: string | null;
+  audio_sha256?: string;
+}
+
 export interface VoiceEntry {
   id: string;
   /** Which TTS instance owns the id — the union bank spans engines. */
   engine: string;
+  /** Present when the voice is a reproducible design profile. */
+  designProfile?: DesignProfileMeta;
+  promptText?: string;
 }
 
 export async function listVoices(): Promise<VoiceEntry[]> {
   const response = await fetch("/v1/voices");
   if (!response.ok) await fail(response, "获取音色列表");
-  const payload = await response.json() as { voices?: { id?: string; engine?: string }[] };
+  const payload = await response.json() as {
+    voices?: { id?: string; engine?: string; design_profile?: DesignProfileMeta; prompt_text?: string }[];
+  };
   return (payload.voices ?? [])
-    .map(entry => ({ id: entry.id ?? "", engine: entry.engine ?? "" }))
+    .map(entry => ({
+      id: entry.id ?? "",
+      engine: entry.engine ?? "",
+      ...(entry.design_profile === undefined ? {} : { designProfile: entry.design_profile }),
+      ...(entry.prompt_text === undefined ? {} : { promptText: entry.prompt_text }),
+    }))
     .filter(entry => entry.id !== "");
+}
+
+export interface DesignProfileRequestParams {
+  id: string;
+  description: string;
+  anchorText: string;
+  seed: number;
+  cfgValue?: number;
+  timesteps?: number;
+}
+
+/** Create a reproducible design voice; routed to a design-capable engine. */
+export async function createDesignProfile(params: DesignProfileRequestParams, engine?: string): Promise<VoiceEntry> {
+  const query = engine ? `?engine=${encodeURIComponent(engine)}` : "";
+  const response = await fetch(`/v1/design-profiles${query}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      id: params.id,
+      description: params.description,
+      anchor_text: params.anchorText,
+      seed: params.seed,
+      ...(params.cfgValue === undefined ? {} : { cfg_value: params.cfgValue }),
+      ...(params.timesteps === undefined ? {} : { timesteps: params.timesteps }),
+    }),
+  });
+  if (!response.ok) await fail(response, "创建设计档");
+  const voice = await response.json() as { id?: string; design_profile?: DesignProfileMeta; prompt_text?: string };
+  return {
+    id: voice.id ?? params.id,
+    engine: engine ?? "",
+    ...(voice.design_profile === undefined ? {} : { designProfile: voice.design_profile }),
+    ...(voice.prompt_text === undefined ? {} : { promptText: voice.prompt_text }),
+  };
 }
 
 export interface EngineEntry {
@@ -33,6 +87,8 @@ export interface EngineEntry {
   capabilities: string[];
   roles: string[];
   healthy: boolean;
+  /** Self-reported model identity — what design-profile audits compare against. */
+  runtime: { model: string; manifestSha256: string | null } | null;
 }
 
 export async function listEngines(): Promise<EngineEntry[]> {
