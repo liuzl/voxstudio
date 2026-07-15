@@ -404,6 +404,39 @@ the snapshot being the resync mechanism. Bounded input buffering (30s,
 oldest-first drop) means the gateway never retains an unbounded live
 recording while an engine stalls.
 
+### OpenAI Realtime compatibility (evaluated 2026-07-16, deferred)
+
+Our `/v1/realtime` shares a path with `api.openai.com/v1/realtime` and nothing
+else: the wire formats are unrelated, and an OpenAI Realtime client cannot
+connect. The differences are deliberate, not accidental — raw binary PCM
+instead of base64-in-JSON, three swappable engine stages instead of one
+speech-to-speech model, and reconnect/idempotency/audible-clock semantics the
+OpenAI protocol has no equivalent for. The REST facade above is where this
+gateway's OpenAI compatibility lives.
+
+A compatibility adapter was evaluated and split into three tiers:
+
+- **Subset adapter** (~2–3 days): a separate WS route translating the
+  audio-only, `server_vad`-only conversation flow — event renames, base64
+  PCM16@24kHz transcoding, a `session.update` subset. Reuses `GatewaySession`
+  unchanged; lets OpenAI SDKs and off-the-shelf voice UIs connect for plain
+  conversation.
+- **Tool calling and text items** (1–2 weeks): requires a tool loop and
+  history-injection in `packages/conversation`. That is a product feature that
+  would also serve the CLI and Web Studio; if wanted, it is built as one, not
+  as adapter fidelity.
+- **WebRTC + ephemeral tokens**: no WebRTC stack exists for Bun; the browser
+  remote path is already planned through LiveKit. Out of scope for an adapter.
+
+Deferred because the costs are real — the base64/24kHz hot path this protocol
+deliberately avoided, our differentiators degraded to the narrower OpenAI
+semantics, and a compatibility treadmill against a still-evolving API (event
+names already changed between beta and GA) — while clients that orchestrate
+their own pipeline are served by the REST facade today. **Trigger**: a concrete
+client hardwired to the OpenAI Realtime protocol that we want to support. The
+subset adapter is then built against that client's actual event usage, with the
+client as the acceptance test.
+
 ## Provider requirements
 
 Realtime-capable client methods accept an `AbortSignal`, an optional turn ID,
