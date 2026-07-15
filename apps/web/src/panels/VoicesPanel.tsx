@@ -195,7 +195,7 @@ export function VoicesPanel() {
       || voice.engine.toLowerCase().includes(query.toLowerCase())));
 
   return (
-    <div className="mx-auto max-w-4xl space-y-5 px-4 py-6 md:px-8 md:py-10">
+    <div className="mx-auto max-w-6xl space-y-5 px-4 py-6 md:px-8 md:py-10">
       <h1 className="text-2xl font-semibold">音色</h1>
       {status && (
         <p className={`text-xs ${status.kind === "error" ? "text-red-300" : "text-emerald-300"}`}>{status.text}</p>

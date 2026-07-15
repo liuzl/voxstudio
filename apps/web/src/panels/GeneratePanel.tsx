@@ -72,7 +72,7 @@ export function GeneratePanel() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 md:px-8 md:py-10">
+    <div className="mx-auto max-w-6xl space-y-6 px-4 py-6 md:px-8 md:py-10">
       <h1 className="text-2xl font-semibold">生成</h1>
 
       <section className="space-y-3 rounded-xl border border-ink-700 bg-ink-900 p-4 md:p-5">

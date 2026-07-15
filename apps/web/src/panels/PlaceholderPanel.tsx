@@ -1,6 +1,6 @@
 export function PlaceholderPanel(props: { title: string; phase: string; description: string }) {
   return (
-    <div className="mx-auto max-w-2xl px-4 py-10 md:px-8 md:py-16">
+    <div className="mx-auto max-w-4xl px-4 py-10 md:px-8 md:py-16">
       <h1 className="text-2xl font-semibold">{props.title}</h1>
       <div className="mt-2 inline-block rounded-full border border-ink-700 px-3 py-1 text-xs text-ink-300">
         {props.phase}
