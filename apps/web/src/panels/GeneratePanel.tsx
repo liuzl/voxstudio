@@ -26,7 +26,8 @@ function VoicePicker({ value, onChange }: { value: string; onChange: (voice: str
 
 export function GeneratePanel() {
   const [text, setText] = useState("");
-  const [voice, setVoice] = useState("");
+  const voice = useStudio(state => state.generateVoice);
+  const setVoice = useStudio(state => state.setGenerateVoice);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const takes = useStudio(state => state.takes);

@@ -44,7 +44,10 @@ interface StudioState {
   /** Generation takes, newest first. Object URLs are revoked on eviction/removal. */
   takes: TakeView[];
   voicesList: string[];
+  /** The 生成 panel's voice, settable from the 音色 bank. */
+  generateVoice: string;
 
+  setGenerateVoice(voice: string): void;
   addTake(take: TakeView): void;
   removeTake(id: string): void;
   setVoicesList(voices: string[]): void;
@@ -176,7 +179,9 @@ export const useStudio = create<StudioState>((set, get) => ({
   language: "zh",
   takes: [],
   voicesList: [],
+  generateVoice: "",
 
+  setGenerateVoice: generateVoice => set({ generateVoice }),
   addTake: take =>
     set(state => {
       const next = [take, ...state.takes];

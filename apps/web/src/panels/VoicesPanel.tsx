@@ -1,5 +1,5 @@
 import { writeWav } from "@voxstudio/audio";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { deleteVoice, listVoices, registerVoice, synthesize, transcribe } from "../lib/api";
 import { VoiceRecorder } from "../lib/audio";
 import { useStudio } from "../store";
@@ -8,9 +8,24 @@ const auditionText = "你好，这是一段试听。今天天气不错。";
 const maxRecordMs = 30_000;
 const minRecordMs = 2_000;
 
+/** Kokoro-style ids encode language and gender in their prefix; other engines fall through. */
+const categoryLabels: Record<string, string> = {
+  zf: "中文·女", zm: "中文·男",
+  af: "英文·女", am: "英文·男",
+  bf: "英文·女(英)", bm: "英文·男(英)",
+};
+
+function categoryOf(id: string): string {
+  const prefix = id.split("_")[0] ?? "";
+  return categoryLabels[prefix] ?? "其他";
+}
+
 export function VoicesPanel() {
   const voicesList = useStudio(state => state.voicesList);
   const setVoicesList = useStudio(state => state.setVoicesList);
+  const setGenerateVoice = useStudio(state => state.setGenerateVoice);
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState("全部");
   const [status, setStatus] = useState<{ kind: "info" | "error"; text: string } | undefined>(undefined);
   const [auditioning, setAuditioning] = useState("");
   const [registering, setRegistering] = useState(false);
@@ -149,6 +164,19 @@ export function VoicesPanel() {
     }
   };
 
+  const categories = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const id of voicesList) {
+      const key = categoryOf(id);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [voicesList]);
+
+  const filtered = voicesList.filter(id =>
+    (category === "全部" || categoryOf(id) === category)
+    && (query === "" || id.toLowerCase().includes(query.toLowerCase())));
+
   return (
     <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 md:px-8 md:py-10">
       <h1 className="text-2xl font-semibold">音色</h1>
@@ -157,30 +185,75 @@ export function VoicesPanel() {
       )}
 
       <section className="rounded-xl border border-ink-700 bg-ink-900 p-4 md:p-5">
-        <h2 className="text-sm font-medium text-ink-300">音色库（{voicesList.length}）</h2>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {voicesList.length === 0 && <p className="text-sm text-ink-500">引擎没有返回音色；克隆型引擎可用下方表单注册。</p>}
-          {voicesList.map(id => (
-            <span key={id} className="flex items-center gap-1 rounded-full border border-ink-700 bg-ink-800 py-1 pl-3 pr-1 text-xs">
-              {id}
-              <button
-                onClick={() => void audition(id)}
-                disabled={auditioning !== ""}
-                className="rounded-full px-1.5 py-0.5 text-ink-300 hover:text-accent-500 disabled:opacity-40"
-                title="试听"
-              >
-                {auditioning === id ? "…" : "▶"}
-              </button>
-              <button
-                onClick={() => void remove(id)}
-                className="rounded-full px-1.5 py-0.5 text-ink-300 hover:text-red-300"
-                title="删除"
-              >
-                ×
-              </button>
-            </span>
-          ))}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <h2 className="text-sm font-medium text-ink-300">
+            音色库 <span className="text-ink-500">{filtered.length}/{voicesList.length}</span>
+          </h2>
+          <div className="flex-1" />
+          <input
+            value={query}
+            onChange={event => setQuery(event.target.value)}
+            placeholder="搜索…"
+            className="w-32 rounded border border-ink-700 bg-ink-800 px-2 py-1 text-xs text-ink-100 placeholder:text-ink-500"
+          />
         </div>
+        {categories.length > 1 && (
+          <div className="mt-2.5 flex flex-wrap gap-1.5">
+            {["全部", ...categories.map(([name]) => name)].map(name => (
+              <button
+                key={name}
+                onClick={() => setCategory(name)}
+                className={`rounded-full px-2.5 py-0.5 text-[11px] ${
+                  category === name ? "bg-accent-600/25 text-accent-500" : "bg-ink-800 text-ink-300 hover:text-ink-100"
+                }`}
+              >
+                {name}
+                {name !== "全部" && (
+                  <span className="ml-1 opacity-60">{categories.find(([label]) => label === name)?.[1]}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="mt-3 max-h-56 overflow-y-auto pr-1">
+          {voicesList.length === 0 && <p className="text-sm text-ink-500">引擎没有返回音色；克隆型引擎可用下方表单注册。</p>}
+          {voicesList.length > 0 && filtered.length === 0 && <p className="text-sm text-ink-500">没有匹配的音色。</p>}
+          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
+            {filtered.map(id => (
+              <div
+                key={id}
+                className="group flex items-center gap-1 rounded-lg border border-ink-700/60 bg-ink-800/60 px-2 py-1.5 text-xs"
+              >
+                <button
+                  onClick={() => void audition(id)}
+                  disabled={auditioning !== ""}
+                  className="min-w-0 flex-1 truncate text-left text-ink-100 hover:text-accent-500 disabled:opacity-40"
+                  title={`试听 ${id}`}
+                >
+                  {auditioning === id ? "▶ 合成中…" : id}
+                </button>
+                <button
+                  onClick={() => {
+                    setGenerateVoice(id);
+                    setStatus({ kind: "info", text: `已将 ${id} 设为「生成」页的音色` });
+                  }}
+                  className="shrink-0 rounded px-1 text-ink-500 hover:text-accent-500"
+                  title="设为生成音色"
+                >
+                  用
+                </button>
+                <button
+                  onClick={() => void remove(id)}
+                  className="shrink-0 rounded px-1 text-ink-500 hover:text-red-300"
+                  title="删除"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+        <p className="mt-2 text-[11px] text-ink-500">点音色名试听；「用」发送到生成页。</p>
       </section>
 
       <section className="rounded-xl border border-ink-700 bg-ink-900 p-4 md:p-5">
