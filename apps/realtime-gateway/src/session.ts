@@ -30,6 +30,8 @@ export interface GatewaySessionOptions {
   reconnectGraceMs?: number;
   /** Called when the session ends for any reason, so the registry can forget it. */
   onClosed?: (session: GatewaySession) => void;
+  /** Operational logging (session lifecycle, turn milestones, errors). No transcript text. */
+  log?: (line: string) => void;
 }
 
 const inputSampleRate = 16_000;
@@ -110,6 +112,7 @@ export class GatewaySession {
   private playbackAck = false;
   private playbackWaiter: { turnId: string; resolve: () => void } | undefined;
   private lastAckedTurnId: string | undefined;
+  private readonly sawDelta = new Set<string>();
 
   constructor(options: GatewaySessionOptions) {
     this.options = options;
@@ -157,7 +160,13 @@ export class GatewaySession {
       reopenMs: start.reopenMs ?? 7_000,
     }, {
       onTranscript: (text, turn) => this.emit({ type: "transcript.final", turnId: turn.id, revision: turn.revision, text }),
-      onReplyDelta: (text, turn) => this.emit({ type: "response.text.delta", turnId: turn.id, revision: turn.revision, text }),
+      onReplyDelta: (text, turn) => {
+        if (text.length > 0 && this.options.log && !this.sawDelta.has(`${turn.id}/${turn.revision}`)) {
+          this.sawDelta.add(`${turn.id}/${turn.revision}`);
+          this.options.log(`session ${this.id.slice(0, 8)} llm first delta turn ${turn.id.slice(0, 8)} rev ${turn.revision}`);
+        }
+        this.emit({ type: "response.text.delta", turnId: turn.id, revision: turn.revision, text });
+      },
       onReply: (text, turn) => this.emit({ type: "response.text.final", turnId: turn.id, revision: turn.revision, text }),
       onError: (code, message, turn) => this.emit({
         type: "error",
@@ -274,6 +283,17 @@ export class GatewaySession {
       sessionId: this.id,
       timestampMs: Date.now(),
     };
+    if (this.options.log) {
+      // Milestones and problems only — never transcript text (the privacy rules).
+      if (payload.type === "error" || payload.type === "session.notice" || payload.type === "command.rejected") {
+        const detail = "message" in payload ? payload.message : "reason" in payload ? payload.reason : "";
+        this.options.log(`session ${this.id.slice(0, 8)} #${event.sequence} ${payload.type}: ${detail}`);
+      } else if (payload.type !== "response.text.delta" && payload.type !== "audio.discarded") {
+        const turn = "turnId" in payload ? ` turn ${payload.turnId.slice(0, 8)}` : "";
+        const state = payload.type === "session.state" ? ` ${payload.state}` : "";
+        this.options.log(`session ${this.id.slice(0, 8)} #${event.sequence} ${payload.type}${turn}${state}`);
+      }
+    }
     // A detached session keeps running; events during the gap are not buffered because the
     // reconnecting client resynchronizes from the snapshot, not from a replay.
     this.sink?.send(JSON.stringify(event));

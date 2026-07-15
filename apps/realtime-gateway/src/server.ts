@@ -108,6 +108,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         loadSileroVad: options.loadSileroVad,
         ...(options.reconnectGraceMs === undefined ? {} : { reconnectGraceMs: options.reconnectGraceMs }),
         onClosed: closed => { sessions.delete(closed.id); },
+        ...(options.log === undefined ? {} : { log: options.log }),
       });
       sessions.set(session.id, session);
       ws.data.session = session;

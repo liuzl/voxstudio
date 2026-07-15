@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import Iterator, Protocol
 
 from fastapi import FastAPI, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
@@ -51,6 +52,13 @@ class Settings:
 class Synthesizer(Protocol):
     def voices(self) -> list[str]: ...
     def synthesize(self, text: str, voice: str, speed: float) -> Iterator["object"]: ...
+
+
+LOCK_TIMEOUT_SECONDS = float(os.getenv("KOKORO_LOCK_TIMEOUT", "30"))
+
+
+class PipelineBusyError(RuntimeError):
+    """The synthesis pipeline could not be acquired in time."""
 
 
 class KokoroSynthesizer:
@@ -83,12 +91,23 @@ class KokoroSynthesizer:
         return self._voices
 
     def synthesize(self, text: str, voice: str, speed: float):
-        with self._lock:
+        # Not `with self._lock:` across yields — a streaming client that disconnects
+        # mid-reply abandons this generator suspended at a yield, and a plain `with`
+        # then holds the pipeline lock forever: every later request hangs and the
+        # server is wedged until restart (observed live, 2026-07-15). The timeout
+        # turns that worst case into a 503 instead of an infinite queue, and the
+        # finally releases the lock whenever the generator is closed or collected.
+        if not self._lock.acquire(timeout=LOCK_TIMEOUT_SECONDS):
+            raise PipelineBusyError(
+                f"synthesis pipeline still busy after {LOCK_TIMEOUT_SECONDS}s")
+        try:
             for result in self._pipeline(text, voice=voice, speed=speed):
                 audio = result.audio
                 if audio is None:
                     continue
                 yield audio.detach().cpu()
+        finally:
+            self._lock.release()
 
 
 class SpeechRequest(BaseModel):
@@ -162,19 +181,49 @@ def create_app(synthesizer: Synthesizer | None = None, settings: Settings | None
     async def voices() -> JSONResponse:
         return JSONResponse({"voices": [{"id": name} for name in app.state.synthesizer.voices()]})
 
+    def busy(error: PipelineBusyError) -> HTTPException:
+        return HTTPException(503, {"error": {"code": "pipeline_busy",
+            "message": str(error), "type": "server_error"}})
+
     @app.post("/v1/audio/speech")
     async def speech(request: SpeechRequest):
         if request.stream:
-            def pcm():
-                for piece in pieces(request):
-                    yield piece.numpy().astype("<f4").tobytes()
+            # Prime the first segment before the response starts, so lock timeouts
+            # surface as a real 503 instead of a broken 200 stream.
+            iterator = pieces(request)
+            sentinel = object()
+            try:
+                first = await run_in_threadpool(next, iterator, sentinel)
+            except PipelineBusyError as error:
+                raise busy(error)
+            except BaseException:
+                await run_in_threadpool(iterator.close)
+                raise
+
+            # An async generator, not a sync one: Starlette closes async body
+            # iterators deterministically when the client disconnects, and the
+            # finally below closes the underlying synthesis generator — which is
+            # what releases the pipeline lock. A sync generator abandoned in the
+            # threadpool kept the lock across its suspended `with`, and the server
+            # was wedged until restart.
+            async def pcm():
+                piece = first
+                try:
+                    while piece is not sentinel:
+                        yield piece.numpy().astype("<f4").tobytes()
+                        piece = await run_in_threadpool(next, iterator, sentinel)
+                finally:
+                    await run_in_threadpool(iterator.close)
             return StreamingResponse(pcm(), media_type="audio/pcm",
                                      headers={"X-Sample-Rate": str(resolved.output_rate),
                                               "X-Sample-Format": "f32le"})
         import numpy
         import soundfile
 
-        collected = [piece.numpy() for piece in pieces(request)]
+        try:
+            collected = [piece.numpy() for piece in pieces(request)]
+        except PipelineBusyError as error:
+            raise busy(error)
         if not collected:
             raise HTTPException(500, {"error": {"code": "no_audio",
                 "message": "synthesis produced no audio", "type": "server_error"}})

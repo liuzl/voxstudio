@@ -1,12 +1,14 @@
 """Contract tests over a fake synthesizer: no model download, no torch inference."""
 
 import struct
+import threading
 
 import pytest
 import torch
 from fastapi.testclient import TestClient
 
-from server_kokoro import Settings, create_app
+import server_kokoro
+from server_kokoro import KokoroSynthesizer, Settings, create_app
 
 
 class FakeSynthesizer:
@@ -83,3 +85,65 @@ def test_default_voice_applies_and_unknown_voice_is_rejected(client):
 def test_rejects_empty_input(client):
     session, _ = client
     assert session.post("/v1/audio/speech", json={"input": "   "}).status_code == 400
+
+
+class _Segment:
+    def __init__(self, audio):
+        self.audio = audio
+
+
+class LockedFakeSynthesizer(KokoroSynthesizer):
+    """The real synthesize() — real lock, real generator — over a fake pipeline."""
+
+    def __init__(self, segments=3):
+        self._lock = threading.Lock()
+        self._voices = ["zf_001"]
+        self._segments = segments
+
+        def pipeline(text, voice, speed):
+            for _ in range(self._segments):
+                yield _Segment(torch.full((240,), 0.25))
+
+        self._pipeline = pipeline
+
+    @property
+    def lock(self):
+        return self._lock
+
+
+def locked_client():
+    synthesizer = LockedFakeSynthesizer()
+    app = create_app(synthesizer=synthesizer, settings=SETTINGS)
+    return TestClient(app), synthesizer
+
+
+def test_abandoned_stream_releases_the_pipeline_lock(monkeypatch):
+    # A barge-in aborts the TTS stream mid-reply. The abandoned generator must not
+    # keep the pipeline lock — that exact leak wedged the live server until restart
+    # (every later request queued forever behind a suspended `with`).
+    monkeypatch.setattr(server_kokoro, "LOCK_TIMEOUT_SECONDS", 1.0)
+    with locked_client()[0] as session:
+        with session.stream("POST", "/v1/audio/speech",
+                            json={"input": "第一句。第二句。第三句。", "stream": True}) as response:
+            assert response.status_code == 200
+            next(response.iter_bytes(960))  # first segment only, then disconnect
+
+        # The lock must be free again: a full request completes instead of timing out.
+        follow_up = session.post("/v1/audio/speech", json={"input": "还在吗"})
+        assert follow_up.status_code == 200
+        assert follow_up.headers["content-type"] == "audio/wav"
+
+
+def test_busy_pipeline_returns_503_instead_of_hanging(monkeypatch):
+    monkeypatch.setattr(server_kokoro, "LOCK_TIMEOUT_SECONDS", 0.05)
+    client, synthesizer = locked_client()
+    with client as session:
+        assert synthesizer.lock.acquire()  # someone is wedged mid-synthesis
+        try:
+            streaming = session.post("/v1/audio/speech", json={"input": "好", "stream": True})
+            assert streaming.status_code == 503
+            batch = session.post("/v1/audio/speech", json={"input": "好"})
+            assert batch.status_code == 503
+        finally:
+            synthesizer.lock.release()
+        assert session.post("/v1/audio/speech", json={"input": "好"}).status_code == 200
