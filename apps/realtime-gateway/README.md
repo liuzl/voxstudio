@@ -31,7 +31,7 @@ Control is JSON text frames; media is binary frames, never base64 JSON.
   the preceding `playback.format` event.
 - **Commands** (all carry `v` and a unique `idempotencyKey`): `session.start {options}`,
   `session.attach {sessionId}`, `session.snapshot.request`, `turn.interrupt {turnId}`,
-  `session.stop`.
+  `playback.complete {turnId}`, `session.stop`.
 - **Events** all carry `v`, a monotonic `sequence`, `sessionId`, and `timestampMs`: the
   duplex kernel's events (`session.state`, `turn.*`, `vad.end`, `turn.timing`,
   `audio.*`) plus `transcript.final`, `response.text.delta|final`, `playback.format`,
@@ -47,7 +47,11 @@ turn is rejected as `stale_turn`, so a stale stop can never kill the reply now p
 `session.start` options mirror `vox listen`: `language`, `system`, `maxTokens`, `voice`,
 `bargeIn` (default false — protected mode until the endpoint has negotiated AEC),
 `turnTaking` (default speculative), `reopenMs`, `vad` (silero where available, loud
-degrade to energy), `threshold`, `silenceMs`, `minSpeechMs`.
+degrade to energy), `threshold`, `silenceMs`, `minSpeechMs`, plus `playbackAck`: with it,
+the endpoint owns the audible-playback clock — after the last piece is sent the turn stays
+`speaking` until the client's `playback.complete` for that turn (capped by the audio's own
+duration plus slack), so speech during the still-audible tail barges in instead of opening
+a turn beside the playing reply.
 
 ## REST facade
 
@@ -56,10 +60,10 @@ degrade to energy), `threshold`, `silenceMs`, `minSpeechMs`.
 `GET /healthz` reports liveness. Body and status pass through; engine-identifying headers
 do not.
 
-## Known Phase 1 limits
+## Known limits
 
-- The gateway cannot hear the client's speaker: `playback.ended` means the last piece was
-  sent, not audibly finished. The browser endpoint owns the audible-playback clock — a
-  Phase 2 (Conversation panel) gate item.
+- Without `playbackAck`, `playback.ended` means the last piece was sent, not audibly
+  finished; endpoints that render audio should always opt in (the web Conversation panel
+  does).
 - Events emitted while no socket is attached are dropped by design; the snapshot is the
   resync mechanism.

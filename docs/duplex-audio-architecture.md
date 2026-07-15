@@ -344,12 +344,15 @@ A REST facade (`/v1/audio/speech`, `/v1/audio/transcriptions`,
 engines with credentials injected server-side, so engine addresses and keys
 never reach a browser. The gateway binds loopback by default and takes an
 optional bearer token; exposure is a deployment decision (a tunnel, Access at
-the door). Two Phase 1 limits are explicit: `playback.ended` means the last
-piece was sent, not audibly finished — the browser endpoint owns the
-audible-playback clock (a Web Studio Phase 2 gate item) — and events emitted
-while no socket is attached are dropped by design, the snapshot being the
-resync mechanism. Bounded input buffering (30s, oldest-first drop) means the
-gateway never retains an unbounded live recording while an engine stalls.
+the door). The endpoint owns the audible-playback clock: with the
+`playbackAck` session option, the turn stays `speaking` after the last piece
+is sent until the client's `playback.complete` command for that turn (capped
+by the audio's own duration plus slack, so a silent client cannot wedge the
+session) — the same lesson the CLI's playback-clock fix taught, expressed as
+protocol. Events emitted while no socket is attached are dropped by design,
+the snapshot being the resync mechanism. Bounded input buffering (30s,
+oldest-first drop) means the gateway never retains an unbounded live
+recording while an engine stalls.
 
 ## Provider requirements
 

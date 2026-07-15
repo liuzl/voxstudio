@@ -39,6 +39,7 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | `core/` | Transitional Python parity implementation and research-facing core |
 | `apps/cli/` | Compiled TypeScript `vox` CLI plus the transitional Python fallback |
 | `apps/realtime-gateway/` | Web Studio server: the duplex session protocol over WebSocket plus a credential-hiding REST facade |
+| `apps/web/` | The browser studio (React + Tailwind + Zustand): live conversation panel first, other panels phased |
 | `docs/` | Product design docs |
 
 The product workspace uses Bun 1.3.14. Shared packages use Web APIs and remain independent
@@ -158,10 +159,12 @@ energy detector otherwise. The conversation loop is shared: `packages/conversati
 both `vox listen` and the realtime gateway, so the certified turn-taking and barge-in
 lifecycle has one implementation. The gateway (`apps/realtime-gateway`, Web Studio Phase 1)
 speaks the versioned session protocol over WebSocket — binary PCM media, snapshot reconnect,
-idempotent commands — plus a REST facade that keeps engine addresses and credentials
-server-side. Route-change handling, release packaging of the helper and the ONNX runtime,
-and the browser Conversation panel (Web Studio Phase 2) remain separate measured delivery
-phases.
+idempotent commands, an endpoint-owned audible-playback clock — plus a REST facade that
+keeps engine addresses and credentials server-side. The browser studio (`apps/web`) ships
+the live conversation panel on top of it: worklet microphone capture, gapless streamed
+playback, captions with turn state and per-turn timing, and the negotiated AEC capability
+snapshot. Its real-browser double-talk/barge-in gate, route-change handling, and release
+packaging of the helper and the ONNX runtime remain separate measured delivery phases.
 
 ## Related
 

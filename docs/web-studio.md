@@ -93,6 +93,15 @@ below rather than relitigated per feature.
 2. **Conversation panel**: browser endpoint with `getUserMedia` AEC. Gate: the duplex
    doc's browser quality measurements (negotiated-capability snapshot, double-talk and
    barge-in behavior on a real browser/route) — the same discipline as the macOS gate.
+   **Implemented 2026-07-15, gate pending.** `apps/web` (React + Tailwind + Zustand)
+   ships the studio shell with 对话 as the opening tab: AudioWorklet microphone capture
+   resampled to the protocol's 16kHz frames, gapless streamed playback, live captions
+   with turn/reopen/false-barge-in state and per-turn timing chips, mute and manual
+   stop, and the negotiated AEC/NS/AGC snapshot surfaced in 对话 and 设置. The endpoint
+   owns the audible-playback clock via the protocol's `playbackAck`/`playback.complete`
+   (a reply stays interruptible through its audible tail). The client/resampler/playback
+   math is unit-tested; the real-browser double-talk and barge-in measurement remains
+   before the panel is declared supported.
 3. **Generate + Voices panels**: REST facade parity with `say`/`voices`/`profiles`.
    Gate: every CLI verb reachable and producing identical artifacts (fingerprints match).
 4. **Library panel**: SQLite persistence, capture ingest from gateway sessions,

@@ -107,6 +107,9 @@ export class GatewaySession {
   private graceTimer: ReturnType<typeof setTimeout> | undefined;
   private conversation: Promise<void> | undefined;
   private stopped = false;
+  private playbackAck = false;
+  private playbackWaiter: { turnId: string; resolve: () => void } | undefined;
+  private lastAckedTurnId: string | undefined;
 
   constructor(options: GatewaySessionOptions) {
     this.options = options;
@@ -127,6 +130,7 @@ export class GatewaySession {
 
   async start(start: SessionStartOptions, sink: EventSink): Promise<void> {
     this.sink = sink;
+    this.playbackAck = start.playbackAck ?? false;
     const vad = await this.createVad(start);
     const turnTaking = start.turnTaking ?? "speculative";
     const config = this.options.config;
@@ -223,6 +227,17 @@ export class GatewaySession {
         this.duplex.interrupt("cancel");
         return;
       }
+      case "playback.complete":
+        // The endpoint's audible clock: the reply for this turn has finished rendering.
+        // Arrival before the server-side close() starts waiting is a legal race, so the
+        // ack is remembered rather than required to find a waiter.
+        this.accept(command);
+        this.lastAckedTurnId = command.turnId;
+        if (this.playbackWaiter?.turnId === command.turnId) {
+          this.playbackWaiter.resolve();
+          this.playbackWaiter = undefined;
+        }
+        return;
       case "session.stop":
         this.accept(command);
         this.stop();
@@ -321,20 +336,47 @@ export class GatewaySession {
 
   private createPlayer(turnId: string, revision: number): ConversationPlayer {
     let announcedRate: number | undefined;
+    let sentMs = 0;
     return {
       write: async audio => {
         if (audio.sampleRate !== announcedRate) {
           announcedRate = audio.sampleRate;
           this.emit({ type: "playback.format", turnId, revision, sampleRate: audio.sampleRate });
         }
+        sentMs += audio.samples.length * 1_000 / audio.sampleRate;
         const bytes = new Uint8Array(audio.samples.buffer, audio.samples.byteOffset, audio.samples.byteLength);
         this.sink?.send(bytes);
       },
-      // The gateway cannot hear the client's speaker: audible-end accounting belongs to
-      // the endpoint (the browser Conversation panel's Phase 2 gate), so close resolves
-      // when the last piece has been sent.
-      close: async () => { this.emit({ type: "playback.ended", turnId }); },
-      abort: async () => { this.emit({ type: "playback.interrupted", turnId }); },
+      // The gateway cannot hear the client's speaker, so the audible clock belongs to the
+      // endpoint. With playbackAck the turn stays `speaking` until the client reports the
+      // reply finished rendering — capped by the audio's own duration plus slack, so a
+      // silent client cannot wedge the session. Without it, close resolves when the last
+      // piece has been sent.
+      close: async () => {
+        this.emit({ type: "playback.ended", turnId });
+        if (!this.playbackAck || this.stopped) return;
+        if (this.lastAckedTurnId === turnId) return;
+        await new Promise<void>(resolve => {
+          const timer = setTimeout(resolve, Math.ceil(sentMs) + 5_000);
+          this.playbackWaiter = {
+            turnId,
+            resolve: () => {
+              clearTimeout(timer);
+              resolve();
+            },
+          };
+        });
+        if (this.playbackWaiter?.turnId === turnId) this.playbackWaiter = undefined;
+      },
+      abort: async () => {
+        // Interruption or shutdown while waiting for the ack must release the wait: the
+        // reply is dead either way.
+        if (this.playbackWaiter?.turnId === turnId) {
+          this.playbackWaiter.resolve();
+          this.playbackWaiter = undefined;
+        }
+        this.emit({ type: "playback.interrupted", turnId });
+      },
     };
   }
 }

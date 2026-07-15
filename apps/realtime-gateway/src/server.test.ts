@@ -212,6 +212,27 @@ describe("realtime gateway", () => {
     expect(gateway.sessionCount()).toBe(0);
   });
 
+  test("with playbackAck the turn stays speaking until the client reports audible end", async () => {
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0 });
+    const client = new TestClient(gateway.url);
+    await client.ready();
+    client.command({ type: "session.start", idempotencyKey: "start-1", options: { ...startOptions, playbackAck: true } });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "session.snapshot");
+    client.sendPcm(2, 0.2);
+    client.sendPcm(2, 0);
+    await client.until(events => events.some(event => event.type === "playback.ended"), "playback.ended");
+
+    // The last piece was sent, but the client is still rendering: no completion yet.
+    await Bun.sleep(50);
+    expect(client.events.some(event => event.type === "turn.completed")).toBe(false);
+    const ended = client.events.find(event => event.type === "playback.ended");
+    const turnId = ended && "turnId" in ended ? ended.turnId : "";
+
+    client.command({ type: "playback.complete", idempotencyKey: "done-1", turnId });
+    await client.until(events => events.some(event => event.type === "turn.completed"), "turn.completed after ack");
+    client.close();
+  });
+
   test("an expired reconnect grace ends the session and a late attach is rejected", async () => {
     gateway = startGateway({ config, fetch: engineFetch(), port: 0, reconnectGraceMs: 50 });
     const first = new TestClient(gateway.url);

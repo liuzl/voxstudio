@@ -30,6 +30,14 @@ export interface SessionStartOptions {
   threshold?: number;
   silenceMs?: number;
   minSpeechMs?: number;
+  /**
+   * The endpoint owns the audible-playback clock: after the last piece of a reply is sent,
+   * the turn stays `speaking` until the client's `playback.complete` for that turn (or a
+   * duration-derived timeout). Without it the gateway completes when the last piece is
+   * sent — and speech during the still-audible tail would open a fresh turn beside the
+   * playing reply instead of barging in. Default false.
+   */
+  playbackAck?: boolean;
 }
 
 interface CommandBase {
@@ -42,6 +50,7 @@ export type GatewayCommand =
   | (CommandBase & { type: "session.attach"; sessionId: string })
   | (CommandBase & { type: "session.snapshot.request" })
   | (CommandBase & { type: "turn.interrupt"; turnId: string })
+  | (CommandBase & { type: "playback.complete"; turnId: string })
   | (CommandBase & { type: "session.stop" });
 
 export type GatewayCommandType = GatewayCommand["type"];
@@ -109,6 +118,8 @@ function parseStartOptions(value: unknown): SessionStartOptions {
   if (!isRecord(value)) throw new ProtocolError("options must be an object");
   const bargeIn = value.bargeIn;
   if (bargeIn !== undefined && typeof bargeIn !== "boolean") throw new ProtocolError("bargeIn must be a boolean");
+  const playbackAck = value.playbackAck;
+  if (playbackAck !== undefined && typeof playbackAck !== "boolean") throw new ProtocolError("playbackAck must be a boolean");
   const maxTokens = optionalNumber(value, "maxTokens");
   if (maxTokens !== undefined && (!Number.isInteger(maxTokens) || maxTokens === 0)) {
     throw new ProtocolError("maxTokens must be a positive integer");
@@ -128,6 +139,7 @@ function parseStartOptions(value: unknown): SessionStartOptions {
   if (maxTokens !== undefined) options.maxTokens = maxTokens;
   if (voice !== undefined) options.voice = voice;
   if (bargeIn !== undefined) options.bargeIn = bargeIn;
+  if (playbackAck !== undefined) options.playbackAck = playbackAck;
   if (turnTaking !== undefined) options.turnTaking = turnTaking;
   if (reopenMs !== undefined) options.reopenMs = reopenMs;
   if (vad !== undefined) options.vad = vad;
@@ -162,7 +174,8 @@ export function parseCommand(text: string): GatewayCommand {
     case "session.snapshot.request":
     case "session.stop":
       return { v: protocolVersion, type, idempotencyKey };
-    case "turn.interrupt": {
+    case "turn.interrupt":
+    case "playback.complete": {
       const turnId = value.turnId;
       if (typeof turnId !== "string" || !turnId) throw new ProtocolError("turnId must be a non-empty string");
       return { v: protocolVersion, type, idempotencyKey, turnId };

@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink-950: #0b0d10;
+  --color-ink-900: #101318;
+  --color-ink-800: #171b22;
+  --color-ink-700: #232936;
+  --color-ink-500: #4a5468;
+  --color-ink-300: #9aa5bb;
+  --color-ink-100: #e6eaf2;
+  --color-accent-500: #38bdf8;
+  --color-accent-600: #0ea5e9;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background-color: var(--color-ink-950);
+  color: var(--color-ink-100);
+  font-family: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif;
+}

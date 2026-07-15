@@ -1,15 +1,15 @@
 {
   "compilerOptions": {
     "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "Preserve",
     "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
     "resolveJsonModule": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
-    "noEmit": true,
-    "types": ["bun"]
+    "noEmit": true
   },
-  "include": ["packages/**/*.ts", "apps/**/*.ts", "platforms/**/*.ts"],
-  "exclude": ["apps/web"]
+  "include": ["src"]
 }

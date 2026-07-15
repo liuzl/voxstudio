@@ -6,7 +6,10 @@
   "bin": {
     "vox-gateway": "./src/main.ts"
   },
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./protocol": "./src/protocol.ts"
+  },
   "dependencies": {
     "@voxstudio/audio": "workspace:*",
     "@voxstudio/clients": "workspace:*",

@@ -1,0 +1,96 @@
+import type { GatewayEvent } from "@voxstudio/realtime-gateway/protocol";
+import { MicCapture, SpeakerOutput } from "./lib/audio";
+import { GatewayClient } from "./lib/client";
+import { useStudio } from "./store";
+
+/**
+ * One live conversation: microphone, gateway socket, and speaker, bound to the store.
+ * Created on the user's start gesture (browser audio requires one) and torn down on stop.
+ */
+export class ConversationController {
+  private client: GatewayClient | undefined;
+  private mic: MicCapture | undefined;
+  private speaker: SpeakerOutput | undefined;
+  private playbackTurnId: string | undefined;
+
+  async start(): Promise<void> {
+    const store = useStudio.getState();
+    const speaker = new SpeakerOutput();
+    await speaker.resume();
+    this.speaker = speaker;
+    const client = new GatewayClient({
+      url: realtimeUrl(),
+      startOptions: {
+        language: store.language,
+        ...(store.voice ? { voice: store.voice } : {}),
+        // The browser endpoint negotiates AEC in getUserMedia, so barge-in is on and the
+        // endpoint owns the audible-playback clock.
+        bargeIn: true,
+        playbackAck: true,
+        turnTaking: "speculative",
+      },
+      onEvent: event => this.handleEvent(event),
+      onAudio: samples => this.speaker?.enqueue(samples),
+      onConnectionChange: state => useStudio.getState().setConnection(state),
+    });
+    this.client = client;
+    const mic = await MicCapture.start(samples => client.sendAudio(samples));
+    this.mic = mic;
+    useStudio.getState().setCapability(mic.capability());
+    client.connect();
+    useStudio.getState().setActive(true);
+  }
+
+  setMuted(muted: boolean): void {
+    this.mic?.setMuted(muted);
+    useStudio.getState().setMuted(muted);
+  }
+
+  /** Manual stop of the currently speaking reply — the button next to talking over it. */
+  interruptPlayback(): void {
+    const speaking = [...useStudio.getState().turns].reverse().find(turn => turn.status === "speaking");
+    if (speaking) this.client?.interruptTurn(speaking.id);
+  }
+
+  async stop(): Promise<void> {
+    this.client?.stopSession();
+    this.client = undefined;
+    await this.mic?.stop();
+    this.mic = undefined;
+    await this.speaker?.close();
+    this.speaker = undefined;
+    useStudio.getState().resetSession();
+  }
+
+  private handleEvent(event: GatewayEvent): void {
+    const store = useStudio.getState();
+    store.apply(event);
+    switch (event.type) {
+      case "playback.format":
+        this.playbackTurnId = event.turnId;
+        this.speaker?.setFormat(event.sampleRate);
+        return;
+      case "playback.ended": {
+        // The server sent the last piece; the audible clock is ours. Ack when the playhead
+        // passes the end of what was scheduled.
+        const turnId = event.turnId;
+        this.speaker?.notifyWhenDrained(() => {
+          if (this.playbackTurnId === turnId) this.client?.playbackComplete(turnId);
+        });
+        return;
+      }
+      case "playback.interrupted":
+      case "turn.interrupted":
+        this.speaker?.stop();
+        return;
+      default:
+        return;
+    }
+  }
+}
+
+function realtimeUrl(): string {
+  const base = new URL("/v1/realtime", window.location.href);
+  base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
+  return base.toString();
+}
