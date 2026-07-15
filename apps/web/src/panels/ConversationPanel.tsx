@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { conversationControls, startConversation, stopConversation } from "../conversation";
+import { listVoices } from "../lib/api";
 import { useStudio, type TurnView } from "../store";
 
 const stateLabels: Record<string, { text: string; tone: string }> = {
@@ -78,9 +79,26 @@ function TurnCard({ turn }: { turn: TurnView }) {
 
 function StartCard({ starting, onStart }: { starting: boolean; onStart: () => void }) {
   const voice = useStudio(state => state.voice);
+  const voiceEngine = useStudio(state => state.voiceEngine);
   const language = useStudio(state => state.language);
   const setVoice = useStudio(state => state.setVoice);
   const setLanguage = useStudio(state => state.setLanguage);
+  const voicesList = useStudio(state => state.voicesList);
+  const setVoicesList = useStudio(state => state.setVoicesList);
+
+  useEffect(() => {
+    if (voicesList.length === 0) listVoices().then(setVoicesList).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const byEngine = useMemo(() => {
+    const groups = new Map<string, string[]>();
+    for (const entry of voicesList) {
+      groups.set(entry.engine, [...(groups.get(entry.engine) ?? []), entry.id]);
+    }
+    return [...groups.entries()];
+  }, [voicesList]);
+
   return (
     <div className="mx-auto flex h-full max-w-sm flex-col items-center justify-center gap-6 px-6 text-center">
       <button
@@ -92,7 +110,7 @@ function StartCard({ starting, onStart }: { starting: boolean; onStart: () => vo
         {starting ? "…" : "🎙"}
       </button>
       <div className="text-base font-medium">{starting ? "启动中…" : "开始对话"}</div>
-      <div className="flex w-full items-center justify-center gap-3">
+      <div className="flex w-full flex-wrap items-center justify-center gap-3">
         <label className="flex items-center gap-2 text-xs text-ink-300">
           语言
           <select
@@ -107,12 +125,27 @@ function StartCard({ starting, onStart }: { starting: boolean; onStart: () => vo
         </label>
         <label className="flex items-center gap-2 text-xs text-ink-300">
           音色
-          <input
-            value={voice}
-            onChange={event => setVoice(event.target.value)}
-            placeholder="默认"
-            className="w-24 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100"
-          />
+          <select
+            value={voice ? `${voiceEngine}::${voice}` : ""}
+            onChange={event => {
+              const [engine, id] = event.target.value.split("::");
+              // Choosing a voice routes the session's TTS to its owning engine —
+              // a clone voice moves the conversation onto the quality line.
+              setVoice(id ?? "", engine || undefined);
+            }}
+            className="max-w-44 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100"
+          >
+            <option value="">默认（{byEngine[0]?.[0] || "引擎默认"}）</option>
+            {byEngine.map(([engine, ids]) => (
+              <optgroup key={engine} label={engine}>
+                {ids.map(id => (
+                  <option key={`${engine}::${id}`} value={`${engine}::${id}`}>
+                    {id}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
         </label>
       </div>
       <p className="text-xs leading-relaxed text-ink-500">

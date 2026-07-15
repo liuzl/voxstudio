@@ -23,6 +23,7 @@ export class ConversationController {
       startOptions: {
         language: store.language,
         ...(store.voice ? { voice: store.voice } : {}),
+        ...(store.voiceEngine ? { ttsEngine: store.voiceEngine } : {}),
         // The browser endpoint negotiates AEC in getUserMedia, so barge-in is on and the
         // endpoint owns the audible-playback clock.
         bargeIn: true,

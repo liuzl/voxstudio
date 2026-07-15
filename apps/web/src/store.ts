@@ -41,6 +41,8 @@ interface StudioState {
   notices: NoticeView[];
   capability: EndpointCapability | undefined;
   voice: string;
+  /** The engine owning the conversation voice; routes the session's TTS when set. */
+  voiceEngine: string;
   language: string;
   /** Generation takes, newest first. Object URLs are revoked on eviction/removal. */
   takes: TakeView[];
@@ -57,7 +59,7 @@ interface StudioState {
   setActive(active: boolean): void;
   setMuted(muted: boolean): void;
   setCapability(capability: EndpointCapability): void;
-  setVoice(voice: string): void;
+  setVoice(voice: string, engine?: string): void;
   setLanguage(language: string): void;
   notice(kind: NoticeView["kind"], text: string): void;
   apply(event: GatewayEvent): void;
@@ -178,6 +180,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   notices: [],
   capability: undefined,
   voice: "",
+  voiceEngine: "",
   language: "zh",
   takes: [],
   voicesList: [],
@@ -202,7 +205,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   setActive: active => set({ active }),
   setMuted: muted => set({ muted }),
   setCapability: capability => set({ capability }),
-  setVoice: voice => set({ voice }),
+  setVoice: (voice, engine) => set({ voice, voiceEngine: engine ?? "" }),
   setLanguage: language => set({ language }),
   notice: (kind, text) =>
     set(state => ({ notices: [...state.notices, { at: Date.now(), kind, text }].slice(-maxNotices) })),
