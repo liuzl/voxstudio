@@ -34,6 +34,18 @@ export async function deleteVoice(id: string): Promise<void> {
   if (!response.ok) await fail(response, "删除音色");
 }
 
+/** Transcribe a recording through the facade — prefills the reference transcript. */
+export async function transcribe(audio: File, language = "auto"): Promise<string> {
+  const form = new FormData();
+  form.set("model", "default");
+  form.set("language", language);
+  form.set("file", audio);
+  const response = await fetch("/v1/audio/transcriptions", { method: "POST", body: form });
+  if (!response.ok) await fail(response, "识别");
+  const payload = await response.json() as { text?: string };
+  return (payload.text ?? "").trim();
+}
+
 export interface SynthesisParams {
   input: string;
   voice: string;

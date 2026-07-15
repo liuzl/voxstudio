@@ -99,6 +99,14 @@ const frameSamples = 320; // 20ms at 16kHz, the granularity the CLI capture uses
  * AudioWorklet tap, and resampling to the protocol's 16kHz mono float32 frames. Mute
  * disables the track (the browser shows it) and drops frames.
  */
+export interface MicCaptureOptions {
+  /**
+   * Request AEC/NS/AGC (the conversation route). Off for reference recording: a voice
+   * sample wants the microphone's unprocessed signal, not one shaped for telephony.
+   */
+  processing?: boolean;
+}
+
 export class MicCapture {
   private readonly context: AudioContext;
   private readonly stream: MediaStream;
@@ -128,12 +136,13 @@ export class MicCapture {
     };
   }
 
-  static async start(onFrame: (samples: Float32Array) => void): Promise<MicCapture> {
+  static async start(onFrame: (samples: Float32Array) => void, options: MicCaptureOptions = {}): Promise<MicCapture> {
+    const processing = options.processing ?? true;
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
+        echoCancellation: processing,
+        noiseSuppression: processing,
+        autoGainControl: processing,
         channelCount: 1,
       },
     });
@@ -173,6 +182,47 @@ export class MicCapture {
     this.node.disconnect();
     for (const track of this.stream.getTracks()) track.stop();
     await this.context.close();
+  }
+}
+
+/**
+ * Reference-audio recording for voice registration: the unprocessed microphone at the
+ * protocol's 16kHz mono, collected until stop. The web counterpart of
+ * `vox voices add <id> --record`.
+ */
+export class VoiceRecorder {
+  private readonly mic: MicCapture;
+  private readonly chunks: Float32Array[] = [];
+  private readonly startedAtMs = Date.now();
+
+  private constructor(mic: MicCapture) {
+    this.mic = mic;
+  }
+
+  static async start(): Promise<VoiceRecorder> {
+    let recorder: VoiceRecorder | undefined;
+    const mic = await MicCapture.start(samples => {
+      recorder?.chunks.push(samples);
+    }, { processing: false });
+    recorder = new VoiceRecorder(mic);
+    return recorder;
+  }
+
+  get elapsedMs(): number {
+    return Date.now() - this.startedAtMs;
+  }
+
+  /** Stop the microphone and return the recording as mono float32 at 16kHz. */
+  async stop(): Promise<Float32Array> {
+    await this.mic.stop();
+    const total = this.chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    const output = new Float32Array(total);
+    let offset = 0;
+    for (const chunk of this.chunks) {
+      output.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return output;
   }
 }
 

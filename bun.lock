@@ -47,6 +47,7 @@
       "name": "@voxstudio/web",
       "version": "0.1.0",
       "dependencies": {
+        "@voxstudio/audio": "workspace:*",
         "@voxstudio/realtime-gateway": "workspace:*",
         "@voxstudio/text": "workspace:*",
         "react": "^19.2.0",

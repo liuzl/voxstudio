@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@voxstudio/audio": "workspace:*",
     "@voxstudio/realtime-gateway": "workspace:*",
     "@voxstudio/text": "workspace:*",
     "react": "^19.2.0",
