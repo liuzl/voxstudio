@@ -220,21 +220,24 @@ export function ConversationPanel() {
         )}
       </header>
 
-      <div ref={scroller} className="flex-1 space-y-5 overflow-y-auto px-4 py-5 md:px-6">
-        {!active && turns.length === 0 ? (
-          <StartCard starting={starting} onStart={() => void start()} />
-        ) : (
-          <>
-            {turns.length === 0 && (
-              <div className="mx-auto mt-16 max-w-md text-center text-sm leading-relaxed text-ink-500">
-                开口即说 —— 断句、识别、回答全自动；回答播放时直接说话就能打断。
-              </div>
-            )}
-            {turns.map(turn => (
-              <TurnCard key={turn.id} turn={turn} />
-            ))}
-          </>
-        )}
+      <div ref={scroller} className="flex-1 overflow-y-auto px-4 py-5 md:px-6">
+        {/* Same content width as every other tab, so switching tabs doesn't reflow the eye. */}
+        <div className="mx-auto h-full max-w-6xl space-y-5">
+          {!active && turns.length === 0 ? (
+            <StartCard starting={starting} onStart={() => void start()} />
+          ) : (
+            <>
+              {turns.length === 0 && (
+                <div className="mx-auto mt-16 max-w-md text-center text-sm leading-relaxed text-ink-500">
+                  开口即说 —— 断句、识别、回答全自动；回答播放时直接说话就能打断。
+                </div>
+              )}
+              {turns.map(turn => (
+                <TurnCard key={turn.id} turn={turn} />
+              ))}
+            </>
+          )}
+        </div>
       </div>
 
       <footer className="border-t border-ink-700 px-4 py-2 md:px-6">

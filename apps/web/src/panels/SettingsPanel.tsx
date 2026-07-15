@@ -89,7 +89,7 @@ export function SettingsPanel() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6 px-4 py-6 md:space-y-8 md:px-8 md:py-10">
+    <div className="mx-auto max-w-6xl space-y-6 px-4 py-6 md:space-y-8 md:px-8 md:py-10">
       <h1 className="text-2xl font-semibold">设置</h1>
 
       <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
