@@ -41,6 +41,7 @@ export function VoicesPanel() {
   const [registering, setRegistering] = useState(false);
   const [newId, setNewId] = useState("");
   const [newText, setNewText] = useState("");
+  const [showRegister, setShowRegister] = useState(false);
   const [source, setSource] = useState<"upload" | "record">("upload");
   const [recorder, setRecorder] = useState<VoiceRecorder | undefined>(undefined);
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -194,7 +195,7 @@ export function VoicesPanel() {
       || voice.engine.toLowerCase().includes(query.toLowerCase())));
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6 px-4 py-6 md:px-8 md:py-10">
+    <div className="mx-auto max-w-4xl space-y-5 px-4 py-6 md:px-8 md:py-10">
       <h1 className="text-2xl font-semibold">音色</h1>
       {status && (
         <p className={`text-xs ${status.kind === "error" ? "text-red-300" : "text-emerald-300"}`}>{status.text}</p>
@@ -212,6 +213,14 @@ export function VoicesPanel() {
             placeholder="搜索…"
             className="w-32 rounded border border-ink-700 bg-ink-800 px-2 py-1 text-xs text-ink-100 placeholder:text-ink-500"
           />
+          <button
+            onClick={() => setShowRegister(value => !value)}
+            className={`rounded-lg border px-3 py-1 text-xs ${
+              showRegister ? "border-accent-500/60 text-accent-500" : "border-ink-700 text-ink-300 hover:text-ink-100"
+            }`}
+          >
+            {showRegister ? "收起注册" : "＋ 注册音色"}
+          </button>
         </div>
         {categories.length > 1 && (
           <div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -273,14 +282,12 @@ export function VoicesPanel() {
           </div>
         </div>
         <p className="mt-2 text-[11px] text-ink-500">点音色名试听；「用」发送到生成页。</p>
-      </section>
-
-      <section className="rounded-xl border border-ink-700 bg-ink-900 p-4 md:p-5">
-        <h2 className="text-sm font-medium text-ink-300">注册音色（克隆型引擎）</h2>
-        <p className="mt-1 text-[11px] text-ink-500">
-          5–15 秒干净的参考音频（上传或现场录制），配上与音频逐字对应的文本；逐字稿可先用 ASR 识别再修正。
-        </p>
-        <div className="mt-3 flex flex-col gap-3">
+        {showRegister && (
+          <div className="mt-3 rounded-lg border border-ink-700/60 bg-ink-800/40 p-3">
+            <p className="text-[11px] text-ink-500">
+              注册到克隆型引擎：5–15 秒干净参考音（上传或现场录制）+ 与音频逐字对应的文本；逐字稿可先用 ASR 识别再修正。
+            </p>
+            <div className="mt-2 flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-3">
             <input
               value={newId}
@@ -362,6 +369,9 @@ export function VoicesPanel() {
             </button>
           </div>
         </div>
+          </div>
+        )}
+
       </section>
 
       <ProfilesSection
@@ -538,7 +548,7 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning }: {
           const meta = profile.designProfile;
           const auditState = auditOf(profile);
           return (
-            <div key={`${profile.engine}/${profile.id}`} className="rounded-lg border border-ink-700/60 bg-ink-800/40 p-3">
+            <div key={`${profile.engine}/${profile.id}`} className="rounded-lg border border-ink-700/60 bg-ink-800/40 px-3 py-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-sm font-medium">{profile.id}</span>
                 <span className={`rounded-full px-2 py-0.5 text-[10px] ${auditState.tone}`} title={auditState.title}>
@@ -557,13 +567,9 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning }: {
                   {verifying === profile.id ? "验证中…" : "验证"}
                 </button>
               </div>
-              <p className="mt-1.5 text-xs text-ink-300">{meta?.description}</p>
-              <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px] text-ink-500">
-                <span className="rounded bg-ink-800 px-1.5 py-0.5">seed {meta?.seed}</span>
-                <span className="rounded bg-ink-800 px-1.5 py-0.5">cfg {meta?.cfg_value}</span>
-                <span className="rounded bg-ink-800 px-1.5 py-0.5">timesteps {meta?.timesteps}</span>
-                {meta?.model && <span className="rounded bg-ink-800 px-1.5 py-0.5">{meta.model}</span>}
-              </div>
+              <p className="mt-1 truncate text-[11px] text-ink-500" title={`${meta?.description ?? ""} · ${meta?.model ?? ""}`}>
+                {meta?.description} <span className="text-ink-500/70">· seed {meta?.seed} · cfg {meta?.cfg_value} · timesteps {meta?.timesteps}{meta?.model ? ` · ${meta.model}` : ""}</span>
+              </p>
             </div>
           );
         })}
