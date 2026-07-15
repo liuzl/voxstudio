@@ -15,13 +15,16 @@ core service ─┼─ MCP server   (agent voice)
    │  core = I/O loop + voice profiles + long-text chunking + persona/refine
    │
    └── engines (OpenAI-compatible; hosted↔local = base-URL swap)
-         ├─ ASR   parakeet.cpp        (mudler/parakeet.cpp)
-         ├─ TTS   VoxCPM2 PyTorch     (this repo: engines/voxcpm2-server)  ← quality-first
-         │        VoxCPM.cpp          (liuzl/VoxCPM.cpp — offline/portable fallback)
+         ├─ ASR   SenseVoice / FunASR  realtime slot (engines/funasr)
+         │        parakeet.cpp         (mudler/parakeet.cpp)
+         │        moss-transcribe      longform + diarization (engines/moss-transcribe)
+         ├─ TTS   VoxCPM2 PyTorch      quality first: clone + design (engines/voxcpm2-server)
+         │        kokoro               conversation fast lane (engines/kokoro)
+         │        VoxCPM.cpp           (liuzl/VoxCPM.cpp — offline/portable fallback)
          └─ LLM   llama.cpp (Gemma)
 ```
 
-The core never talks to a specific engine — only to the OpenAI-compatible contract (`/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/chat/completions`, plus a `/v1/voices` extension). Switching an engine between a remote GPU host and a local machine is a base-URL change.
+The core never talks to a specific engine — only to the OpenAI-compatible contract (`/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/chat/completions`, plus the `/v1/voices`, `/v1/design-profiles`, and `/v1/engines` extensions). Switching an engine between a remote GPU host and a local machine is a base-URL change, and engines are **named instances** in a registry — multiple per kind, assigned to product roles, routed by capability tags (clone/design/preset/fast/…) or pinned per request. See [docs/engine-registry.md](./docs/engine-registry.md).
 
 ## Layout
 
@@ -39,7 +42,7 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | `core/` | Transitional Python parity implementation and research-facing core |
 | `apps/cli/` | Compiled TypeScript `vox` CLI plus the transitional Python fallback |
 | `apps/realtime-gateway/` | Web Studio server: the duplex session protocol over WebSocket plus a credential-hiding REST facade |
-| `apps/web/` | The browser studio (React + Tailwind + Zustand): live conversation panel first, other panels phased |
+| `apps/web/` | The browser studio (React + Tailwind + Zustand): conversation, generation, voice bank + design profiles, and engine settings panels |
 | `docs/` | Product design docs |
 
 The product workspace uses Bun 1.3.14. Shared packages use Web APIs and remain independent
@@ -132,8 +135,10 @@ phases — is specified in [docs/web-studio.md](./docs/web-studio.md).
 
 | Layer | Engine |
 |---|---|
-| ASR | parakeet.cpp (`nemotron-3.5-asr-streaming-0.6b`, Mandarin-capable) |
-| TTS | **VoxCPM2 PyTorch** (this repo) — 48kHz, 30 languages + 9 Chinese dialects, voice cloning + zero-shot voice design |
+| ASR (realtime slot) | SenseVoice-Small via FunASR — Mandarin-first, zh/en code-switch; parakeet.cpp (`nemotron-3.5-asr-streaming-0.6b`) as the alternative |
+| ASR (longform) | moss-transcribe — timestamps + anonymous per-recording speakers |
+| TTS (quality) | **VoxCPM2 PyTorch** (this repo) — 48kHz, 30 languages + 9 Chinese dialects, voice cloning + zero-shot voice design |
+| TTS (fast lane) | kokoro — local CPU, fixed voice bank, ~0.2s first audio |
 | LLM | Gemma (llama.cpp) |
 
 ## Status
@@ -141,8 +146,8 @@ phases — is specified in [docs/web-studio.md](./docs/web-studio.md).
 The engine backend and compiled TypeScript CLI are verified end-to-end against live
 engines. Long-text synthesis streams, and named voices support file input, microphone
 recording, automatic ASR, and transcript editing. Native CI builds and executes the CLI on
-macOS arm64, Linux x64, and Windows x64. Signed release artifacts, Web, MCP, desktop, persona
-rewriting, and a duplex conversation loop are not built yet.
+macOS arm64, Linux x64, and Windows x64. Signed release artifacts, MCP, desktop, and persona
+rewriting are not built yet.
 
 The duplex conversation session kernel and the headset-oriented `vox listen` command are
 implemented and tested with simulated audio. `listen` uses an energy-VAD fallback with a
@@ -160,11 +165,15 @@ both `vox listen` and the realtime gateway, so the certified turn-taking and bar
 lifecycle has one implementation. The gateway (`apps/realtime-gateway`, Web Studio Phase 1)
 speaks the versioned session protocol over WebSocket — binary PCM media, snapshot reconnect,
 idempotent commands, an endpoint-owned audible-playback clock — plus a REST facade that
-keeps engine addresses and credentials server-side. The browser studio (`apps/web`) ships
-the live conversation panel on top of it: worklet microphone capture, gapless streamed
-playback, captions with turn state and per-turn timing, and the negotiated AEC capability
-snapshot. Its real-browser double-talk/barge-in gate, route-change handling, and release
-packaging of the helper and the ONNX runtime remain separate measured delivery phases.
+keeps engine addresses and credentials server-side, aggregates voices across engines, and
+routes requests through the engine registry (named instances, role defaults, capability
+tags, per-request pinning). The browser studio (`apps/web`) ships four panels on top of it:
+live conversation (worklet microphone capture, gapless streamed playback, captions with turn
+state and per-turn timing, the negotiated AEC capability snapshot), generation with takes,
+the voice bank (file upload or in-browser recording, plus design-profile create / audit /
+verify against the engine runtime), and engine settings with live health. Its real-browser
+double-talk/barge-in gate, route-change handling, and release packaging of the helper and
+the ONNX runtime remain separate measured delivery phases.
 
 ## Related
 
