@@ -50,7 +50,7 @@ function TurnCard({ turn }: { turn: TurnView }) {
     <div className="space-y-2">
       {turn.transcript !== undefined ? (
         <div className="flex justify-end">
-          <div className="max-w-[75%] rounded-2xl rounded-br-sm bg-accent-600/20 px-4 py-2.5 text-sm leading-relaxed">
+          <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-accent-600/20 px-4 py-2.5 text-sm leading-relaxed md:max-w-[75%]">
             {turn.transcript}
           </div>
         </div>
@@ -62,7 +62,7 @@ function TurnCard({ turn }: { turn: TurnView }) {
       {(turn.reply || turn.status === "thinking") && (
         <div className="flex justify-start">
           <div
-            className={`max-w-[75%] rounded-2xl rounded-bl-sm bg-ink-800 px-4 py-2.5 text-sm leading-relaxed ${
+            className={`max-w-[85%] rounded-2xl rounded-bl-sm bg-ink-800 px-4 py-2.5 text-sm leading-relaxed md:max-w-[75%] ${
               turn.status === "interrupted" ? "opacity-60" : ""
             }`}
           >
@@ -76,6 +76,52 @@ function TurnCard({ turn }: { turn: TurnView }) {
   );
 }
 
+function StartCard({ starting, onStart }: { starting: boolean; onStart: () => void }) {
+  const voice = useStudio(state => state.voice);
+  const language = useStudio(state => state.language);
+  const setVoice = useStudio(state => state.setVoice);
+  const setLanguage = useStudio(state => state.setLanguage);
+  return (
+    <div className="mx-auto flex h-full max-w-sm flex-col items-center justify-center gap-6 px-6 text-center">
+      <button
+        onClick={onStart}
+        disabled={starting}
+        className="flex size-24 items-center justify-center rounded-full bg-accent-600 text-4xl shadow-lg shadow-accent-600/25 transition hover:bg-accent-500 active:scale-95 disabled:opacity-50"
+        aria-label="开始对话"
+      >
+        {starting ? "…" : "🎙"}
+      </button>
+      <div className="text-base font-medium">{starting ? "启动中…" : "开始对话"}</div>
+      <div className="flex w-full items-center justify-center gap-3">
+        <label className="flex items-center gap-2 text-xs text-ink-300">
+          语言
+          <select
+            value={language}
+            onChange={event => setLanguage(event.target.value)}
+            className="rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100"
+          >
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+            <option value="auto">自动</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-xs text-ink-300">
+          音色
+          <input
+            value={voice}
+            onChange={event => setVoice(event.target.value)}
+            placeholder="默认"
+            className="w-24 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100"
+          />
+        </label>
+      </div>
+      <p className="text-xs leading-relaxed text-ink-500">
+        授权麦克风后进入全双工对话：断句、识别、回答全自动，回答播放时直接开口即可打断，停顿后续说会自动合并。
+      </p>
+    </div>
+  );
+}
+
 export function ConversationPanel() {
   const [starting, setStarting] = useState(false);
   const active = useStudio(state => state.active);
@@ -84,11 +130,7 @@ export function ConversationPanel() {
   const turns = useStudio(state => state.turns);
   const notices = useStudio(state => state.notices);
   const capability = useStudio(state => state.capability);
-  const voice = useStudio(state => state.voice);
-  const language = useStudio(state => state.language);
   const notice = useStudio(state => state.notice);
-  const setVoice = useStudio(state => state.setVoice);
-  const setLanguage = useStudio(state => state.setLanguage);
   const scroller = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -109,51 +151,17 @@ export function ConversationPanel() {
     }
   };
 
-  const stop = async () => {
-    await stopConversation();
-  };
-
   const state = stateLabels[active ? sessionState : "off"] ?? stateLabels.off as { text: string; tone: string };
+  const lastNotice = notices[notices.length - 1];
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-3 border-b border-ink-700 px-6 py-3.5">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700 px-4 py-3 md:px-6">
         <h1 className="text-base font-semibold">对话</h1>
         <span className={`rounded-full px-2.5 py-0.5 text-xs ${state.tone}`}>{state.text}</span>
         <div className="flex-1" />
-        {!active ? (
-          <>
-            <label className="flex items-center gap-2 text-xs text-ink-300">
-              语言
-              <select
-                value={language}
-                onChange={event => setLanguage(event.target.value)}
-                className="rounded border border-ink-700 bg-ink-800 px-2 py-1 text-xs text-ink-100"
-              >
-                <option value="zh">中文</option>
-                <option value="en">English</option>
-                <option value="auto">自动</option>
-              </select>
-            </label>
-            <label className="flex items-center gap-2 text-xs text-ink-300">
-              音色
-              <input
-                value={voice}
-                onChange={event => setVoice(event.target.value)}
-                placeholder="默认"
-                className="w-28 rounded border border-ink-700 bg-ink-800 px-2 py-1 text-xs text-ink-100"
-              />
-            </label>
-            <button
-              onClick={() => void start()}
-              disabled={starting}
-              className="rounded-lg bg-accent-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-accent-500 disabled:opacity-50"
-            >
-              {starting ? "启动中…" : "开始对话"}
-            </button>
-          </>
-        ) : (
-          <>
+        {active && (
+          <div className="flex items-center gap-2">
             <button
               onClick={() => conversationControls()?.setMuted(!muted)}
               className={`rounded-lg border px-3 py-1.5 text-sm ${
@@ -170,40 +178,42 @@ export function ConversationPanel() {
               停止回答
             </button>
             <button
-              onClick={() => void stop()}
+              onClick={() => void stopConversation()}
               className="rounded-lg border border-red-400/50 px-3 py-1.5 text-sm text-red-300 hover:bg-red-500/10"
             >
               结束
             </button>
-          </>
+          </div>
         )}
       </header>
 
-      <div ref={scroller} className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
-        {turns.length === 0 && (
-          <div className="mx-auto mt-16 max-w-md text-center text-sm leading-relaxed text-ink-500">
-            {active
-              ? "开口即说 —— 断句、识别、回答全自动；回答播放时直接说话就能打断。"
-              : "点「开始对话」授权麦克风后进入全双工语音对话。浏览器自带回声消除，支持随时打断与续说合并。"}
-          </div>
+      <div ref={scroller} className="flex-1 space-y-5 overflow-y-auto px-4 py-5 md:px-6">
+        {!active && turns.length === 0 ? (
+          <StartCard starting={starting} onStart={() => void start()} />
+        ) : (
+          <>
+            {turns.length === 0 && (
+              <div className="mx-auto mt-16 max-w-md text-center text-sm leading-relaxed text-ink-500">
+                开口即说 —— 断句、识别、回答全自动；回答播放时直接说话就能打断。
+              </div>
+            )}
+            {turns.map(turn => (
+              <TurnCard key={turn.id} turn={turn} />
+            ))}
+          </>
         )}
-        {turns.map(turn => (
-          <TurnCard key={turn.id} turn={turn} />
-        ))}
       </div>
 
-      <footer className="border-t border-ink-700 px-6 py-2.5">
-        <div className="flex items-center gap-4 text-[11px] text-ink-500">
+      <footer className="border-t border-ink-700 px-4 py-2 md:px-6">
+        <div className="flex items-center gap-4 overflow-hidden text-[11px] text-ink-500">
           {capability && (
-            <span>
+            <span className="shrink-0">
               AEC {capability.echoCancellation === false ? "✗" : "✓"} · NS {capability.noiseSuppression === false ? "✗" : "✓"} · AGC{" "}
               {capability.autoGainControl === false ? "✗" : "✓"} · {capability.contextSampleRate}Hz
             </span>
           )}
-          {notices.length > 0 && (
-            <span className={(notices[notices.length - 1] as { kind: string }).kind === "error" ? "text-red-300" : ""}>
-              {(notices[notices.length - 1] as { text: string }).text}
-            </span>
+          {lastNotice && (
+            <span className={`truncate ${lastNotice.kind === "error" ? "text-red-300" : ""}`}>{lastNotice.text}</span>
           )}
         </div>
       </footer>

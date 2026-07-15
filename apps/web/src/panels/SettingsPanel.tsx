@@ -27,7 +27,7 @@ export function SettingsPanel() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-2xl space-y-8 px-8 py-10">
+    <div className="mx-auto max-w-2xl space-y-6 px-4 py-6 md:space-y-8 md:px-8 md:py-10">
       <h1 className="text-2xl font-semibold">设置</h1>
 
       <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
@@ -59,7 +59,7 @@ export function SettingsPanel() {
         <h2 className="text-sm font-medium text-ink-300">端点能力（本次会话协商结果）</h2>
         {!capability && <p className="mt-2 text-sm text-ink-500">尚未开始对话；开始后展示 getUserMedia 协商到的 AEC/NS/AGC 与采样率。</p>}
         {capability && (
-          <dl className="mt-3 grid grid-cols-4 gap-3 text-sm">
+          <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4 text-sm">
             <div>
               <dt className="text-xs text-ink-500">回声消除</dt>
               <dd className="mt-0.5">{capability.echoCancellation === false ? "关" : "开"}</dd>
