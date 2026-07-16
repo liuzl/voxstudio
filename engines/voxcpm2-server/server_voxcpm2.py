@@ -126,16 +126,19 @@ def _generate_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
         wav, _, audio_features = model.tts_model.generate_with_prompt_cache(
             target_text=text, prompt_cache=cache, cfg_value=cfg, inference_timesteps=ts,
             retry_badcase=True, seed=seed)
-        # Anchor the merge to the base, not the rolling cache: chunk N conditions on the
-        # clean reference plus chunk N-1 only. Merging onto the previous merge stacked
-        # every earlier chunk's synthesized audio into the prompt, and long replies
-        # drifted audibly away from the reference voice.
-        next_cache = model.tts_model.merge_prompt_cache(
-            base if base is not None else cache, text, audio_features)
+        # Chunk 2..N conditions on the anchor alone. The previous policy merged chunk N-1
+        # into the prompt for prosodic continuity, but the rate of chunk N mimics chunk
+        # N-1 more than the reference, and the chain random-walks: measured 2026-07-16
+        # (same sentence at positions 1/3/5 of one session: 8.00s -> 7.20s -> 6.56s, +22%
+        # faster, while independent requests show no trend). Reference-less sessions
+        # (design/free voices) still promote their first chunk to the anchor — without
+        # it every later chunk would be a different random voice.
+        if base is None:
+            base = model.tts_model.merge_prompt_cache(cache, text, audio_features)
         if end:
             _continuations.pop(session_id)
         else:
-            _continuations.put(session_id, next_cache, base if base is not None else next_cache)
+            _continuations.put(session_id, base, base)
         if _CUDA:
             torch.cuda.empty_cache()
     buf = io.BytesIO(); sf.write(buf, wav.squeeze(0).cpu().numpy(), SR, format="WAV"); buf.seek(0)
@@ -184,11 +187,12 @@ def _stream_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
             # step, so the final yield does not carry the full history. Each yield appends
             # exactly one new entry before yielding; collecting those tail entries and
             # concatenating on dim=1 rebuilds precisely what the non-streaming path hands
-            # to merge_prompt_cache.
+            # to merge_prompt_cache. Only a reference-less session needs them (its first
+            # chunk becomes the anchor); anchored sessions skip the collection.
             new_features = []
             try:
                 for chunk, _tokens, features in generator:
-                    if features:
+                    if base is None and features:
                         # Off the GPU immediately: the built prompt cache keeps its
                         # features on CPU, and merge concatenates the two — mixed devices
                         # fail only in the post-stream finally, where the 200 already left.
@@ -196,18 +200,20 @@ def _stream_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
                     yield chunk.reshape(-1).numpy().astype("<f4").tobytes()
             finally:
                 generator.close()
-                if new_features:
+                # Anchor-only continuation, as in _generate_continuation: chunk N-1 is
+                # never merged back into the prompt — the chain measurably sped replies
+                # up chunk over chunk. A reference-less first chunk still promotes its
+                # own audio to the anchor.
+                if base is None and new_features:
                     # (1, t, p, d) -> (t, p, d): the cache convention is batchless, and
-                    # generation cats it against 3-D reference features. The merge anchors
-                    # to the base (see _generate_continuation): reference + this chunk
-                    # only, so timbre drift cannot accumulate across a long reply.
-                    next_cache = model.tts_model.merge_prompt_cache(
-                        base if base is not None else cache, text,
-                        torch.cat(new_features, dim=1).squeeze(0))
+                    # generation cats it against 3-D reference features.
+                    base = model.tts_model.merge_prompt_cache(
+                        cache, text, torch.cat(new_features, dim=1).squeeze(0))
+                if base is not None:
                     if end:
                         _continuations.pop(session_id)
                     else:
-                        _continuations.put(session_id, next_cache, base if base is not None else next_cache)
+                        _continuations.put(session_id, base, base)
                 if _CUDA:
                     torch.cuda.empty_cache()
         finally:
