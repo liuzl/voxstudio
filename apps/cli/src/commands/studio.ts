@@ -1,5 +1,5 @@
 import type { VoxConfig } from "@voxstudio/contracts";
-import { loadSileroVadModel } from "@voxstudio/platform-bun";
+import { ffmpegPcmDecoder, loadSileroVadModel } from "@voxstudio/platform-bun";
 import { startGateway, type GatewayServer, type GatewayServerOptions } from "@voxstudio/realtime-gateway";
 import { webAssets } from "../generated/web-assets";
 import type { CliIo } from "../io";
@@ -50,9 +50,12 @@ export async function runStudio(
   if (Object.keys(webAssets).length === 0) {
     io.err("studio: no web assets were embedded at build time (apps/web/dist missing); serving the API only");
   }
+  // Without ffmpeg the decoder is absent and engines negotiate raw PCM instead.
+  const decoder = ffmpegPcmDecoder();
   const gateway = start({
     config,
     staticAssets: webAssets,
+    ...(decoder === undefined ? {} : { pcmDecoder: decoder }),
     ...(host === undefined ? {} : { hostname: host }),
     ...(port === undefined ? {} : { port }),
     ...(token === undefined || token === "" ? {} : { token }),

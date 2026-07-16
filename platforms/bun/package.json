@@ -6,9 +6,10 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@voxstudio/audio": "workspace:*",
+    "@voxstudio/clients": "workspace:*",
     "@voxstudio/config": "workspace:*",
     "@voxstudio/contracts": "workspace:*",
-    "onnxruntime-node": "^1.27.0",
-    "@voxstudio/duplex-session": "workspace:*"
+    "@voxstudio/duplex-session": "workspace:*",
+    "onnxruntime-node": "^1.27.0"
   }
 }

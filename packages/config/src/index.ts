@@ -109,6 +109,14 @@ function kindFromRaw(name: string, value: unknown): EngineKind | undefined {
   return value;
 }
 
+function streamFormatFromRaw(name: string, value: unknown): "pcm" | "opus" | undefined {
+  if (value === undefined) return undefined;
+  if (value !== "pcm" && value !== "opus") {
+    throw new ConfigError(`\`engines.${name}.stream_format\` must be pcm or opus, not ${String(value)}`);
+  }
+  return value;
+}
+
 function capabilitiesFromRaw(name: string, value: unknown): string[] {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.some(entry => typeof entry !== "string")) {
@@ -123,6 +131,7 @@ function engineFromRaw(name: string, base: EngineConfig | undefined, value: unkn
     throw new ConfigError("custom engine requires `base_url`");
   }
   const kind = kindFromRaw(name, raw.kind);
+  const streamFormat = streamFormatFromRaw(name, raw.stream_format);
   return {
     baseUrl: stringValue(raw.base_url, base?.baseUrl ?? ""),
     model: stringValue(raw.model, base?.model ?? ""),
@@ -130,6 +139,7 @@ function engineFromRaw(name: string, base: EngineConfig | undefined, value: unkn
     healthPath: stringValue(raw.health_path, base?.healthPath ?? "/health"),
     maxTokens: integerValue(raw.max_tokens, base?.maxTokens ?? 4096),
     ...(kind === undefined ? {} : { kind }),
+    ...(streamFormat === undefined ? {} : { streamFormat }),
     capabilities: capabilitiesFromRaw(name, raw.capabilities),
   };
 }

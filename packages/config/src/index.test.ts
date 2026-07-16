@@ -80,5 +80,8 @@ describe("engine registry", () => {
     expect(() => parseConfig({ engines: {}, roles: { tts: "ghost" } })).toThrow("unknown engine");
     expect(() => parseConfig({ engines: { x: { base_url: "http://x", kind: "video" } } })).toThrow("kind");
     expect(() => parseConfig({ engines: { x: { base_url: "http://x", capabilities: "clone" } } })).toThrow("list of strings");
+    expect(() => parseConfig({ engines: { x: { base_url: "http://x", stream_format: "mp3" } } })).toThrow("pcm or opus");
+    const parsed = parseConfig({ engines: { tts: { base_url: "http://x", stream_format: "opus" } } });
+    expect(parsed.engines.tts?.streamFormat).toBe("opus");
   });
 });

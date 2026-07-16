@@ -1,4 +1,4 @@
-import { loadConfig, loadSileroVadModel } from "@voxstudio/platform-bun";
+import { ffmpegPcmDecoder, loadConfig, loadSileroVadModel } from "@voxstudio/platform-bun";
 import { startGateway } from "./server";
 
 const usage = `usage: vox-gateway [--config CONFIG] [--host HOST] [--port PORT] [--token TOKEN]
@@ -35,12 +35,15 @@ async function main(args: string[]): Promise<number> {
   if (parsedPort !== undefined && (!Number.isInteger(parsedPort) || parsedPort < 0 || parsedPort > 65_535)) {
     throw new TypeError("vox-gateway: --port must be an integer between 0 and 65535");
   }
+  // Without ffmpeg the decoder is absent and engines negotiate raw PCM instead.
+  const decoder = ffmpegPcmDecoder();
   const gateway = startGateway({
     config,
     ...(host === undefined ? {} : { hostname: host }),
     ...(parsedPort === undefined ? {} : { port: parsedPort }),
     ...(token === undefined || token === "" ? {} : { token }),
     loadSileroVad: loadSileroVadModel,
+    ...(decoder === undefined ? {} : { pcmDecoder: decoder }),
     log: line => console.error(line),
   });
   const stop = () => { void gateway.stop().then(() => process.exit(0)); };

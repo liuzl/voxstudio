@@ -11,7 +11,8 @@
 #
 #   engines:
 #     kokoro:   { kind: tts, base_url: "http://127.0.0.1:18089", model: kokoro, capabilities: [preset, fast] }
-#     voxcpm2:  { kind: tts, base_url: "http://gpu-host:8880",   model: voxcpm2, capabilities: [clone, design, streaming] }
+#     voxcpm2:  { kind: tts, base_url: "http://gpu-host:8880",   model: voxcpm2, capabilities: [clone, design, streaming],
+#                 stream_format: opus }   # compress streamed TTS ~30x for slow WAN links (raw PCM needs 187.5KB/s)
 #   roles:
 #     tts: kokoro
 engines:

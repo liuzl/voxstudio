@@ -16,9 +16,20 @@ function isRuntimeIdentity(value: unknown): value is TtsRuntimeIdentity {
     && (typeof value.model_manifest_sha256 === "string" || value.model_manifest_sha256 === null);
 }
 
+/**
+ * Decodes a compressed audio stream (Ogg/Opus) into mono PCM pieces. Injected by the
+ * platform layer (ffmpeg on Bun) — this package stays Web-API-only.
+ */
+export interface PcmStreamDecoder {
+  decode(body: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncIterable<PcmAudio>;
+}
+
 export class TtsClient extends EngineClient {
-  constructor(config: EngineConfig, fetch?: Fetch) {
+  private readonly decoder: PcmStreamDecoder | undefined;
+
+  constructor(config: EngineConfig, fetch?: Fetch, decoder?: PcmStreamDecoder) {
     super(config, fetch);
+    this.decoder = decoder;
   }
 
   async speech(input: SpeechInput, signal?: AbortSignal): Promise<ArrayBuffer> {
@@ -38,7 +49,15 @@ export class TtsClient extends EngineClient {
    * the caller keeps working, just without the early audio.
    */
   async *speechStream(input: SpeechInput, signal?: AbortSignal): AsyncGenerator<PcmAudio> {
-    const body: SpeechRequest = { ...input, model: this.config.model, stream: true };
+    // Opus rides only when both sides can hold it: the engine is configured for it and a
+    // decoder was injected. Otherwise the request stays raw PCM — never a broken stream.
+    const compressed = this.config.streamFormat === "opus" && this.decoder !== undefined;
+    const body: SpeechRequest = {
+      ...input,
+      model: this.config.model,
+      stream: true,
+      ...(compressed ? { response_format: "opus" } : {}),
+    };
     const response = await this.request("/v1/audio/speech", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -46,6 +65,12 @@ export class TtsClient extends EngineClient {
       ...(signal === undefined ? {} : { signal }),
     });
     const type = response.headers.get("content-type") ?? "";
+    if (type.includes("audio/ogg")) {
+      if (!this.decoder) throw new TypeError("engine streamed Ogg/Opus but no PCM decoder is configured");
+      if (!response.body) throw new TypeError("streaming speech response has no body");
+      yield* this.decoder.decode(response.body, signal);
+      return;
+    }
     if (!type.includes("audio/pcm")) {
       const wav = readWav(await response.arrayBuffer());
       yield { samples: wav.samples, sampleRate: wav.sampleRate };

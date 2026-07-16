@@ -171,6 +171,47 @@ describe("engine HTTP clients", () => {
     expect(pieces.length).toBeGreaterThan(1);
   });
 
+  test("speechStream negotiates opus only when configured and a decoder is present", async () => {
+    const bodies: string[] = [];
+    const fetch: Fetch = async (_input, init) => {
+      bodies.push(String(init?.body));
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.close();
+        },
+      });
+      return new Response(stream, { headers: { "content-type": "audio/ogg" } });
+    };
+    const decoder = {
+      async *decode(): AsyncIterable<{ samples: Float32Array; sampleRate: number }> {
+        yield { samples: Float32Array.from([0.5]), sampleRate: 48_000 };
+      },
+    };
+    const client = new TtsClient(
+      { baseUrl: "https://voice.example", model: "voxcpm2", streamFormat: "opus" }, fetch, decoder);
+    const pieces = [];
+    for await (const piece of client.speechStream({
+      input: "你好", voice: "laok", response_format: "wav", cfg_value: 2, timesteps: 10,
+    })) pieces.push(piece);
+    expect(pieces).toHaveLength(1);
+    expect(pieces[0]?.sampleRate).toBe(48_000);
+    // The request asked for opus (overriding the batch response_format)...
+    expect((JSON.parse(bodies[0] ?? "") as { response_format?: string }).response_format).toBe("opus");
+
+    // ...but the same config WITHOUT a decoder must not: raw PCM, never a broken stream.
+    const undecoded = new TtsClient(
+      { baseUrl: "https://voice.example", model: "voxcpm2", streamFormat: "opus" },
+      async (_input, init) => {
+        bodies.push(String(init?.body));
+        return new Response(new Uint8Array(writeWav(Float32Array.from([0.5]), 48_000)));
+      });
+    for await (const piece of undecoded.speechStream({
+      input: "你好", voice: "laok", response_format: "wav", cfg_value: 2, timesteps: 10,
+    })) pieces.push(piece);
+    expect((JSON.parse(bodies[1] ?? "") as { response_format?: string }).response_format).toBe("wav");
+  });
+
   test("speechStream degrades to one piece when the engine answers a whole WAV", async () => {
     const wav = writeWav(Float32Array.from([0.5, 0.5]), 48_000);
     const fetch: Fetch = async () => new Response(new Uint8Array(wav));

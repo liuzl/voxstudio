@@ -1,4 +1,4 @@
-import { AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
+import { type PcmStreamDecoder, AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
 import { engine, enginesOfKind } from "@voxstudio/config";
 import { runConversation, type ConversationFrame, type ConversationPlayer } from "@voxstudio/conversation";
 import type { EngineKind, ResolvedEngineConfig, VoxConfig } from "@voxstudio/contracts";
@@ -25,6 +25,8 @@ export interface EventSink {
 export interface GatewaySessionOptions {
   config: VoxConfig;
   fetch?: Fetch;
+  /** Decodes compressed (Opus) TTS streams; without it engines stream raw PCM. */
+  pcmDecoder?: PcmStreamDecoder;
   loadSileroVad?: (() => Promise<SpeechProbabilityModel>) | undefined;
   /** How long a detached session survives waiting for a reconnect. */
   reconnectGraceMs?: number;
@@ -153,7 +155,7 @@ export class GatewaySession {
       createPlayer: turn => this.createPlayer(turn.id, turn.revision),
       asr: new AsrClient(pick("asr", "asr", start.asrEngine), this.options.fetch),
       llm: new LlmClient(pick("llm", "llm", start.llmEngine), this.options.fetch),
-      tts: new TtsClient(pick("tts", "tts", start.ttsEngine), this.options.fetch),
+      tts: new TtsClient(pick("tts", "tts", start.ttsEngine), this.options.fetch, this.options.pcmDecoder),
     }, {
       language: start.language ?? "auto",
       ...(start.system === undefined ? {} : { system: start.system }),

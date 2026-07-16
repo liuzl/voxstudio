@@ -9,7 +9,7 @@ import {
   type SpeechProbabilityModel,
   type VadSegmenter,
 } from "@voxstudio/duplex-session";
-import { capturePcm, FfplaySink, loadSileroVadModel, startMacosAudioHost, type MacosAudioHost, type PcmCapture, type PcmSink } from "@voxstudio/platform-bun";
+import { ffmpegPcmDecoder, capturePcm, FfplaySink, loadSileroVadModel, startMacosAudioHost, type MacosAudioHost, type PcmCapture, type PcmSink } from "@voxstudio/platform-bun";
 import { join } from "node:path";
 import type { CliIo } from "../io";
 
@@ -212,7 +212,7 @@ export async function runListen(
       createPlayer: (): ConversationPlayer => speakerHost?.player ?? platform.createPlayer(),
       asr: new AsrClient(engine(config, "asr"), fetch),
       llm: new LlmClient(engine(config, "llm"), fetch),
-      tts: new TtsClient(engine(config, "tts"), fetch),
+      tts: new TtsClient(engine(config, "tts"), fetch, ffmpegPcmDecoder()),
     }, {
       language: options.language,
       ...(options.system === undefined ? {} : { system: options.system }),

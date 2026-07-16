@@ -121,6 +121,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@voxstudio/audio": "workspace:*",
+        "@voxstudio/clients": "workspace:*",
         "@voxstudio/config": "workspace:*",
         "@voxstudio/contracts": "workspace:*",
         "@voxstudio/duplex-session": "workspace:*",

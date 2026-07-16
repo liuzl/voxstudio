@@ -12,6 +12,12 @@ export interface EngineConfig {
   kind?: EngineKind;
   /** What the instance can do (well-known tags: clone, design, preset, fast, streaming, longform, diarize). */
   capabilities?: string[];
+  /**
+   * Wire format for streamed synthesis. "opus" (Ogg container) cuts the stream ~30x —
+   * raw f32 PCM at 48kHz needs 187.5KB/s, which a slow WAN link cannot carry — and
+   * requires a PCM decoder on the consumer; without one the client falls back to PCM.
+   */
+  streamFormat?: "pcm" | "opus";
 }
 
 export interface ResolvedEngineConfig extends EngineConfig {

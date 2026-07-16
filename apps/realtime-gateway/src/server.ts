@@ -1,4 +1,4 @@
-import type { Fetch } from "@voxstudio/clients";
+import type { Fetch, PcmStreamDecoder } from "@voxstudio/clients";
 import { engine, engineByCapability, enginesOfKind, roleInstance } from "@voxstudio/config";
 import type { EngineKind, ResolvedEngineConfig, VoxConfig } from "@voxstudio/contracts";
 import type { SpeechProbabilityModel } from "@voxstudio/duplex-session";
@@ -16,6 +16,8 @@ export interface GatewayServerOptions {
   token?: string;
   reconnectGraceMs?: number;
   loadSileroVad?: () => Promise<SpeechProbabilityModel>;
+  /** Decodes compressed (Opus) TTS streams from engines configured with stream_format. */
+  pcmDecoder?: PcmStreamDecoder;
   log?: (line: string) => void;
   /**
    * Web Studio app shell: URL path -> file path (a real file, or a Bun embedded-file
@@ -243,6 +245,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       const session = new GatewaySession({
         config: options.config,
         ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+        ...(options.pcmDecoder === undefined ? {} : { pcmDecoder: options.pcmDecoder }),
         loadSileroVad: options.loadSileroVad,
         ...(options.reconnectGraceMs === undefined ? {} : { reconnectGraceMs: options.reconnectGraceMs }),
         onClosed: closed => { sessions.delete(closed.id); },

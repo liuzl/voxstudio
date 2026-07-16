@@ -24,6 +24,7 @@ from voxcpm import VoxCPM
 from continuations import ContinuationStore, SESSION_ID_RE
 from prompt_caches import PromptCacheStore, prompt_cache_key
 from fingerprint import audio_fingerprint
+from opus_stream import opus_encode
 from runtime import model_identity, model_manifest_sha256
 
 # Runtime layout is configurable via env (no hard-coded absolute paths):
@@ -220,6 +221,9 @@ def _stream_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
             lock.release()
 
     return pcm()
+
+
+OPUS_BITRATE = os.environ.get("VOXCPM2_OPUS_BITRATE", "48k")
 
 
 def _ref_from_upload(up: UploadFile):
@@ -431,6 +435,31 @@ async def oai_speech(r: OAIReq):
         except BaseException:
             await run_in_threadpool(iterator.close)
             raise
+
+        if first is sentinel:
+            return Response(b"", media_type="audio/pcm",
+                            headers={"X-Sample-Rate": str(SR), "X-Sample-Format": "f32le"})
+
+        # Opus for the wire: the busy-503 priming already happened on the PCM iterator
+        # above, so wrapping here never turns a busy pipeline into a broken 200.
+        if r.response_format == "opus":
+            encoded = opus_encode(first, iterator, SR, OPUS_BITRATE)
+
+            async def opus_body():
+                try:
+                    while True:
+                        piece = await run_in_threadpool(next, encoded, sentinel)
+                        if piece is sentinel:
+                            break
+                        yield piece
+                finally:
+                    # Closing the encoder kills ffmpeg and closes the synthesis
+                    # generator through the feeder — the lock is released on every exit.
+                    await run_in_threadpool(encoded.close)
+            return StreamingResponse(
+                opus_body(),
+                media_type="audio/ogg",
+                headers={"X-Sample-Rate": str(SR)})
 
         # Async body iterator on purpose: Starlette closes async iterators
         # deterministically when the client disconnects, and the finally closes the
