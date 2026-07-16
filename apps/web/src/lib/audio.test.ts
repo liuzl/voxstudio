@@ -60,11 +60,15 @@ describe("PlaybackTimeline", () => {
     expect(timeline.remainingSec(2)).toBeCloseTo(0);
   });
 
-  test("a drained queue restarts from now plus the lead", () => {
-    const timeline = new PlaybackTimeline(0.05);
-    timeline.schedule(0.1, 0);
+  test("an underrun re-buffers once instead of resuming into micro-gaps", () => {
+    const timeline = new PlaybackTimeline(0.05, 0.35);
+    timeline.schedule(0.1, 0); // plays 0.05..0.15
+    // The queue drained at 0.15; the next piece arrives late, at t=5.
     const late = timeline.schedule(0.1, 5);
-    expect(late).toBeCloseTo(5.05);
+    expect(late).toBeCloseTo(5.35); // one pause worth of cushion, not now+lead
+    // The burst behind it packs contiguously into the cushion.
+    const packed = timeline.schedule(0.1, 5.01);
+    expect(packed).toBeCloseTo(5.45);
   });
 
   test("reset clears the playhead after an interruption", () => {

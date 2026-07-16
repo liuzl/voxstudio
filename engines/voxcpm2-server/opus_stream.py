@@ -1,10 +1,11 @@
 """Ogg/Opus wrapper for streamed synthesis: raw f32 PCM at 48kHz needs 187.5KB/s on the
-wire, which a slow WAN link cannot carry; 48kbps Opus needs ~6KB/s."""
+wire, which a slow WAN link cannot carry; 96kbps Opus needs ~12KB/s and is close to
+transparent for mono speech (48kbps measured ~25dB windowed SNR against the raw PCM)."""
 import subprocess
 import threading
 
 
-def opus_encode(first_chunk, pcm_iter, sample_rate, bitrate="48k"):
+def opus_encode(first_chunk, pcm_iter, sample_rate, bitrate="96k"):
     """Encode a primed PCM generator into an Ogg/Opus byte stream.
 
     A feeder thread drives the (lock-holding) synthesis generator into ffmpeg while the

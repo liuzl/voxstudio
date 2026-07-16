@@ -59,14 +59,21 @@ export class LinearResampler {
  */
 export class PlaybackTimeline {
   private readonly leadSec: number;
+  private readonly rebufferSec: number;
   private playheadSec = 0;
 
-  constructor(leadSec = 0.05) {
+  constructor(leadSec = 0.05, rebufferSec = 0.35) {
     this.leadSec = leadSec;
+    this.rebufferSec = rebufferSec;
   }
 
   schedule(durationSec: number, nowSec: number): number {
-    const startAt = Math.max(nowSec + this.leadSec, this.playheadSec);
+    // An underrun (the queue drained mid-reply) re-buffers instead of resuming at once:
+    // bursty delivery would otherwise play as burst-gap-burst — a string of micro-gaps
+    // that shreds words into crackle. One audible pause, then contiguous speech; the
+    // cushion also absorbs the next delivery wobble. A fresh reply keeps the low lead.
+    const starved = this.playheadSec > 0 && this.playheadSec < nowSec;
+    const startAt = Math.max(nowSec + (starved ? this.rebufferSec : this.leadSec), this.playheadSec);
     this.playheadSec = startAt + durationSec;
     return startAt;
   }

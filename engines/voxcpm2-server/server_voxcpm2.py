@@ -223,7 +223,7 @@ def _stream_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
     return pcm()
 
 
-OPUS_BITRATE = os.environ.get("VOXCPM2_OPUS_BITRATE", "48k")
+OPUS_BITRATE = os.environ.get("VOXCPM2_OPUS_BITRATE", "96k")
 
 
 def _ref_from_upload(up: UploadFile):
