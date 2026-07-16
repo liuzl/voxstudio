@@ -121,6 +121,21 @@ below rather than relitigated per feature.
 4. **Library panel**: SQLite persistence, capture ingest from gateway sessions,
    promote-to-sample. Gate: the ASR reference-correction workflow runs end-to-end in UI.
 5. **Settings & hosting**: health surface; voxstudio.cc deployment behind Access.
+   **Single-binary packaging delivered 2026-07-16**: `vox studio` serves the browser
+   app, the realtime WebSocket, and the credential-hiding REST facade from the one
+   compiled `vox` executable. The vite build is embedded at compile time —
+   `tools/ensure-web-assets.ts` generates a manifest of `with { type: "file" }`
+   imports from `apps/web/dist` (or an empty stub without it, so typecheck and tests
+   never require a frontend build), and `bun build --compile` packs the files;
+   verified by running the binary from an unrelated directory with `dist` removed.
+   The gateway serves the shell GET/HEAD-only around the guarded API: the app shell
+   loads without the bearer token (a page load cannot carry a header, and the shell
+   holds no secrets) while every `/v1` route stays gated; hashed `/assets/*` are
+   immutable-cached, the SPA entry revalidates, unknown non-API paths fall back to
+   `index.html`. Known limit, stated in the command's usage: the compiled binary
+   carries no ONNX runtime, so barge-in detection degrades loudly to the certified
+   energy detector — WASM Silero (onnxruntime-web) is the open follow-up, shared
+   with the CLI's release packaging. The voxstudio.cc deployment itself remains.
 6. **v2**: effects chain, Stories editor, MCP management panel, public demo decision.
 
 No phase creates empty directories; each is introduced with its first tested module
