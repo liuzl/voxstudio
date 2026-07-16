@@ -133,6 +133,8 @@ export interface SynthesisParams {
   cfgValue?: number;
   timesteps?: number;
   seed?: number;
+  /** Long syntheses are cancellable; aborting rejects with an AbortError. */
+  signal?: AbortSignal;
 }
 
 /** Batch synthesis through the facade; returns an object URL for playback/download. */
@@ -140,6 +142,7 @@ export async function synthesize(params: SynthesisParams): Promise<string> {
   const query = params.engine ? `?engine=${encodeURIComponent(params.engine)}` : "";
   const response = await fetch(`/v1/audio/speech${query}`, {
     method: "POST",
+    ...(params.signal ? { signal: params.signal } : {}),
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       model: "default",

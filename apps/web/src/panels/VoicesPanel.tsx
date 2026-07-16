@@ -38,11 +38,13 @@ export function VoicesPanel() {
   const voicesList = useStudio(state => state.voicesList);
   const setVoicesList = useStudio(state => state.setVoicesList);
   const setGenerateVoice = useStudio(state => state.setGenerateVoice);
+  const toast = useStudio(state => state.toast);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("全部");
-  const [status, setStatus] = useState<{ kind: "info" | "error"; text: string } | undefined>(undefined);
   const [auditioning, setAuditioning] = useState("");
   const [playing, setPlaying] = useState("");
+  /** `${engine}/${id}` awaiting inline delete confirmation; auto-expires. */
+  const [confirmDelete, setConfirmDelete] = useState("");
   const auditionSeq = useRef(0);
   const [registering, setRegistering] = useState(false);
   const [newId, setNewId] = useState("");
@@ -59,13 +61,20 @@ export function VoicesPanel() {
   const refresh = () =>
     listVoices()
       .then(setVoicesList)
-      .catch(error => setStatus({ kind: "error", text: error instanceof Error ? error.message : String(error) }));
+      .catch(error => toast("error", error instanceof Error ? error.message : String(error)));
 
   useEffect(() => {
     void refresh();
     return () => player.current?.pause();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // An unanswered inline delete prompt quietly puts the × back.
+  useEffect(() => {
+    if (!confirmDelete) return;
+    const timer = setTimeout(() => setConfirmDelete(""), 4_000);
+    return () => clearTimeout(timer);
+  }, [confirmDelete]);
 
   const stopAudition = () => {
     player.current?.pause();
@@ -82,7 +91,6 @@ export function VoicesPanel() {
     }
     const seq = ++auditionSeq.current;
     setAuditioning(id);
-    setStatus(undefined);
     try {
       const url = await synthesize({ input: auditionText, voice: id, ...(engine ? { engine } : {}) });
       if (seq !== auditionSeq.current) {
@@ -100,22 +108,22 @@ export function VoicesPanel() {
       await audio.play();
     } catch (error) {
       if (seq === auditionSeq.current) {
-        setStatus({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+        toast("error", error instanceof Error ? error.message : String(error));
       }
     } finally {
       if (seq === auditionSeq.current) setAuditioning("");
     }
   };
 
+  // Confirmation is inline on the item (no blocking dialog); this runs after it.
   const remove = async (id: string, engine: string) => {
-    if (!window.confirm(`删除音色 ${id}？引擎侧的参考音会一并删除。`)) return;
     try {
       await deleteVoice(id, engine || undefined);
-      setStatus({ kind: "info", text: `已删除 ${id}` });
+      toast("info", `已删除 ${id}`);
       await refresh();
     } catch (error) {
       // Fixed-bank engines (kokoro) have no registry; the facade passes their refusal through.
-      setStatus({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+      toast("error", error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -125,14 +133,13 @@ export function VoicesPanel() {
   };
 
   const startRecording = async () => {
-    setStatus(undefined);
     discardRecording();
     try {
       const next = await VoiceRecorder.start();
       setRecorder(next);
       setElapsedMs(0);
     } catch (error) {
-      setStatus({ kind: "error", text: `无法开始录音：${error instanceof Error ? error.message : String(error)}` });
+      toast("error", `无法开始录音：${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -140,7 +147,7 @@ export function VoicesPanel() {
     setRecorder(undefined);
     const samples = await active.stop();
     if (samples.length < minRecordMs * 16) {
-      setStatus({ kind: "error", text: "录音太短：参考音需要至少 2 秒（建议 5–15 秒）。" });
+      toast("error", "录音太短：参考音需要至少 2 秒（建议 5–15 秒）。");
       return;
     }
     const wav = writeWav(samples, 16_000);
@@ -165,17 +172,16 @@ export function VoicesPanel() {
   const fillTranscript = async () => {
     const file = referenceFile();
     if (!file) {
-      setStatus({ kind: "error", text: "先录制或选择参考音频，再识别逐字稿。" });
+      toast("error", "先录制或选择参考音频，再识别逐字稿。");
       return;
     }
     setTranscribing(true);
-    setStatus(undefined);
     try {
       const text = await transcribe(file, "zh");
-      if (!text) setStatus({ kind: "error", text: "ASR 没有识别出内容；请人工填写逐字稿。" });
+      if (!text) toast("error", "ASR 没有识别出内容；请人工填写逐字稿。");
       setNewText(text);
     } catch (error) {
-      setStatus({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+      toast("error", error instanceof Error ? error.message : String(error));
     } finally {
       setTranscribing(false);
     }
@@ -184,15 +190,14 @@ export function VoicesPanel() {
   const register = async () => {
     const file = referenceFile();
     if (!newId.trim() || !newText.trim() || !file) {
-      setStatus({ kind: "error", text: "注册需要：ID、参考音频（上传或录制）、参考音的逐字稿。" });
+      toast("error", "注册需要：ID、参考音频（上传或录制）、参考音的逐字稿。");
       return;
     }
     setRegistering(true);
-    setStatus(undefined);
     try {
       const registered = newId.trim();
       await registerVoice(registered, newText.trim(), file);
-      setStatus({ kind: "info", text: `已注册 ${registered} —— 见上方音色库，可试听或直接用于生成。` });
+      toast("info", `已注册 ${registered} —— 见音色库首位，可试听或直接用于生成。`);
       setNewId("");
       setNewText("");
       if (fileInput.current) fileInput.current.value = "";
@@ -202,7 +207,7 @@ export function VoicesPanel() {
       setCategory("全部");
       setQuery(registered);
     } catch (error) {
-      setStatus({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+      toast("error", error instanceof Error ? error.message : String(error));
     } finally {
       setRegistering(false);
     }
@@ -231,9 +236,6 @@ export function VoicesPanel() {
   return (
     <div className="mx-auto max-w-6xl space-y-5 px-4 py-6 md:px-8 md:py-10">
       <h1 className="text-2xl font-semibold">音色</h1>
-      {status && (
-        <p className={`text-xs ${status.kind === "error" ? "text-red-300" : "text-emerald-300"}`}>{status.text}</p>
-      )}
 
       <section className="rounded-xl border border-ink-700 bg-ink-900 p-4 md:p-5">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -274,7 +276,7 @@ export function VoicesPanel() {
             ))}
           </div>
         )}
-        <div className="mt-3 max-h-56 overflow-y-auto pr-1">
+        <div className="mt-3 max-h-[45vh] overflow-y-auto pr-1">
           {voicesList.length === 0 && <p className="text-sm text-ink-500">引擎没有返回音色；克隆型引擎可用下方表单注册。</p>}
           {voicesList.length > 0 && filtered.length === 0 && <p className="text-sm text-ink-500">没有匹配的音色。</p>}
           <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
@@ -293,26 +295,48 @@ export function VoicesPanel() {
                 >
                   {auditioning === voice.id ? "▶ 合成中…" : playing === voice.id ? `■ ${voice.id}` : voice.id}
                 </button>
-                {multiEngine && voice.engine && (
-                  <span className="shrink-0 rounded bg-ink-700/80 px-1 text-[10px] text-ink-300">{voice.engine}</span>
+                {confirmDelete === `${voice.engine}/${voice.id}` ? (
+                  <>
+                    <button
+                      onClick={() => {
+                        setConfirmDelete("");
+                        void remove(voice.id, voice.engine);
+                      }}
+                      className="shrink-0 rounded bg-red-500/20 px-2 py-1 text-red-300 hover:bg-red-500/30"
+                    >
+                      删除
+                    </button>
+                    <button
+                      onClick={() => setConfirmDelete("")}
+                      className="shrink-0 rounded px-2 py-1 text-ink-500 hover:text-ink-300"
+                    >
+                      取消
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {multiEngine && voice.engine && (
+                      <span className="shrink-0 rounded bg-ink-700/80 px-1 text-[10px] text-ink-300">{voice.engine}</span>
+                    )}
+                    <button
+                      onClick={() => {
+                        setGenerateVoice(voice.id, voice.engine);
+                        toast("info", `已将 ${voice.id} 设为「生成」页的音色`);
+                      }}
+                      className="shrink-0 rounded px-1.5 py-1 text-ink-500 hover:text-accent-500"
+                      title="设为生成音色"
+                    >
+                      用
+                    </button>
+                    <button
+                      onClick={() => setConfirmDelete(`${voice.engine}/${voice.id}`)}
+                      className="shrink-0 rounded px-1.5 py-1 text-ink-500 hover:text-red-300"
+                      title="删除（引擎侧参考音一并删除）"
+                    >
+                      ×
+                    </button>
+                  </>
                 )}
-                <button
-                  onClick={() => {
-                    setGenerateVoice(voice.id, voice.engine);
-                    setStatus({ kind: "info", text: `已将 ${voice.id} 设为「生成」页的音色` });
-                  }}
-                  className="shrink-0 rounded px-1 text-ink-500 hover:text-accent-500"
-                  title="设为生成音色"
-                >
-                  用
-                </button>
-                <button
-                  onClick={() => void remove(voice.id, voice.engine)}
-                  className="shrink-0 rounded px-1 text-ink-500 hover:text-red-300"
-                  title="删除"
-                >
-                  ×
-                </button>
               </div>
             ))}
           </div>
@@ -443,7 +467,7 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
   playing: string;
 }) {
   const [engines, setEngines] = useState<EngineEntry[]>([]);
-  const [note, setNote] = useState<{ kind: "info" | "error"; text: string } | undefined>(undefined);
+  const toast = useStudio(state => state.toast);
   const [verifying, setVerifying] = useState("");
   const [creating, setCreating] = useState(false);
   const [showForm, setShowForm] = useState(false);
@@ -469,11 +493,11 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
   const verify = async (profile: VoiceEntry) => {
     const meta = profile.designProfile;
     if (!meta || !profile.promptText) {
-      setNote({ kind: "error", text: `${profile.id} 缺少锚文本或指纹，无法验证。` });
+      toast("error", `${profile.id} 缺少锚文本或指纹，无法验证。`);
       return;
     }
     setVerifying(profile.id);
-    setNote({ kind: "info", text: `正在重现 ${profile.id}（同参数重新生成并比对指纹）…` });
+    toast("info", `正在重现 ${profile.id}（同参数重新生成并比对指纹）…`);
     const probe = `${profile.id}-vfy-${Date.now().toString(36)}`;
     try {
       const copy = await createDesignProfile({
@@ -486,12 +510,11 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
       }, profile.engine || undefined);
       const match = copy.designProfile?.audio_sha256 !== undefined
         && copy.designProfile.audio_sha256 === meta.audio_sha256;
-      setNote(match
-        ? { kind: "info", text: `✓ ${profile.id} 可逐字节重现（指纹一致）` }
-        : { kind: "error", text: `✗ ${profile.id} 重现结果指纹不一致 —— 运行时已漂移或参数缺失` });
+      if (match) toast("info", `✓ ${profile.id} 可逐字节重现（指纹一致）`);
+      else toast("error", `✗ ${profile.id} 重现结果指纹不一致 —— 运行时已漂移或参数缺失`);
       await deleteVoice(probe, profile.engine || undefined).catch(() => {});
     } catch (error) {
-      setNote({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+      toast("error", error instanceof Error ? error.message : String(error));
     } finally {
       setVerifying("");
     }
@@ -500,11 +523,11 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
   const create = async () => {
     const seed = Number(form.seed);
     if (!form.id.trim() || !form.description.trim() || !form.anchorText.trim() || !Number.isInteger(seed)) {
-      setNote({ kind: "error", text: "创建需要：ID、英文声音描述、锚文本、整数 seed。" });
+      toast("error", "创建需要：ID、英文声音描述、锚文本、整数 seed。");
       return;
     }
     setCreating(true);
-    setNote({ kind: "info", text: "生成锚音频并登记指纹…" });
+    toast("info", "生成锚音频并登记指纹…");
     try {
       await createDesignProfile({
         id: form.id.trim(),
@@ -514,12 +537,12 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
         cfgValue: Number(form.cfg) || 2,
         timesteps: Number(form.timesteps) || 10,
       });
-      setNote({ kind: "info", text: `已创建设计档 ${form.id.trim()}` });
+      toast("info", `已创建设计档 ${form.id.trim()}`);
       setForm({ ...form, id: "", description: "" });
       setShowForm(false);
       onChanged();
     } catch (error) {
-      setNote({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+      toast("error", error instanceof Error ? error.message : String(error));
     } finally {
       setCreating(false);
     }
@@ -540,9 +563,6 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
       <p className="mt-1 text-[11px] text-ink-500">
         零样本声音设计：描述 + 锚文本 + seed 固定一个可复现的音色；指纹（SHA-256）保证同一运行时可逐字节重现。
       </p>
-      {note && (
-        <p className={`mt-2 text-xs ${note.kind === "error" ? "text-red-300" : "text-emerald-300"}`}>{note.text}</p>
-      )}
 
       {showForm && (
         <div className="mt-3 flex flex-col gap-2 rounded-lg border border-ink-700/60 bg-ink-800/40 p-3">

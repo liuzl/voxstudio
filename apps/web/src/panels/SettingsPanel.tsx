@@ -24,8 +24,38 @@ function EnginesTable() {
       <h2 className="text-sm font-medium text-ink-300">引擎（注册表）</h2>
       {engines === undefined && <p className="mt-2 text-sm text-ink-500">探测中…</p>}
       {engines === "error" && <p className="mt-2 text-sm text-red-300">无法获取引擎列表（/v1/engines）</p>}
+      {/* A six-column table has no honest 390px rendering; small screens get cards. */}
       {Array.isArray(engines) && (
-        <div className="mt-3 overflow-x-auto">
+        <div className="mt-3 space-y-2 md:hidden">
+          {engines.map(entry => (
+            <div key={entry.name} className="rounded-lg border border-ink-700/60 bg-ink-800/40 px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">{entry.name}</span>
+                <span className="text-xs text-ink-500">{entry.kind ?? ""}</span>
+                <div className="flex-1" />
+                <span
+                  className={`inline-block size-2 rounded-full ${entry.healthy ? "bg-emerald-400" : "bg-red-400"}`}
+                  role="img"
+                  aria-label={entry.healthy ? "在线" : "离线"}
+                />
+              </div>
+              <div className="mt-1 text-xs text-ink-300">{entry.model || "—"}</div>
+              {(entry.roles.length > 0 || entry.capabilities.length > 0) && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {entry.roles.map(role => (
+                    <span key={role} className="rounded bg-accent-600/20 px-1.5 py-0.5 text-[10px] text-accent-500">{role}</span>
+                  ))}
+                  {entry.capabilities.map(capability => (
+                    <span key={capability} className="rounded bg-ink-800 px-1.5 py-0.5 text-[10px] text-ink-300">{capability}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {Array.isArray(engines) && (
+        <div className="mt-3 hidden overflow-x-auto md:block">
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="text-xs text-ink-500">

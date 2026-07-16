@@ -1,7 +1,17 @@
 import { estSeconds, chunkText } from "@voxstudio/text";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { listVoices, synthesize } from "../lib/api";
 import { useStudio } from "../store";
+
+/** Ticks once a second while a synthesis runs — long texts deserve a visible clock. */
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, []);
+  return <>{Math.max(0, Math.round((now - since) / 1_000))}s</>;
+}
 
 function VoicePicker({ value, engine, onChange }: {
   value: string;
@@ -49,7 +59,9 @@ export function GeneratePanel() {
   const engine = useStudio(state => state.generateEngine);
   const setVoice = useStudio(state => state.setGenerateVoice);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [busySince, setBusySince] = useState(0);
+  const abort = useRef<AbortController | undefined>(undefined);
+  const toast = useStudio(state => state.toast);
   const takes = useStudio(state => state.takes);
   const addTake = useStudio(state => state.addTake);
   const removeTake = useStudio(state => state.removeTake);
@@ -63,10 +75,12 @@ export function GeneratePanel() {
   const chunks = text.trim() ? chunkText(text).length : 0;
 
   const generate = async () => {
+    const controller = new AbortController();
+    abort.current = controller;
     setBusy(true);
-    setError("");
+    setBusySince(Date.now());
     try {
-      const url = await synthesize({ input: text.trim(), voice, ...(engine ? { engine } : {}) });
+      const url = await synthesize({ input: text.trim(), voice, ...(engine ? { engine } : {}), signal: controller.signal });
       addTake({
         id: crypto.randomUUID(),
         text: text.trim(),
@@ -75,8 +89,13 @@ export function GeneratePanel() {
         url,
       });
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : String(failure));
+      if (controller.signal.aborted) {
+        toast("info", "已取消合成");
+      } else {
+        toast("error", failure instanceof Error ? failure.message : String(failure));
+      }
     } finally {
+      abort.current = undefined;
       setBusy(false);
     }
   };
@@ -101,15 +120,22 @@ export function GeneratePanel() {
             </span>
           )}
           <div className="flex-1" />
+          {busy && (
+            <button
+              onClick={() => abort.current?.abort()}
+              className="rounded-lg border border-ink-700 px-4 py-2 text-sm text-ink-300 hover:text-ink-100"
+            >
+              取消
+            </button>
+          )}
           <button
             onClick={() => void generate()}
             disabled={busy || !text.trim()}
             className="rounded-lg bg-accent-600 px-5 py-2 text-sm font-medium text-white hover:bg-accent-500 disabled:opacity-40"
           >
-            {busy ? "合成中…" : "生成"}
+            {busy ? <>合成中… <Elapsed since={busySince} /></> : "生成"}
           </button>
         </div>
-        {error && <p className="text-xs text-red-300">{error}</p>}
       </section>
 
       <section className="space-y-3">

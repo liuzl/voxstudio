@@ -10,6 +10,8 @@ export interface TurnView {
   transcript: string | undefined;
   reply: string;
   status: "capturing" | "thinking" | "speaking" | "completed" | "interrupted";
+  /** Client clock at the last status change — drives the "已等待 Ns" escape hatch. */
+  statusAt: number;
   reopens: number;
   falseBargeIns: number;
   timing: Record<string, number> | undefined;
@@ -18,6 +20,13 @@ export interface TurnView {
 
 export interface NoticeView {
   at: number;
+  kind: "info" | "error";
+  text: string;
+}
+
+/** A transient feedback bubble: info auto-dismisses, errors stay until clicked. */
+export interface ToastView {
+  id: number;
   kind: "info" | "error";
   text: string;
 }
@@ -67,6 +76,9 @@ interface StudioState {
   setVoice(voice: string, engine?: string): void;
   setLanguage(language: string): void;
   notice(kind: NoticeView["kind"], text: string): void;
+  toasts: ToastView[];
+  toast(kind: ToastView["kind"], text: string): void;
+  dismissToast(id: number): void;
   apply(event: GatewayEvent): void;
   resetSession(): void;
 }
@@ -74,6 +86,9 @@ interface StudioState {
 const maxTurns = 50;
 const maxNotices = 30;
 const maxTakes = 30;
+const maxToasts = 5;
+
+let nextToastId = 1;
 
 function updateTurn(turns: TurnView[], turnId: string, update: (turn: TurnView) => TurnView): TurnView[] {
   const index = turns.findIndex(turn => turn.id === turnId);
@@ -102,6 +117,9 @@ export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sess
         transcript: undefined,
         reply: "",
         status: "capturing",
+        // The client clock, not event.timestampMs: elapsed-time UI compares against
+        // Date.now(), and the server clock may skew when the gateway is remote.
+        statusAt: Date.now(),
         reopens: 0,
         falseBargeIns: 0,
         timing: undefined,
@@ -110,7 +128,7 @@ export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sess
       return { turns: [...state.turns, turn].slice(-maxTurns) };
     }
     case "vad.end":
-      return { turns: updateTurn(state.turns, event.turnId, turn => ({ ...turn, status: "thinking" })) };
+      return { turns: updateTurn(state.turns, event.turnId, turn => ({ ...turn, status: "thinking", statusAt: Date.now() })) };
     case "turn.reopened":
       // The superseded dispatch is dead; its partial transcript/reply would be stale.
       return {
@@ -120,6 +138,7 @@ export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sess
           transcript: undefined,
           reply: "",
           status: "capturing",
+          statusAt: Date.now(),
           reopens: turn.reopens + 1,
         })),
       };
@@ -139,14 +158,15 @@ export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sess
           event.revision < turn.revision ? turn : { ...turn, reply: event.text }),
       };
     case "playback.format":
-      return { turns: updateTurn(state.turns, event.turnId, turn => ({ ...turn, status: "speaking" })) };
+      return { turns: updateTurn(state.turns, event.turnId, turn => ({ ...turn, status: "speaking", statusAt: Date.now() })) };
     case "turn.completed":
-      return { turns: updateTurn(state.turns, event.turnId, turn => ({ ...turn, status: "completed" })) };
+      return { turns: updateTurn(state.turns, event.turnId, turn => ({ ...turn, status: "completed", statusAt: Date.now() })) };
     case "turn.interrupted":
       return {
         turns: updateTurn(state.turns, event.turnId, turn => ({
           ...turn,
           status: "interrupted",
+          statusAt: Date.now(),
           endReason: event.reason ?? "cancel",
         })),
       };
@@ -217,6 +237,10 @@ export const useStudio = create<StudioState>((set, get) => ({
   setLanguage: language => set({ language }),
   notice: (kind, text) =>
     set(state => ({ notices: [...state.notices, { at: Date.now(), kind, text }].slice(-maxNotices) })),
+  toasts: [],
+  toast: (kind, text) =>
+    set(state => ({ toasts: [...state.toasts, { id: nextToastId++, kind, text }].slice(-maxToasts) })),
+  dismissToast: id => set(state => ({ toasts: state.toasts.filter(toast => toast.id !== id) })),
   apply: event => set(reduceEvent(get(), event)),
   resetSession: () => set({ sessionState: "off", sessionId: undefined, active: false, muted: false, micLevel: 0 }),
 }));

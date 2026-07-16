@@ -46,6 +46,35 @@ function TimingChips({ turn }: { turn: TurnView }) {
   );
 }
 
+/**
+ * The stuck-turn escape hatch: a quiet "思考中…" grows a waited-seconds counter and a
+ * cancel button once the wait stops feeling like latency and starts feeling like a hang.
+ */
+function ThinkingBubble({ turn }: { turn: TurnView }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, []);
+  const waited = Math.max(0, Math.round((now - turn.statusAt) / 1_000));
+  return (
+    <span className="text-ink-500">
+      思考中…
+      {waited >= 8 && (
+        <>
+          <span className="ml-2 text-[11px]">已等待 {waited}s</span>
+          <button
+            onClick={() => conversationControls()?.cancelTurn(turn.id)}
+            className="ml-2 text-[11px] text-amber-300 hover:underline"
+          >
+            取消本轮
+          </button>
+        </>
+      )}
+    </span>
+  );
+}
+
 function TurnCard({ turn }: { turn: TurnView }) {
   return (
     <div className="space-y-2">
@@ -67,7 +96,7 @@ function TurnCard({ turn }: { turn: TurnView }) {
               turn.status === "interrupted" ? "opacity-60" : ""
             }`}
           >
-            {turn.reply || <span className="text-ink-500">思考中…</span>}
+            {turn.reply || <ThinkingBubble turn={turn} />}
             {turn.status === "interrupted" && <span className="ml-2 text-xs text-amber-300">（被打断）</span>}
           </div>
         </div>
@@ -188,7 +217,7 @@ export function ConversationPanel() {
   const turns = useStudio(state => state.turns);
   const notices = useStudio(state => state.notices);
   const capability = useStudio(state => state.capability);
-  const notice = useStudio(state => state.notice);
+  const toast = useStudio(state => state.toast);
   const scroller = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -203,7 +232,7 @@ export function ConversationPanel() {
     try {
       await startConversation();
     } catch (error) {
-      notice("error", `启动失败：${error instanceof Error ? error.message : String(error)}`);
+      toast("error", `启动失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setStarting(false);
     }

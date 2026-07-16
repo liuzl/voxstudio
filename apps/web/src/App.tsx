@@ -4,7 +4,7 @@ import { GeneratePanel } from "./panels/GeneratePanel";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { VoicesPanel } from "./panels/VoicesPanel";
-import { useStudio } from "./store";
+import { useStudio, type ToastView } from "./store";
 
 type Tab = "conversation" | "generate" | "voices" | "library" | "settings";
 
@@ -52,6 +52,45 @@ function ConnectionDot({ withText = true }: { withText?: boolean }) {
       <span className={`inline-block size-2 rounded-full ${status.tone}`} />
       {withText && <span>{status.text}</span>}
     </span>
+  );
+}
+
+function Toast({ toast, onDismiss }: { toast: ToastView; onDismiss: () => void }) {
+  useEffect(() => {
+    // Errors wait for the user; info leaves on its own.
+    if (toast.kind === "error") return;
+    const timer = setTimeout(onDismiss, 3_500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <button
+      onClick={onDismiss}
+      className={`pointer-events-auto rounded-lg border px-3 py-2 text-left text-xs leading-relaxed shadow-lg shadow-black/30 ${
+        toast.kind === "error"
+          ? "border-red-400/40 bg-ink-900 text-red-300"
+          : "border-ink-700 bg-ink-900 text-ink-100"
+      }`}
+      title="点击关闭"
+    >
+      {toast.text}
+    </button>
+  );
+}
+
+/** The one feedback surface: panels report outcomes here instead of scattering inline text. */
+function Toasts() {
+  const toasts = useStudio(state => state.toasts);
+  const dismissToast = useStudio(state => state.dismissToast);
+  return (
+    <div
+      aria-live="polite"
+      className="pointer-events-none fixed bottom-20 right-4 z-50 flex w-72 max-w-[calc(100vw-2rem)] flex-col gap-2 md:bottom-6"
+    >
+      {toasts.map(toast => (
+        <Toast key={toast.id} toast={toast} onDismiss={() => dismissToast(toast.id)} />
+      ))}
+    </div>
   );
 }
 
@@ -108,6 +147,7 @@ export function App() {
       </header>
 
       <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">{panel}</main>
+      <Toasts />
 
       {/* Mobile: bottom tab bar */}
       <nav

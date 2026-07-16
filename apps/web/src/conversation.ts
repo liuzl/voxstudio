@@ -74,6 +74,11 @@ export class ConversationController {
     if (speaking) this.client?.interruptTurn(speaking.id);
   }
 
+  /** The escape hatch for a stuck turn: cancel it by id (stale ids are rejected server-side). */
+  cancelTurn(turnId: string): void {
+    this.client?.interruptTurn(turnId);
+  }
+
   async stop(): Promise<void> {
     this.client?.stopSession();
     this.client = undefined;
@@ -143,6 +148,6 @@ export async function stopConversation(): Promise<void> {
   await active?.stop();
 }
 
-export function conversationControls(): Pick<ConversationController, "setMuted" | "interruptPlayback"> | undefined {
+export function conversationControls(): Pick<ConversationController, "setMuted" | "interruptPlayback" | "cancelTurn"> | undefined {
   return current;
 }
