@@ -181,6 +181,8 @@ function StartCard({ starting, onStart }: { starting: boolean; onStart: () => vo
 export function ConversationPanel() {
   const [starting, setStarting] = useState(false);
   const active = useStudio(state => state.active);
+  const voice = useStudio(state => state.voice);
+  const voiceEngine = useStudio(state => state.voiceEngine);
   const muted = useStudio(state => state.muted);
   const sessionState = useStudio(state => state.sessionState);
   const turns = useStudio(state => state.turns);
@@ -220,6 +222,15 @@ export function ConversationPanel() {
         <h1 className="text-base font-semibold">对话</h1>
         <span className={`rounded-full px-2.5 py-0.5 text-xs ${state.tone}`}>{state.text}</span>
         {active && <MicLevel />}
+        {/* The voice picker lives on the start card, so what it chose stays visible here. */}
+        {(active || turns.length > 0) && (
+          <span
+            className="max-w-48 truncate rounded-full border border-ink-700 px-2.5 py-0.5 text-xs text-ink-300"
+            title="本次对话的 TTS 音色"
+          >
+            🎭 {voice ? `${voice}${voiceEngine ? ` · ${voiceEngine}` : ""}` : "默认音色"}
+          </span>
+        )}
         <div className="flex-1" />
         {active && (
           <div className="flex items-center gap-2">
