@@ -8,11 +8,12 @@
     "platforms/*"
   ],
   "scripts": {
-    "build:cli": "bun run --cwd apps/cli build",
+    "build:cli": "bun run build:web && bun run --cwd apps/cli build",
     "measure:aec": "./platforms/macos-audio/build.sh && bun run platforms/macos-audio/aec-measure.ts",
     "test:macos-audio": "./platforms/macos-audio/build.sh && bun run platforms/macos-audio/smoke-test.ts",
-    "test:ts": "bun test packages platforms apps/cli/src apps/realtime-gateway/src apps/web/src",
-    "typecheck": "tsc --noEmit && tsc -p apps/web/tsconfig.json --noEmit"
+    "test:ts": "bun tools/ensure-web-assets.ts && bun test packages platforms apps/cli/src apps/realtime-gateway/src apps/web/src",
+    "typecheck": "bun tools/ensure-web-assets.ts && tsc --noEmit && tsc -p apps/web/tsconfig.json --noEmit",
+    "build:web": "bun run --cwd apps/web build && bun tools/ensure-web-assets.ts"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

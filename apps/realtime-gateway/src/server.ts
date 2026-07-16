@@ -17,6 +17,14 @@ export interface GatewayServerOptions {
   reconnectGraceMs?: number;
   loadSileroVad?: () => Promise<SpeechProbabilityModel>;
   log?: (line: string) => void;
+  /**
+   * Web Studio app shell: URL path -> file path (a real file, or a Bun embedded-file
+   * path inside a compiled binary). GET/HEAD only; unknown non-API paths fall back to
+   * /index.html (client-side routing). Served before the bearer gate — a browser's
+   * initial page load cannot carry a header, and the shell holds no secrets; every
+   * /v1 route stays guarded.
+   */
+  staticAssets?: Record<string, string>;
 }
 
 export interface GatewayServer {
@@ -61,6 +69,23 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const log = options.log ?? (() => {});
   const sessions = new Map<string, GatewaySession>();
+
+  const assets = options.staticAssets && Object.keys(options.staticAssets).length > 0
+    ? options.staticAssets
+    : undefined;
+  const serveStatic = (request: Request, url: URL): Response | undefined => {
+    if (!assets) return undefined;
+    if (request.method !== "GET" && request.method !== "HEAD") return undefined;
+    if (url.pathname === "/v1" || url.pathname.startsWith("/v1/")) return undefined;
+    const exact = assets[url.pathname === "/" ? "/index.html" : url.pathname];
+    const file = exact ?? assets["/index.html"];
+    if (!file) return undefined;
+    // Hashed bundle files never change under their name; the SPA entry must revalidate.
+    const immutable = exact !== undefined && url.pathname.startsWith("/assets/");
+    return new Response(Bun.file(file), {
+      headers: { "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-cache" },
+    });
+  };
 
   const authorized = (request: Request): boolean => {
     if (!options.token) return true;
@@ -266,6 +291,8 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       if (url.pathname === "/healthz") {
         return Response.json({ ok: true, protocol: protocolVersion, sessions: sessions.size });
       }
+      const page = serveStatic(request, url);
+      if (page) return page;
       if (!authorized(request)) return new Response("unauthorized", { status: 401 });
       if (url.pathname === "/v1/realtime") {
         const data: SocketData = { session: undefined, sink: undefined };

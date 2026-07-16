@@ -18,6 +18,7 @@
     "@voxstudio/duplex-session": "workspace:*",
     "@voxstudio/orchestration": "workspace:*",
     "@voxstudio/platform-bun": "workspace:*",
+    "@voxstudio/realtime-gateway": "workspace:*",
     "@voxstudio/text": "workspace:*"
   },
   "devDependencies": {}

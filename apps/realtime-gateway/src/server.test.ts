@@ -464,4 +464,37 @@ describe("realtime gateway", () => {
     await allowedSocket.ready();
     allowedSocket.close();
   });
+
+  test("serves the web app shell around the guarded API", async () => {
+    const dir = `${import.meta.dir}/../node_modules/.test-static-${Date.now().toString(36)}`;
+    await Bun.write(`${dir}/index.html`, "<html><body>studio-shell</body></html>");
+    await Bun.write(`${dir}/assets/app-abc123.js`, "console.log('app');");
+    gateway = startGateway({
+      config,
+      fetch: engineFetch(),
+      port: 0,
+      token: "gw-secret",
+      staticAssets: {
+        "/index.html": `${dir}/index.html`,
+        "/assets/app-abc123.js": `${dir}/assets/app-abc123.js`,
+      },
+    });
+
+    // The shell loads without the token: a page load cannot carry a bearer header.
+    const home = await fetch(gateway.url);
+    expect(home.status).toBe(200);
+    expect(await home.text()).toContain("studio-shell");
+    expect(home.headers.get("cache-control")).toBe("no-cache");
+
+    // Hashed bundles are immutable; client-side routes fall back to the entry.
+    const bundle = await fetch(new URL("/assets/app-abc123.js", gateway.url));
+    expect(bundle.status).toBe(200);
+    expect(bundle.headers.get("cache-control")).toContain("immutable");
+    const deepLink = await fetch(new URL("/settings", gateway.url));
+    expect(await deepLink.text()).toContain("studio-shell");
+
+    // The API keeps its gate: static serving must not blanket /v1.
+    expect((await fetch(new URL("/v1/engines", gateway.url))).status).toBe(401);
+    expect((await fetch(gateway.url, { method: "POST" })).status).toBe(401);
+  });
 });
