@@ -11,17 +11,27 @@ interface Health {
 function EnginesTable() {
   const [engines, setEngines] = useState<EngineEntry[] | "error" | undefined>(undefined);
 
-  useEffect(() => {
-    let cancelled = false;
+  const load = () => {
+    setEngines(undefined);
     listEngines()
-      .then(entries => { if (!cancelled) setEngines(entries); })
-      .catch(() => { if (!cancelled) setEngines("error"); });
-    return () => { cancelled = true; };
-  }, []);
+      .then(setEngines)
+      .catch(() => setEngines("error"));
+  };
+
+  useEffect(load, []);
 
   return (
     <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
-      <h2 className="text-sm font-medium text-ink-300">引擎（注册表）</h2>
+      <div className="flex items-center gap-3">
+        <h2 className="text-sm font-medium text-ink-300">引擎（注册表）</h2>
+        <div className="flex-1" />
+        <button
+          onClick={load}
+          className="rounded-lg border border-ink-700 px-3 py-1 text-xs text-ink-300 hover:text-ink-100"
+        >
+          刷新
+        </button>
+      </div>
       {engines === undefined && <p className="mt-2 text-sm text-ink-500">探测中…</p>}
       {engines === "error" && <p className="mt-2 text-sm text-red-300">无法获取引擎列表（/v1/engines）</p>}
       {/* A six-column table has no honest 390px rendering; small screens get cards. */}
@@ -84,7 +94,12 @@ function EnginesTable() {
                     ))}
                   </td>
                   <td className="py-2">
-                    <span className={`inline-block size-2 rounded-full ${entry.healthy ? "bg-emerald-400" : "bg-red-400"}`} />
+                    <span
+                      className={`inline-block size-2 rounded-full ${entry.healthy ? "bg-emerald-400" : "bg-red-400"}`}
+                      role="img"
+                      aria-label={entry.healthy ? "在线" : "离线"}
+                      title={entry.healthy ? "在线" : "离线"}
+                    />
                   </td>
                 </tr>
               ))}
@@ -104,26 +119,32 @@ export function SettingsPanel() {
   const capability = useStudio(state => state.capability);
   const sessionId = useStudio(state => state.sessionId);
 
-  useEffect(() => {
-    let cancelled = false;
+  const probe = () => {
+    setHealth(undefined);
     fetch("/healthz")
       .then(async response => {
-        if (!cancelled) setHealth(response.ok ? ((await response.json()) as Health) : "unreachable");
+        setHealth(response.ok ? ((await response.json()) as Health) : "unreachable");
       })
-      .catch(() => {
-        if (!cancelled) setHealth("unreachable");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+      .catch(() => setHealth("unreachable"));
+  };
+
+  useEffect(probe, []);
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 px-4 py-6 md:space-y-8 md:px-8 md:py-10">
       <h1 className="text-2xl font-semibold">设置</h1>
 
       <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
-        <h2 className="text-sm font-medium text-ink-300">网关</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm font-medium text-ink-300">网关</h2>
+          <div className="flex-1" />
+          <button
+            onClick={probe}
+            className="rounded-lg border border-ink-700 px-3 py-1 text-xs text-ink-300 hover:text-ink-100"
+          >
+            刷新
+          </button>
+        </div>
         {health === undefined && <p className="mt-2 text-sm text-ink-500">探测中…</p>}
         {health === "unreachable" && <p className="mt-2 text-sm text-red-300">无法连接网关（/healthz）</p>}
         {health !== undefined && health !== "unreachable" && (

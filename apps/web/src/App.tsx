@@ -8,11 +8,12 @@ import { useStudio, type ToastView } from "./store";
 
 type Tab = "conversation" | "generate" | "voices" | "library" | "settings";
 
-const tabs: { id: Tab; label: string; icon: string }[] = [
+const tabs: { id: Tab; label: string; icon: string; hint?: string }[] = [
   { id: "conversation", label: "对话", icon: "🎙" },
   { id: "generate", label: "生成", icon: "✍️" },
   { id: "voices", label: "音色", icon: "🎭" },
-  { id: "library", label: "素材库", icon: "🗂" },
+  // A planned phase keeps its door labeled, not silently dead.
+  { id: "library", label: "素材库", icon: "🗂", hint: "规划中" },
   { id: "settings", label: "设置", icon: "⚙️" },
 ];
 
@@ -96,6 +97,15 @@ function Toasts() {
 
 export function App() {
   const [tab, setTab] = useState<Tab>("conversation");
+  const hasTakes = useStudio(state => state.takes.length > 0);
+
+  // Generation takes are in-memory object URLs; a reload silently discards them.
+  useEffect(() => {
+    if (!hasTakes) return;
+    const guard = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, [hasTakes]);
 
   const panel = (
     <>
@@ -126,12 +136,14 @@ export function App() {
             <button
               key={item.id}
               onClick={() => setTab(item.id)}
+              aria-current={tab === item.id ? "page" : undefined}
               className={`flex items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
                 tab === item.id ? "bg-ink-700 text-ink-100" : "text-ink-300 hover:bg-ink-800 hover:text-ink-100"
               }`}
             >
               <span aria-hidden>{item.icon}</span>
               <span>{item.label}</span>
+              {item.hint && <span className="ml-auto text-[10px] text-ink-500">{item.hint}</span>}
             </button>
           ))}
         </nav>
@@ -158,9 +170,10 @@ export function App() {
           <button
             key={item.id}
             onClick={() => setTab(item.id)}
+            aria-current={tab === item.id ? "page" : undefined}
             className={`flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 text-[11px] ${
               tab === item.id ? "text-accent-500" : "text-ink-300"
-            }`}
+            } ${item.hint ? "opacity-60" : ""}`}
           >
             <span aria-hidden className="text-lg leading-none">{item.icon}</span>
             <span>{item.label}</span>

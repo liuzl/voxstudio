@@ -54,6 +54,8 @@ export function VoicesPanel() {
   const [recorder, setRecorder] = useState<VoiceRecorder | undefined>(undefined);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [recorded, setRecorded] = useState<{ file: File; url: string } | undefined>(undefined);
+  /** Object URL of the chosen upload — audible before it becomes a reference voice. */
+  const [uploaded, setUploaded] = useState<{ url: string; name: string } | undefined>(undefined);
   const [transcribing, setTranscribing] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const player = useRef<HTMLAudioElement | undefined>(undefined);
@@ -132,6 +134,11 @@ export function VoicesPanel() {
     setRecorded(undefined);
   };
 
+  const discardUpload = () => {
+    if (uploaded) URL.revokeObjectURL(uploaded.url);
+    setUploaded(undefined);
+  };
+
   const startRecording = async () => {
     discardRecording();
     try {
@@ -202,6 +209,7 @@ export function VoicesPanel() {
       setNewText("");
       if (fileInput.current) fileInput.current.value = "";
       discardRecording();
+      discardUpload();
       await refresh();
       // Surface the new voice immediately: filter the bank to it.
       setCategory("全部");
@@ -369,12 +377,21 @@ export function VoicesPanel() {
           </div>
 
           {source === "upload" ? (
-            <input
-              ref={fileInput}
-              type="file"
-              accept="audio/*"
-              className="text-xs text-ink-300 file:mr-2 file:rounded file:border-0 file:bg-ink-700 file:px-2 file:py-1.5 file:text-xs file:text-ink-100"
-            />
+            <div className="flex flex-wrap items-center gap-3">
+              <input
+                ref={fileInput}
+                type="file"
+                accept="audio/*"
+                onChange={event => {
+                  // A wrong file should be audible now, not after registration.
+                  discardUpload();
+                  const file = event.target.files?.[0];
+                  if (file) setUploaded({ url: URL.createObjectURL(file), name: file.name });
+                }}
+                className="text-xs text-ink-300 file:mr-2 file:rounded file:border-0 file:bg-ink-700 file:px-2 file:py-1.5 file:text-xs file:text-ink-100"
+              />
+              {uploaded && <audio controls src={uploaded.url} className="h-9 max-w-64" />}
+            </div>
           ) : (
             <div className="flex flex-wrap items-center gap-3">
               {recorder ? (

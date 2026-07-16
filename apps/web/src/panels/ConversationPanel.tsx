@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { VoicePicker } from "../components/VoicePicker";
 import { conversationControls, startConversation, stopConversation } from "../conversation";
-import { listVoices } from "../lib/api";
 import { useStudio, type TurnView } from "../store";
 
 const stateLabels: Record<string, { text: string; tone: string }> = {
@@ -26,7 +26,7 @@ const timingLabels: [string, string][] = [
 function TimingChips({ turn }: { turn: TurnView }) {
   if (!turn.timing) return null;
   return (
-    <div className="mt-2 flex flex-wrap gap-1.5 text-[11px] text-ink-300">
+    <div className="mt-1.5 flex flex-wrap gap-1.5 text-[11px] text-ink-300">
       {timingLabels.map(([key, label]) => {
         const value = turn.timing?.[key];
         if (value === undefined) return null;
@@ -36,12 +36,36 @@ function TimingChips({ turn }: { turn: TurnView }) {
           </span>
         );
       })}
-      {turn.reopens > 0 && (
-        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-300">续说 ×{turn.reopens}</span>
-      )}
-      {turn.falseBargeIns > 0 && (
-        <span className="rounded bg-ink-800 px-1.5 py-0.5">忽略杂音 ×{turn.falseBargeIns}</span>
-      )}
+    </div>
+  );
+}
+
+/** Quiet per-turn meta: a timestamp, the developer timings behind a toggle, copy. */
+function TurnFooter({ turn }: { turn: TurnView }) {
+  const [expanded, setExpanded] = useState(false);
+  const toast = useStudio(state => state.toast);
+  const copy = () => {
+    void navigator.clipboard?.writeText(turn.reply || turn.transcript || "");
+    toast("info", "已复制回复内容");
+  };
+  return (
+    <div>
+      <div className="flex items-center gap-2.5 text-[11px] text-ink-500">
+        <span>{new Date(turn.at).toLocaleTimeString()}</span>
+        {turn.timing && (
+          <button onClick={() => setExpanded(value => !value)} className="hover:text-ink-300">
+            {expanded ? "收起耗时" : "耗时"}
+          </button>
+        )}
+        {turn.reply && (
+          <button onClick={copy} className="hover:text-ink-300">
+            复制
+          </button>
+        )}
+        {turn.reopens > 0 && <span className="text-amber-300/80">续说 ×{turn.reopens}</span>}
+        {turn.falseBargeIns > 0 && <span>忽略杂音 ×{turn.falseBargeIns}</span>}
+      </div>
+      {expanded && <TimingChips turn={turn} />}
     </div>
   );
 }
@@ -101,7 +125,7 @@ function TurnCard({ turn }: { turn: TurnView }) {
           </div>
         </div>
       )}
-      <TimingChips turn={turn} />
+      <TurnFooter turn={turn} />
     </div>
   );
 }
@@ -135,21 +159,6 @@ function StartCard({ starting, onStart }: { starting: boolean; onStart: () => vo
   const language = useStudio(state => state.language);
   const setVoice = useStudio(state => state.setVoice);
   const setLanguage = useStudio(state => state.setLanguage);
-  const voicesList = useStudio(state => state.voicesList);
-  const setVoicesList = useStudio(state => state.setVoicesList);
-
-  useEffect(() => {
-    if (voicesList.length === 0) listVoices().then(setVoicesList).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const byEngine = useMemo(() => {
-    const groups = new Map<string, string[]>();
-    for (const entry of voicesList) {
-      groups.set(entry.engine, [...(groups.get(entry.engine) ?? []), entry.id]);
-    }
-    return [...groups.entries()];
-  }, [voicesList]);
 
   return (
     <div className="mx-auto flex h-full max-w-sm flex-col items-center justify-center gap-6 px-6 text-center">
@@ -175,30 +184,9 @@ function StartCard({ starting, onStart }: { starting: boolean; onStart: () => vo
             <option value="auto">自动</option>
           </select>
         </label>
-        <label className="flex items-center gap-2 text-xs text-ink-300">
-          音色
-          <select
-            value={voice ? `${voiceEngine}::${voice}` : ""}
-            onChange={event => {
-              const [engine, id] = event.target.value.split("::");
-              // Choosing a voice routes the session's TTS to its owning engine —
-              // a clone voice moves the conversation onto the quality line.
-              setVoice(id ?? "", engine || undefined);
-            }}
-            className="max-w-44 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100"
-          >
-            <option value="">默认（{byEngine[0]?.[0] || "引擎默认"}）</option>
-            {byEngine.map(([engine, ids]) => (
-              <optgroup key={engine} label={engine}>
-                {ids.map(id => (
-                  <option key={`${engine}::${id}`} value={`${engine}::${id}`}>
-                    {id}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </label>
+        {/* Choosing a voice routes the session's TTS to its owning engine —
+            a clone voice moves the conversation onto the quality line. */}
+        <VoicePicker value={voice} engine={voiceEngine} onChange={setVoice} className="max-w-44" />
       </div>
       <p className="text-xs leading-relaxed text-ink-500">
         授权麦克风后进入全双工对话：断句、识别、回答全自动，回答播放时直接开口即可打断，停顿后续说会自动合并。
@@ -226,6 +214,20 @@ export function ConversationPanel() {
 
   // No unmount cleanup on purpose: the conversation is app-scoped and survives tab
   // switches. It ends on 结束, on session.stop, or with the page.
+
+  // Space toggles mute during a session — the hands-on-keyboard mute switch.
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code !== "Space") return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest("input, textarea, select, button, [contenteditable]")) return;
+      event.preventDefault();
+      conversationControls()?.setMuted(!useStudio.getState().muted);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active]);
 
   const start = async () => {
     setStarting(true);
@@ -268,6 +270,7 @@ export function ConversationPanel() {
               className={`rounded-lg border px-3 py-1.5 text-sm ${
                 muted ? "border-amber-400 text-amber-300" : "border-ink-700 text-ink-300 hover:text-ink-100"
               }`}
+              title="空格键切换"
             >
               {muted ? "已静音" : "静音"}
             </button>

@@ -1,6 +1,7 @@
 import { estSeconds, chunkText } from "@voxstudio/text";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { listVoices, synthesize } from "../lib/api";
+import { useEffect, useRef, useState } from "react";
+import { VoicePicker } from "../components/VoicePicker";
+import { synthesize } from "../lib/api";
 import { useStudio } from "../store";
 
 /** Ticks once a second while a synthesis runs — long texts deserve a visible clock. */
@@ -11,46 +12,6 @@ function Elapsed({ since }: { since: number }) {
     return () => clearInterval(timer);
   }, []);
   return <>{Math.max(0, Math.round((now - since) / 1_000))}s</>;
-}
-
-function VoicePicker({ value, engine, onChange }: {
-  value: string;
-  engine: string;
-  onChange: (voice: string, engine?: string) => void;
-}) {
-  const voicesList = useStudio(state => state.voicesList);
-  const byEngine = useMemo(() => {
-    const groups = new Map<string, string[]>();
-    for (const entry of voicesList) {
-      groups.set(entry.engine, [...(groups.get(entry.engine) ?? []), entry.id]);
-    }
-    return [...groups.entries()];
-  }, [voicesList]);
-  return (
-    <label className="flex items-center gap-2 text-xs text-ink-300">
-      音色
-      <select
-        value={value ? `${engine}::${value}` : ""}
-        onChange={event => {
-          const [nextEngine, id] = event.target.value.split("::");
-          // Picking a voice carries its owning engine; 默认 falls to the role default.
-          onChange(id ?? "", nextEngine || undefined);
-        }}
-        className="max-w-48 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100"
-      >
-        <option value="">默认（{byEngine[0]?.[0] || "引擎默认"}）</option>
-        {byEngine.map(([groupEngine, ids]) => (
-          <optgroup key={groupEngine} label={groupEngine}>
-            {ids.map(id => (
-              <option key={`${groupEngine}::${id}`} value={`${groupEngine}::${id}`}>
-                {id}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
-    </label>
-  );
 }
 
 export function GeneratePanel() {
@@ -65,11 +26,6 @@ export function GeneratePanel() {
   const takes = useStudio(state => state.takes);
   const addTake = useStudio(state => state.addTake);
   const removeTake = useStudio(state => state.removeTake);
-  const setVoicesList = useStudio(state => state.setVoicesList);
-
-  useEffect(() => {
-    listVoices().then(setVoicesList).catch(() => {});
-  }, [setVoicesList]);
 
   const seconds = text.trim() ? Math.round(estSeconds(text)) : 0;
   const chunks = text.trim() ? chunkText(text).length : 0;
@@ -108,8 +64,14 @@ export function GeneratePanel() {
         <textarea
           value={text}
           onChange={event => setText(event.target.value)}
+          onKeyDown={event => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !busy && text.trim()) {
+              event.preventDefault();
+              void generate();
+            }
+          }}
           rows={5}
-          placeholder="输入要合成的文本…"
+          placeholder="输入要合成的文本…（⌘+Enter 生成）"
           className="w-full resize-y rounded-lg border border-ink-700 bg-ink-800 px-3 py-2.5 text-sm leading-relaxed text-ink-100 placeholder:text-ink-500"
         />
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -139,7 +101,7 @@ export function GeneratePanel() {
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-medium text-ink-300">Takes（本页会话内保留，最近 30 条）</h2>
+        <h2 className="text-sm font-medium text-ink-300">生成记录（本页保留最近 30 条，刷新即失）</h2>
         {takes.length === 0 && <p className="text-sm text-ink-500">还没有生成记录。</p>}
         {takes.map(take => (
           <div key={take.id} className="rounded-xl border border-ink-700 bg-ink-900 p-4">

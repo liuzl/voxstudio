@@ -6,6 +6,8 @@ import type { ConnectionState } from "./lib/client";
 
 export interface TurnView {
   id: string;
+  /** Client clock when the turn opened — the caption row's timestamp. */
+  at: number;
   revision: number;
   transcript: string | undefined;
   reply: string;
@@ -113,6 +115,7 @@ export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sess
     case "turn.started": {
       const turn: TurnView = {
         id: event.turnId,
+        at: Date.now(),
         revision: 0,
         transcript: undefined,
         reply: "",
