@@ -6,22 +6,26 @@ Self-hosted, **multilingual voice I/O studio** with support for Chinese and othe
 
 ## Architecture
 
-```
-        ┌─ CLI          (thin client — first surface)
-        ├─ Web Studio    (browser)
-core service ─┼─ MCP server   (agent voice)
-(orchestration)├─ desktop app  (optional)
-        └─ mobile client
-   │  core = I/O loop + voice profiles + long-text chunking + persona/refine
-   │
-   └── engines (OpenAI-compatible; hosted↔local = base-URL swap)
-         ├─ ASR   SenseVoice / FunASR  realtime slot (engines/funasr)
-         │        parakeet.cpp         (mudler/parakeet.cpp)
-         │        moss-transcribe      longform + diarization (engines/moss-transcribe)
-         ├─ TTS   VoxCPM2 PyTorch      quality first: clone + design (engines/voxcpm2-server)
-         │        kokoro               conversation fast lane (engines/kokoro)
-         │        VoxCPM.cpp           (liuzl/VoxCPM.cpp — offline/portable fallback)
-         └─ LLM   llama.cpp (Gemma)
+```mermaid
+flowchart LR
+  subgraph surfaces["surfaces — dashed: planned"]
+    CLI["vox CLI — first surface"]
+    WEB["Web Studio (browser)"]
+    MCP["MCP server (agent voice)"]
+    APP["desktop / mobile"]
+  end
+  GW["realtime-gateway<br/>WS /v1/realtime + REST facade<br/>credential hiding · engine routing"]
+  CORE["core orchestration (packages/)<br/>conversation loop · duplex session<br/>chunking · voice profiles"]
+  subgraph engines["engines"]
+    ASR["ASR<br/>SenseVoice/FunASR — realtime slot<br/>parakeet.cpp · moss-transcribe (longform)"]
+    TTS["TTS<br/>VoxCPM2 — quality: clone + design<br/>kokoro — fast lane · VoxCPM.cpp — fallback"]
+    LLM["LLM<br/>llama.cpp (Gemma)"]
+  end
+  CLI --> CORE
+  WEB -->|"WebSocket + REST"| GW --> CORE
+  MCP -.-> CORE
+  APP -.-> CORE
+  CORE -->|"/v1/* contract"| ASR & TTS & LLM
 ```
 
 The core never talks to a specific engine — only to the OpenAI-compatible contract (`/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/chat/completions`, plus the `/v1/voices`, `/v1/design-profiles`, and `/v1/engines` extensions). Switching an engine between a remote GPU host and a local machine is a base-URL change, and engines are **named instances** in a registry — multiple per kind, assigned to product roles, routed by capability tags (clone/design/preset/fast/…) or pinned per request. See [docs/engine-registry.md](./docs/engine-registry.md).
