@@ -77,6 +77,29 @@ function TurnCard({ turn }: { turn: TurnView }) {
   );
 }
 
+/** Five bars of local mic RMS — the "it hears you" signal while a session runs. */
+function MicLevel() {
+  const level = useStudio(state => state.micLevel);
+  const muted = useStudio(state => state.muted);
+  const lit = muted ? 0 : Math.min(5, Math.ceil(level * 5));
+  return (
+    <div
+      className={`flex items-end gap-0.5 ${muted ? "opacity-40" : ""}`}
+      title={muted ? "已静音" : "麦克风电平"}
+      role="img"
+      aria-label={muted ? "麦克风已静音" : "麦克风电平"}
+    >
+      {[0, 1, 2, 3, 4].map(bar => (
+        <span
+          key={bar}
+          className={`w-1 rounded-sm transition-colors ${bar < lit ? "bg-emerald-400" : "bg-ink-700"}`}
+          style={{ height: 5 + bar * 2.5 }}
+        />
+      ))}
+    </div>
+  );
+}
+
 function StartCard({ starting, onStart }: { starting: boolean; onStart: () => void }) {
   const voice = useStudio(state => state.voice);
   const voiceEngine = useStudio(state => state.voiceEngine);
@@ -184,14 +207,19 @@ export function ConversationPanel() {
     }
   };
 
-  const state = stateLabels[active ? sessionState : "off"] ?? stateLabels.off as { text: string; tone: string };
+  // A finished session with history reads "已结束", not "未开始" — the restart bar below
+  // the turns is the way back in.
+  const stateKey = active ? sessionState : turns.length > 0 ? "closed" : "off";
+  const state = stateLabels[stateKey] ?? stateLabels.off as { text: string; tone: string };
   const lastNotice = notices[notices.length - 1];
+  const clearHistory = useStudio(state => state.clearHistory);
 
   return (
     <div className="flex h-full flex-col">
       <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700 px-4 py-3 md:px-6">
         <h1 className="text-base font-semibold">对话</h1>
         <span className={`rounded-full px-2.5 py-0.5 text-xs ${state.tone}`}>{state.text}</span>
+        {active && <MicLevel />}
         <div className="flex-1" />
         {active && (
           <div className="flex items-center gap-2">
@@ -235,6 +263,21 @@ export function ConversationPanel() {
               {turns.map(turn => (
                 <TurnCard key={turn.id} turn={turn} />
               ))}
+              {/* The way back in: a finished session leaves its history, not a dead end. */}
+              {!active && turns.length > 0 && (
+                <div className="flex flex-col items-center gap-2.5 pb-2 pt-5">
+                  <button
+                    onClick={() => void start()}
+                    disabled={starting}
+                    className="rounded-full bg-accent-600 px-6 py-2.5 text-sm font-medium text-white shadow-lg shadow-accent-600/25 transition hover:bg-accent-500 active:scale-95 disabled:opacity-50"
+                  >
+                    {starting ? "启动中…" : "🎙 重新开始"}
+                  </button>
+                  <button onClick={clearHistory} className="text-xs text-ink-500 hover:text-ink-300">
+                    清空记录
+                  </button>
+                </div>
+              )}
             </>
           )}
         </div>

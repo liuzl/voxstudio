@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ConversationPanel } from "./panels/ConversationPanel";
 import { GeneratePanel } from "./panels/GeneratePanel";
 import { PlaceholderPanel } from "./panels/PlaceholderPanel";
@@ -16,16 +16,37 @@ const tabs: { id: Tab; label: string; icon: string }[] = [
   { id: "settings", label: "设置", icon: "⚙️" },
 ];
 
-const connectionLabels: Record<string, { text: string; tone: string }> = {
-  disconnected: { text: "未连接", tone: "bg-ink-500" },
+const sessionLabels: Record<string, { text: string; tone: string }> = {
   connecting: { text: "连接中", tone: "bg-yellow-400" },
   reconnecting: { text: "重连中", tone: "bg-yellow-400" },
-  connected: { text: "已连接", tone: "bg-emerald-400" },
+  connected: { text: "会话中", tone: "bg-emerald-400" },
 };
 
+/**
+ * Two layers, one dot: a live session's socket state wins; otherwise report gateway
+ * reachability — an idle studio is "就绪", not a scary "未连接".
+ */
 function ConnectionDot({ withText = true }: { withText?: boolean }) {
   const connection = useStudio(state => state.connection);
-  const status = connectionLabels[connection] ?? connectionLabels.disconnected as { text: string; tone: string };
+  const [gateway, setGateway] = useState<"probing" | "ok" | "down">("probing");
+
+  useEffect(() => {
+    let cancelled = false;
+    const probe = () =>
+      fetch("/healthz")
+        .then(response => { if (!cancelled) setGateway(response.ok ? "ok" : "down"); })
+        .catch(() => { if (!cancelled) setGateway("down"); });
+    void probe();
+    const timer = setInterval(() => void probe(), 30_000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, []);
+
+  const status = sessionLabels[connection]
+    ?? (gateway === "ok"
+      ? { text: "就绪", tone: "bg-emerald-400/60" }
+      : gateway === "down"
+        ? { text: "网关离线", tone: "bg-red-400" }
+        : { text: "探测中", tone: "bg-ink-500" });
   return (
     <span className="flex items-center gap-2 text-xs text-ink-300">
       <span className={`inline-block size-2 rounded-full ${status.tone}`} />

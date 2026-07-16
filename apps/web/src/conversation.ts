@@ -12,6 +12,7 @@ export class ConversationController {
   private mic: MicCapture | undefined;
   private speaker: SpeakerOutput | undefined;
   private playbackTurnId: string | undefined;
+  private lastLevelAt = 0;
 
   async start(): Promise<void> {
     const store = useStudio.getState();
@@ -35,7 +36,10 @@ export class ConversationController {
       onConnectionChange: state => useStudio.getState().setConnection(state),
     });
     this.client = client;
-    const mic = await MicCapture.start(samples => client.sendAudio(samples));
+    const mic = await MicCapture.start(samples => {
+      client.sendAudio(samples);
+      this.tapLevel(samples);
+    });
     this.mic = mic;
     useStudio.getState().setCapability(mic.capability());
     client.connect();
@@ -45,6 +49,23 @@ export class ConversationController {
   setMuted(muted: boolean): void {
     this.mic?.setMuted(muted);
     useStudio.getState().setMuted(muted);
+    // Muting suppresses frames at the capture node, so the meter would freeze mid-level.
+    if (muted) useStudio.getState().setMicLevel(0);
+  }
+
+  /**
+   * Capture feedback: the meter that tells the user "the microphone hears you". Local RMS
+   * only — computed from the same frames the gateway gets, throttled to the UI's pace.
+   */
+  private tapLevel(samples: Float32Array): void {
+    const now = performance.now();
+    if (now - this.lastLevelAt < 120) return;
+    this.lastLevelAt = now;
+    let sum = 0;
+    for (const sample of samples) sum += sample * sample;
+    const rms = Math.sqrt(sum / samples.length);
+    // Speech RMS on a normalized mic sits around 0.03–0.2; map that range onto the meter.
+    useStudio.getState().setMicLevel(Math.min(1, rms * 6));
   }
 
   /** Manual stop of the currently speaking reply — the button next to talking over it. */

@@ -18,16 +18,20 @@ const auditionText = "你好，这是一段试听。今天天气不错。";
 const maxRecordMs = 30_000;
 const minRecordMs = 2_000;
 
-/** Kokoro-style ids encode language and gender in their prefix; other engines fall through. */
+/**
+ * Kokoro-style ids encode language and gender in their prefix; anything else in the bank
+ * came from a clone/design engine — the user's own voices, the ones worth surfacing first.
+ */
 const categoryLabels: Record<string, string> = {
   zf: "中文·女", zm: "中文·男",
   af: "英文·女", am: "英文·男",
   bf: "英文·女(英)", bm: "英文·男(英)",
 };
+const ownCategory = "我的音色";
 
 function categoryOf(id: string): string {
   const prefix = id.split("_")[0] ?? "";
-  return categoryLabels[prefix] ?? "其他";
+  return categoryLabels[prefix] ?? ownCategory;
 }
 
 export function VoicesPanel() {
@@ -38,6 +42,8 @@ export function VoicesPanel() {
   const [category, setCategory] = useState("全部");
   const [status, setStatus] = useState<{ kind: "info" | "error"; text: string } | undefined>(undefined);
   const [auditioning, setAuditioning] = useState("");
+  const [playing, setPlaying] = useState("");
+  const auditionSeq = useRef(0);
   const [registering, setRegistering] = useState(false);
   const [newId, setNewId] = useState("");
   const [newText, setNewText] = useState("");
@@ -61,20 +67,43 @@ export function VoicesPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const stopAudition = () => {
+    player.current?.pause();
+    player.current = undefined;
+    setPlaying("");
+  };
+
+  // Click to play, click again to stop; a newer pick supersedes an in-flight synthesis
+  // instead of locking the whole bank behind it.
   const audition = async (id: string, engine: string) => {
+    if (playing === id) {
+      stopAudition();
+      return;
+    }
+    const seq = ++auditionSeq.current;
     setAuditioning(id);
     setStatus(undefined);
     try {
       const url = await synthesize({ input: auditionText, voice: id, ...(engine ? { engine } : {}) });
-      player.current?.pause();
+      if (seq !== auditionSeq.current) {
+        URL.revokeObjectURL(url);
+        return;
+      }
+      stopAudition();
       const audio = new Audio(url);
       player.current = audio;
-      audio.onended = () => URL.revokeObjectURL(url);
+      setPlaying(id);
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        setPlaying(current => (current === id ? "" : current));
+      };
       await audio.play();
     } catch (error) {
-      setStatus({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+      if (seq === auditionSeq.current) {
+        setStatus({ kind: "error", text: error instanceof Error ? error.message : String(error) });
+      }
     } finally {
-      setAuditioning("");
+      if (seq === auditionSeq.current) setAuditioning("");
     }
   };
 
@@ -185,14 +214,19 @@ export function VoicesPanel() {
       const key = categoryOf(voice.id);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    // The user's own voices lead; preset categories follow by size.
+    return [...counts.entries()].sort((a, b) =>
+      a[0] === ownCategory ? -1 : b[0] === ownCategory ? 1 : b[1] - a[1]);
   }, [voicesList]);
 
   const multiEngine = new Set(voicesList.map(voice => voice.engine)).size > 1;
-  const filtered = voicesList.filter(voice =>
-    (category === "全部" || categoryOf(voice.id) === category)
-    && (query === "" || voice.id.toLowerCase().includes(query.toLowerCase())
-      || voice.engine.toLowerCase().includes(query.toLowerCase())));
+  const filtered = voicesList
+    .filter(voice =>
+      (category === "全部" || categoryOf(voice.id) === category)
+      && (query === "" || voice.id.toLowerCase().includes(query.toLowerCase())
+        || voice.engine.toLowerCase().includes(query.toLowerCase())))
+    // Own voices sort first in the "全部" view too — not buried under 100+ presets.
+    .sort((a, b) => Number(categoryOf(b.id) === ownCategory) - Number(categoryOf(a.id) === ownCategory));
 
   return (
     <div className="mx-auto max-w-6xl space-y-5 px-4 py-6 md:px-8 md:py-10">
@@ -251,11 +285,13 @@ export function VoicesPanel() {
               >
                 <button
                   onClick={() => void audition(voice.id, voice.engine)}
-                  disabled={auditioning !== ""}
-                  className="min-w-0 flex-1 truncate text-left text-ink-100 hover:text-accent-500 disabled:opacity-40"
-                  title={`试听 ${voice.id}（${voice.engine}）`}
+                  disabled={auditioning === voice.id}
+                  className={`min-w-0 flex-1 truncate text-left hover:text-accent-500 disabled:opacity-40 ${
+                    playing === voice.id ? "text-accent-500" : "text-ink-100"
+                  }`}
+                  title={playing === voice.id ? "停止" : `试听 ${voice.id}（${voice.engine}）`}
                 >
-                  {auditioning === voice.id ? "▶ 合成中…" : voice.id}
+                  {auditioning === voice.id ? "▶ 合成中…" : playing === voice.id ? `■ ${voice.id}` : voice.id}
                 </button>
                 {multiEngine && voice.engine && (
                   <span className="shrink-0 rounded bg-ink-700/80 px-1 text-[10px] text-ink-300">{voice.engine}</span>
@@ -379,6 +415,7 @@ export function VoicesPanel() {
         onChanged={() => void refresh()}
         onAudition={(id, engine) => void audition(id, engine)}
         auditioning={auditioning}
+        playing={playing}
       />
     </div>
   );
@@ -398,11 +435,12 @@ function Fingerprint({ sha }: { sha: string | undefined }) {
   );
 }
 
-function ProfilesSection({ profiles, onChanged, onAudition, auditioning }: {
+function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing }: {
   profiles: VoiceEntry[];
   onChanged: () => void;
   onAudition: (id: string, engine: string) => void;
   auditioning: string;
+  playing: string;
 }) {
   const [engines, setEngines] = useState<EngineEntry[]>([]);
   const [note, setNote] = useState<{ kind: "info" | "error"; text: string } | undefined>(undefined);
@@ -557,9 +595,9 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning }: {
                 <Fingerprint sha={meta?.audio_sha256} />
                 {profile.engine && <span className="rounded bg-ink-700/80 px-1.5 py-0.5 text-[10px] text-ink-300">{profile.engine}</span>}
                 <div className="flex-1" />
-                <button onClick={() => onAudition(profile.id, profile.engine)} disabled={auditioning !== ""}
+                <button onClick={() => onAudition(profile.id, profile.engine)} disabled={auditioning === profile.id}
                   className="rounded border border-ink-700 px-2 py-1 text-[11px] text-ink-300 hover:text-ink-100 disabled:opacity-40">
-                  {auditioning === profile.id ? "合成中…" : "试听"}
+                  {auditioning === profile.id ? "合成中…" : playing === profile.id ? "■ 停止" : "试听"}
                 </button>
                 <button onClick={() => void verify(profile)} disabled={verifying !== ""}
                   title="同参数重新生成一次并比对音频指纹（可逐字节重现性检验）"

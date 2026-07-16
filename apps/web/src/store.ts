@@ -37,6 +37,8 @@ interface StudioState {
   sessionId: string | undefined;
   active: boolean;
   muted: boolean;
+  /** Local microphone RMS mapped to 0..1 — capture feedback, never sent anywhere. */
+  micLevel: number;
   turns: TurnView[];
   notices: NoticeView[];
   capability: EndpointCapability | undefined;
@@ -58,6 +60,9 @@ interface StudioState {
   setConnection(connection: ConnectionState): void;
   setActive(active: boolean): void;
   setMuted(muted: boolean): void;
+  setMicLevel(level: number): void;
+  /** Clear the finished conversation's turns and notices — back to the start card. */
+  clearHistory(): void;
   setCapability(capability: EndpointCapability): void;
   setVoice(voice: string, engine?: string): void;
   setLanguage(language: string): void;
@@ -176,6 +181,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   sessionId: undefined,
   active: false,
   muted: false,
+  micLevel: 0,
   turns: [],
   notices: [],
   capability: undefined,
@@ -204,11 +210,13 @@ export const useStudio = create<StudioState>((set, get) => ({
   setConnection: connection => set({ connection }),
   setActive: active => set({ active }),
   setMuted: muted => set({ muted }),
+  setMicLevel: micLevel => set({ micLevel }),
+  clearHistory: () => set({ turns: [], notices: [] }),
   setCapability: capability => set({ capability }),
   setVoice: (voice, engine) => set({ voice, voiceEngine: engine ?? "" }),
   setLanguage: language => set({ language }),
   notice: (kind, text) =>
     set(state => ({ notices: [...state.notices, { at: Date.now(), kind, text }].slice(-maxNotices) })),
   apply: event => set(reduceEvent(get(), event)),
-  resetSession: () => set({ sessionState: "off", sessionId: undefined, active: false, muted: false }),
+  resetSession: () => set({ sessionState: "off", sessionId: undefined, active: false, muted: false, micLevel: 0 }),
 }));
