@@ -1,6 +1,6 @@
 # Tool loop
 
-Status: Accepted, 2026-07-18. Feasibility spike passed (§2); implementation not started.
+Status: Accepted, 2026-07-18. Phase 1 delivered the same day — the tool gate passed against the live engine and the by-voice demo ran (see Phases).
 
 ## Scope
 
@@ -94,6 +94,15 @@ consecutive tool calls are measured by the phase-1 gate, not assumed.
    16-case suite promoted to a repeatable measurement against the live engine —
    thresholds 7/7 explicit, 0 false triggers, 0 invented tools — plus a live
    conversation demonstrating voice-switch and hang-up by voice.
+   **Delivered 2026-07-18.** `bun run measure:tools` PASS on live gemma (explicit
+   8/8, false triggers 0/5, edge 3/3, zero malformed/invented); live demo green —
+   ASR heard "ZF001", the model normalized it to `zf_001` and switched, and a
+   spoken farewell hung up only after it finished audibly. Two findings folded
+   back into the design: a handler returning `{ error }` reports as a failed
+   invocation while the model still reads the structured refusal (measured live:
+   the model relayed a voice-not-found error and listed alternatives), and a
+   server-side hangup releases the browser microphone — an ended session with a
+   live capture is a privacy bug, not a UI nit.
 2. **Multi-turn hardening**: measure tool reliability inside real multi-turn
    histories (does the 16-case suite hold at turn 8?); design the spoken
    confirmation flow for `external` tools on the `effect` field.
