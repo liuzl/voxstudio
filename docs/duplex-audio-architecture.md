@@ -437,6 +437,20 @@ client hardwired to the OpenAI Realtime protocol that we want to support. The
 subset adapter is then built against that client's actual event usage, with the
 client as the acceptance test.
 
+**Update 2026-07-17 — priority raised.** A survey of xAI's Voice Agents
+(see [competitive-voice-agents.md](./competitive-voice-agents.md)) found its
+realtime API speaking the OpenAI Realtime wire shape verbatim —
+`conversation.item.create`, `response.create`,
+`response.output_audio.delta` with base64 audio — at
+`wss://api.x.ai/v1/realtime`. The protocol is consolidating into a de-facto
+standard across vendors, which changes the adapter's value from "support one
+client" to "join an ecosystem": one subset adapter would let clients and
+tooling written for OpenAI or xAI realtime endpoints point at this gateway.
+The decision stays a subset adapter (WS-only, `server_vad`-only, audio-only;
+tools remain a product feature, WebRTC stays out of scope), but it is now
+roadmap work rather than trigger-gated; a concrete client remains the
+acceptance test when it lands.
+
 ## Provider requirements
 
 Realtime-capable client methods accept an `AbortSignal`, an optional turn ID,
