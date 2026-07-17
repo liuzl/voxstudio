@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { listVoices } from "../lib/api";
+import { listEngines, listVoices } from "../lib/api";
 import { useStudio } from "../store";
 import { useT } from "../i18n";
 
@@ -16,9 +16,12 @@ export function VoicePicker({ value, engine, onChange, className }: {
   const t = useT();
   const voicesList = useStudio(state => state.voicesList);
   const setVoicesList = useStudio(state => state.setVoicesList);
+  const enginesList = useStudio(state => state.enginesList);
+  const setEnginesList = useStudio(state => state.setEnginesList);
 
   useEffect(() => {
     if (voicesList.length === 0) listVoices().then(setVoicesList).catch(() => {});
+    if (enginesList.length === 0) listEngines().then(setEnginesList).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -27,8 +30,16 @@ export function VoicePicker({ value, engine, onChange, className }: {
     for (const entry of voicesList) {
       groups.set(entry.engine, [...(groups.get(entry.engine) ?? []), entry.id]);
     }
-    return [...groups.entries()];
+    // The user's own voices lead: an engine whose bank holds anything beyond the fixed
+    // preset naming (the bank's 我的音色 heuristic) sorts ahead of preset-only engines.
+    const preset = /^(zf|zm|af|am|bf|bm)_/;
+    const rank = (ids: string[]): number => (ids.some(id => !preset.test(id)) ? 0 : 1);
+    return [...groups.entries()].sort((a, b) => rank(a[1]) - rank(b[1]));
   }, [voicesList]);
+
+  // The empty option routes to the tts role default — a fact from the registry, not
+  // whichever group happens to be listed first.
+  const roleDefault = enginesList.find(entry => entry.roles.includes("tts"))?.name;
 
   return (
     <label className="flex items-center gap-2 text-xs text-ink-300">
@@ -41,7 +52,7 @@ export function VoicePicker({ value, engine, onChange, className }: {
         }}
         className={`rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100 ${className ?? "max-w-48"}`}
       >
-        <option value="">{t("默认（{engine}）", { engine: byEngine[0]?.[0] || t("引擎默认") })}</option>
+        <option value="">{t("默认（{engine}）", { engine: roleDefault || t("引擎默认") })}</option>
         {byEngine.map(([groupEngine, ids]) => (
           <optgroup key={groupEngine} label={groupEngine}>
             {ids.map(id => (

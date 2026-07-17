@@ -1,5 +1,5 @@
 import type { GatewayEvent } from "@voxstudio/realtime-gateway/protocol";
-import type { VoiceEntry } from "./lib/api";
+import type { EngineEntry, VoiceEntry } from "./lib/api";
 import { create } from "zustand";
 import type { EndpointCapability } from "./lib/audio";
 import type { ConnectionState } from "./lib/client";
@@ -59,6 +59,8 @@ interface StudioState {
   /** Generation takes, newest first. Object URLs are revoked on eviction/removal. */
   takes: TakeView[];
   voicesList: VoiceEntry[];
+  /** The engine registry snapshot (roles/capabilities) shared by pickers and Settings. */
+  enginesList: EngineEntry[];
   /** The 生成 panel's voice (and owning engine), settable from the 音色 bank. */
   generateVoice: string;
   generateEngine: string;
@@ -67,6 +69,7 @@ interface StudioState {
   addTake(take: TakeView): void;
   removeTake(id: string): void;
   setVoicesList(voices: VoiceEntry[]): void;
+  setEnginesList(engines: EngineEntry[]): void;
   setConnection(connection: ConnectionState): void;
   setActive(active: boolean): void;
   setMuted(muted: boolean): void;
@@ -210,6 +213,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   voiceEngine: "",
   takes: [],
   voicesList: [],
+  enginesList: [],
   generateVoice: "",
   generateEngine: "",
 
@@ -227,6 +231,7 @@ export const useStudio = create<StudioState>((set, get) => ({
       return { takes: state.takes.filter(take => take.id !== id) };
     }),
   setVoicesList: voicesList => set({ voicesList }),
+  setEnginesList: enginesList => set({ enginesList }),
   setConnection: connection => set({ connection }),
   setActive: active => set({ active }),
   setMuted: muted => set({ muted }),
