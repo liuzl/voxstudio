@@ -1,5 +1,5 @@
 import { writeWav, type PcmAudio } from "@voxstudio/audio";
-import type { ChatMessage, ChunkConfig, TtsDefaults } from "@voxstudio/contracts";
+import type { ChatMessage, ChatToolCall, ChatToolDeclaration, ChunkConfig, TtsDefaults } from "@voxstudio/contracts";
 import type { DuplexSession, DuplexTurn, VadSegmenter } from "@voxstudio/duplex-session";
 import { streamReply, type SpeechEngine } from "@voxstudio/orchestration";
 import { sanitizeForTts } from "@voxstudio/text";
@@ -41,7 +41,45 @@ export interface ChatEngine {
     temperature?: number,
     signal?: AbortSignal,
   ): AsyncIterable<string>;
+  /** Tool-aware variant; without it, registered tools are ignored. */
+  chatToolStream?(
+    messages: ChatMessage[],
+    tools: ChatToolDeclaration[],
+    maxTokens?: number,
+    temperature?: number,
+    signal?: AbortSignal,
+  ): AsyncIterable<{ type: "text"; text: string } | { type: "tool_calls"; calls: ChatToolCall[] }>;
 }
+
+/** Phase 1 scope: session-local effects only; "external" arrives with a confirmation flow. */
+export type ToolEffect = "read" | "session";
+
+/**
+ * A typed capability the model may invoke mid-turn. Handlers are injected per surface
+ * (the CLI and the gateway wire their own); the loop owns invocation and cancellation —
+ * handlers receive the turn's AbortSignal, so a barge-in cancels an in-flight tool.
+ */
+export interface ConversationTool {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  effect: ToolEffect;
+  handler(args: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
+}
+
+/**
+ * The measured prompt rules from the 2026-07-18 tool spike (docs/tool-loop.md §2): the
+ * bare prompt's two systematic failures — farewells without end_call, claiming an action
+ * without calling its tool — each cost a hard rule. Changing this text means re-running
+ * the tool gate (bun run measure:tools).
+ */
+export const toolPromptRules =
+  "你可以使用提供的工具来完成用户的请求。只在用户明确需要时调用工具；普通聊天、提问、闲谈直接用简短的话回答，不要调用工具。"
+  + "两条硬规则：1) 用户表示要结束对话或告别时，调用 end_call；"
+  + "2) 如果你打算执行某个操作（如调整语速、切换音色），必须调用对应工具，不能只在口头上答应。";
+
+/** A confused model must converge: after this many tool rounds the last request offers no tools. */
+const maxToolRounds = 3;
 
 export interface ConversationOptions {
   language: string;
@@ -61,6 +99,10 @@ export interface ConversationOptions {
   reopenMs: number;
   /** Retained history messages (user+assistant pairs count as two). Default 16. */
   historyLimit?: number;
+  /** Typed capabilities the model may invoke; requires an llm with chatToolStream. */
+  tools?: ConversationTool[];
+  /** Reply playback-rate multiplier; engines without rate control ignore it. */
+  speed?: number;
 }
 
 export type ConversationErrorCode = "asr_empty" | "llm_empty" | "turn_failed";
@@ -75,6 +117,8 @@ export interface ConversationCallbacks {
    */
   onUtterance?(wav: Uint8Array, transcript: string): void | Promise<void>;
   onError?(code: ConversationErrorCode, message: string, turn?: DuplexTurn): void;
+  onToolCall?(name: string, args: Record<string, unknown>, turn: DuplexTurn): void;
+  onToolResult?(name: string, ok: boolean, result: unknown, turn: DuplexTurn): void;
 }
 
 export interface ConversationDeps {
@@ -150,16 +194,83 @@ export async function runConversation(
       // so first audio no longer waits for the full completion. The turn stays `thinking`
       // (still reopenable under the speculative policy) until the first piece exists.
       let replyText = "";
+      let toolsRan = 0;
+      const tools = options.tools ?? [];
+      const useTools = tools.length > 0 && llm.chatToolStream !== undefined;
+      const system = [options.system, useTools ? toolPromptRules : undefined]
+        .filter((part): part is string => part !== undefined && part !== "")
+        .join("\n");
+      const declarations: ChatToolDeclaration[] = tools.map(tool => ({
+        type: "function",
+        function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+      }));
+      const messages: ChatMessage[] = [
+        ...(system === "" ? [] : [{ role: "system" as const, content: system }]),
+        ...history,
+        { role: "user" as const, content: transcript },
+      ];
+      // One continuous delta stream across tool rounds: the sentence/TTS pipeline sees a
+      // single reply, while tool calls execute between rounds. The final round offers no
+      // tools, so a confused model converges on words.
       const deltas = (async function* (): AsyncGenerator<string> {
-        for await (const delta of llm.chatStream([
-          ...(options.system === undefined ? [] : [{ role: "system" as const, content: options.system }]),
-          ...history,
-          { role: "user", content: transcript },
-        ], options.maxTokens, undefined, turn.signal)) {
-          if (replyText === "") session.mark(turn.id, "llm_first");
-          replyText += delta;
-          callbacks.onReplyDelta?.(delta, turn);
-          yield delta;
+        for (let round = 0; ; round += 1) {
+          const offer = useTools && round < maxToolRounds ? declarations : [];
+          let calls: ChatToolCall[] = [];
+          let roundText = "";
+          const emit = (delta: string): void => {
+            if (replyText === "") session.mark(turn.id, "llm_first");
+            replyText += delta;
+            roundText += delta;
+            callbacks.onReplyDelta?.(delta, turn);
+          };
+          if (useTools && llm.chatToolStream) {
+            for await (const item of llm.chatToolStream(messages, offer, options.maxTokens, undefined, turn.signal)) {
+              if (item.type === "text") {
+                emit(item.text);
+                yield item.text;
+              } else {
+                calls = calls.concat(item.calls);
+              }
+            }
+          } else {
+            for await (const delta of llm.chatStream(messages, options.maxTokens, undefined, turn.signal)) {
+              emit(delta);
+              yield delta;
+            }
+          }
+          if (calls.length === 0) return;
+          messages.push({ role: "assistant", content: roundText, tool_calls: calls });
+          for (const call of calls) {
+            if (turn.signal.aborted) return;
+            const tool = tools.find(candidate => candidate.name === call.function.name);
+            let args: Record<string, unknown> = {};
+            let ok = false;
+            let result: unknown;
+            try {
+              args = call.function.arguments ? JSON.parse(call.function.arguments) as Record<string, unknown> : {};
+            } catch {
+              result = { error: "arguments were not valid JSON" };
+            }
+            if (result === undefined) {
+              if (!tool) {
+                // The model invented a name; a structured refusal keeps it honest.
+                result = { error: `unknown tool ${call.function.name}` };
+              } else {
+                callbacks.onToolCall?.(call.function.name, args, turn);
+                try {
+                  result = await tool.handler(args, turn.signal) ?? { ok: true };
+                  // Convention: a handler that returns { error } (so the model can read a
+                  // structured refusal) still reports as a failed invocation.
+                  ok = !(typeof result === "object" && result !== null && "error" in result);
+                  if (ok) toolsRan += 1;
+                } catch (error) {
+                  result = { error: error instanceof Error ? error.message : String(error) };
+                }
+              }
+            }
+            callbacks.onToolResult?.(call.function.name, ok, result, turn);
+            messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
+          }
         }
       })();
       const player = deps.createPlayer(turn);
@@ -183,6 +294,7 @@ export async function runConversation(
           },
           ttsDefaults: options.ttsDefaults,
           voice,
+          ...(options.speed === undefined ? {} : { speed: options.speed }),
           ...(voice === "clone" || voice === "design" ? {} : { prosodyPrompt: true }),
           continuationId: crypto.randomUUID(),
           signal: turn.signal,
@@ -198,7 +310,9 @@ export async function runConversation(
           await player.write(piece);
           session.mark(turn.id, "playback_first");
         }
-        if (!turn.signal.aborted && !replyText.trim()) {
+        // A tool-only turn (an end_call farewell can be wordless) is a success, not an
+        // empty completion.
+        if (!turn.signal.aborted && !replyText.trim() && toolsRan === 0) {
           callbacks.onError?.("llm_empty", "model returned empty content", turn);
           session.interrupt("cancel");
           return;

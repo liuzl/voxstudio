@@ -500,10 +500,11 @@ describe("listen command", () => {
     ], config, { out: () => {}, err: () => {} }, fetch, platform)).resolves.toBe(0);
 
     expect(requests).toHaveLength(2);
-    expect(requests[0]?.map(message => message.role)).toEqual(["user"]);
+    // The session tools ride every request, so the measured prompt rules lead as system.
+    expect(requests[0]?.map(message => message.role)).toEqual(["system", "user"]);
     // The second turn sees the first exchange.
-    expect(requests[1]?.map(message => message.role)).toEqual(["user", "assistant", "user"]);
-    expect(requests[1]?.[1]?.content).toBe("大约三百万。");
+    expect(requests[1]?.map(message => message.role)).toEqual(["system", "user", "assistant", "user"]);
+    expect(requests[1]?.[2]?.content).toBe("大约三百万。");
   });
 
   test("validates realtime VAD and token options before opening the microphone", async () => {

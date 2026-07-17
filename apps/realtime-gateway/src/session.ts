@@ -1,7 +1,7 @@
 import { type PcmStreamDecoder, AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
-import { engine, enginesOfKind } from "@voxstudio/config";
-import { runConversation, type ConversationFrame, type ConversationPlayer } from "@voxstudio/conversation";
-import type { EngineKind, ResolvedEngineConfig, VoxConfig } from "@voxstudio/contracts";
+import { engine, enginesOfKind, roleInstance } from "@voxstudio/config";
+import { runConversation, type ConversationFrame, type ConversationPlayer, type ConversationTool } from "@voxstudio/conversation";
+import type { EngineKind, ResolvedEngineConfig, SpeechInput, VoxConfig } from "@voxstudio/contracts";
 import {
   DuplexSession,
   EnergyVadSegmenter,
@@ -27,6 +27,10 @@ export interface GatewaySessionOptions {
   fetch?: Fetch;
   /** Decodes compressed (Opus) TTS streams; without it engines stream raw PCM. */
   pcmDecoder?: PcmStreamDecoder;
+  /** The union voice bank, for the set_voice tool's validation and engine routing. */
+  listVoices?: () => Promise<{ id: string; engine: string }[]>;
+  /** Live engine health, for the get_engine_status tool. */
+  engineStatus?: () => Promise<{ name: string; kind: string | null; healthy: boolean }[]>;
   loadSileroVad?: (() => Promise<SpeechProbabilityModel>) | undefined;
   /** How long a detached session survives waiting for a reconnect. */
   reconnectGraceMs?: number;
@@ -115,6 +119,8 @@ export class GatewaySession {
   private playbackWaiter: { turnId: string; resolve: () => void } | undefined;
   private lastAckedTurnId: string | undefined;
   private readonly sawDelta = new Set<string>();
+  /** Set by the end_call tool: hang up after the current turn finishes audibly. */
+  private endAfterTurn = false;
 
   constructor(options: GatewaySessionOptions) {
     this.options = options;
@@ -124,6 +130,11 @@ export class GatewaySession {
         // events, engine text, and command acknowledgements alike.
         const { sequence: _sequence, sessionId: _sessionId, timestampMs: _timestampMs, ...payload } = event;
         this.emit(payload);
+        // The end_call tool hangs up only after the farewell finished audibly:
+        // turn.completed fires downstream of the player's audible clock.
+        if (payload.type === "turn.completed" && this.endAfterTurn) {
+          queueMicrotask(() => { this.stop(); });
+        }
       },
     });
     this.id = this.duplex.sessionId;
@@ -148,6 +159,31 @@ export class GatewaySession {
       return found[1];
     };
     this.duplex.start();
+    // The session tools may retarget TTS mid-session (a clone voice lives on another
+    // engine), so the loop speaks through a delegator over a swappable client.
+    let ttsClient = new TtsClient(pick("tts", "tts", start.ttsEngine), this.options.fetch, this.options.pcmDecoder);
+    let ttsEngineName = start.ttsEngine ?? roleInstance(config, "tts");
+    const conversationOptions = {
+      language: start.language ?? "auto",
+      ...(start.system === undefined ? {} : { system: start.system }),
+      ...(start.maxTokens === undefined ? {} : { maxTokens: start.maxTokens }),
+      ...(start.voice === undefined ? {} : { voice: start.voice }),
+      chunking: config.chunking,
+      // A session-local copy: the set_speed tool mutates it, config stays shared.
+      ttsDefaults: { ...config.ttsDefaults },
+      // Protected mode unless the endpoint declared an echo-cancelled route: the same safe
+      // default as the CLI, and the browser client opts in after negotiating AEC.
+      allowBargeIn: start.bargeIn ?? false,
+      turnTaking,
+      reopenMs: start.reopenMs ?? 7_000,
+    } as Parameters<typeof runConversation>[1];
+    conversationOptions.tools = this.buildTools(conversationOptions, {
+      retargetTts: engineName => {
+        ttsClient = new TtsClient(pick("tts", "tts", engineName), this.options.fetch, this.options.pcmDecoder);
+        ttsEngineName = engineName;
+      },
+      currentEngine: () => ttsEngineName,
+    });
     this.conversation = runConversation({
       session: this.duplex,
       vad,
@@ -155,20 +191,11 @@ export class GatewaySession {
       createPlayer: turn => this.createPlayer(turn.id, turn.revision),
       asr: new AsrClient(pick("asr", "asr", start.asrEngine), this.options.fetch),
       llm: new LlmClient(pick("llm", "llm", start.llmEngine), this.options.fetch),
-      tts: new TtsClient(pick("tts", "tts", start.ttsEngine), this.options.fetch, this.options.pcmDecoder),
-    }, {
-      language: start.language ?? "auto",
-      ...(start.system === undefined ? {} : { system: start.system }),
-      ...(start.maxTokens === undefined ? {} : { maxTokens: start.maxTokens }),
-      ...(start.voice === undefined ? {} : { voice: start.voice }),
-      chunking: config.chunking,
-      ttsDefaults: config.ttsDefaults,
-      // Protected mode unless the endpoint declared an echo-cancelled route: the same safe
-      // default as the CLI, and the browser client opts in after negotiating AEC.
-      allowBargeIn: start.bargeIn ?? false,
-      turnTaking,
-      reopenMs: start.reopenMs ?? 7_000,
-    }, {
+      tts: {
+        speech: (input: SpeechInput, signal?: AbortSignal) => ttsClient.speech(input, signal),
+        speechStream: (input: SpeechInput, signal?: AbortSignal) => ttsClient.speechStream(input, signal),
+      },
+    }, conversationOptions, {
       onTranscript: (text, turn) => this.emit({ type: "transcript.final", turnId: turn.id, revision: turn.revision, text }),
       onReplyDelta: (text, turn) => {
         if (text.length > 0 && this.options.log && !this.sawDelta.has(`${turn.id}/${turn.revision}`)) {
@@ -185,6 +212,8 @@ export class GatewaySession {
         recoverable: true,
         ...(turn === undefined ? {} : { turnId: turn.id }),
       }),
+      onToolCall: (name, args, turn) => this.emit({ type: "tool.call", turnId: turn.id, name, arguments: args }),
+      onToolResult: (name, ok, result, turn) => this.emit({ type: "tool.result", turnId: turn.id, name, ok, result }),
     });
     // The loop ending — frame source closed, session closed, or a crash — always tears the
     // session down; a gateway session with no loop behind it would accept audio into a void.
@@ -216,6 +245,80 @@ export class GatewaySession {
     this.sink = undefined;
     const grace = this.options.reconnectGraceMs ?? 30_000;
     this.graceTimer = setTimeout(() => { this.stop(); }, grace);
+  }
+
+  /**
+   * The phase-1 session tools (docs/tool-loop.md): self-referential, session-scoped,
+   * zero external dependencies. Handlers mutate the live conversation options — voice
+   * and speed take effect from the next reply chunk resolution (per turn).
+   */
+  private buildTools(
+    conversationOptions: { voice?: string; speed?: number },
+    tts: { retargetTts: (engineName: string) => void; currentEngine: () => string },
+  ): ConversationTool[] {
+    return [
+      {
+        name: "set_voice",
+        description: "切换当前对话使用的 TTS 音色",
+        parameters: {
+          type: "object",
+          properties: { voice: { type: "string", description: "音色 ID，如 zliu、zf_001、af_maple" } },
+          required: ["voice"],
+        },
+        effect: "session",
+        handler: async args => {
+          const requested = String(args.voice ?? "").trim();
+          if (!requested) return { error: "voice 不能为空" };
+          const bank = await this.options.listVoices?.() ?? [];
+          const entry = bank.find(voice => voice.id === requested);
+          if (!entry) {
+            // A structured miss the model can relay — including a taste of what exists.
+            return { error: `没有找到音色 ${requested}`, examples: bank.slice(0, 8).map(voice => voice.id) };
+          }
+          if (entry.engine && entry.engine !== tts.currentEngine()) tts.retargetTts(entry.engine);
+          conversationOptions.voice = requested;
+          return { ok: true, voice: requested, engine: entry.engine, note: "生效于下一句回复" };
+        },
+      },
+      {
+        name: "set_speed",
+        description: "调整语音回复的语速倍率",
+        parameters: {
+          type: "object",
+          properties: { rate: { type: "number", description: "语速倍率，0.5 到 2.0，1.0 为正常" } },
+          required: ["rate"],
+        },
+        effect: "session",
+        handler: async args => {
+          const rate = Number(args.rate);
+          if (!Number.isFinite(rate)) return { error: "rate 必须是数字" };
+          const clamped = Math.min(2, Math.max(0.5, rate));
+          conversationOptions.speed = clamped;
+          return { ok: true, rate: clamped, note: "生效于下一句回复；不支持变速的引擎会忽略该设置" };
+        },
+      },
+      {
+        name: "get_engine_status",
+        description: "查询各语音引擎（ASR/LLM/TTS）的健康状态",
+        parameters: { type: "object", properties: {} },
+        effect: "read",
+        handler: async () => {
+          const engines = await this.options.engineStatus?.();
+          if (!engines) return { error: "状态不可用" };
+          return { engines: engines.map(entry => ({ name: entry.name, kind: entry.kind, healthy: entry.healthy })) };
+        },
+      },
+      {
+        name: "end_call",
+        description: "结束本次语音对话",
+        parameters: { type: "object", properties: {} },
+        effect: "session",
+        handler: async () => {
+          this.endAfterTurn = true;
+          return { ok: true, note: "本轮回复播完后挂断" };
+        },
+      },
+    ];
   }
 
   handleCommand(command: GatewayCommand): void {

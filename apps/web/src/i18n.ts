@@ -57,6 +57,12 @@ const en = {
   "忽略杂音 ×{n}": "noise ignored ×{n}",
   "（被打断）": "(interrupted)",
 
+  // Conversation panel — tool chips
+  "切换音色": "Switch voice",
+  "调整语速": "Adjust speed",
+  "查询引擎状态": "Engine status",
+  "挂断": "Hang up",
+
   // Conversation panel — mic and controls
   "已静音": "Muted",
   "麦克风电平": "Microphone level",

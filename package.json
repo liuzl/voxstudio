@@ -14,7 +14,8 @@
     "test:ts": "bun tools/ensure-web-assets.ts && bun test packages platforms apps/cli/src apps/realtime-gateway/src apps/web/src",
     "typecheck": "bun tools/ensure-web-assets.ts && tsc --noEmit && tsc -p apps/web/tsconfig.json --noEmit",
     "build:web": "bun run --cwd apps/web build && bun tools/ensure-web-assets.ts",
-    "build:report": "bun tools/build-report.ts"
+    "build:report": "bun tools/build-report.ts",
+    "measure:tools": "bun apps/realtime-gateway/tools/measure-tools.ts"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

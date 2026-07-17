@@ -103,6 +103,34 @@ function ThinkingBubble({ turn }: { turn: TurnView }) {
   );
 }
 
+/** What the assistant did, not just said: one chip per tool invocation. */
+function ToolChips({ turn }: { turn: TurnView }) {
+  const t = useT();
+  if (turn.tools.length === 0) return null;
+  const labels: Record<string, string> = {
+    set_voice: t("切换音色"),
+    set_speed: t("调整语速"),
+    get_engine_status: t("查询引擎状态"),
+    end_call: t("挂断"),
+  };
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {turn.tools.map((tool, index) => (
+        <span
+          key={index}
+          className={`rounded-full px-2 py-0.5 text-[11px] ${
+            tool.ok === false ? "bg-red-500/15 text-red-300" : "bg-ink-800 text-ink-300"
+          }`}
+        >
+          🔧 {labels[tool.name] ?? tool.name}
+          {tool.detail !== undefined && ` → ${tool.detail}`}
+          {tool.ok === true ? " ✓" : tool.ok === false ? " ✗" : " …"}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function TurnCard({ turn }: { turn: TurnView }) {
   const t = useT();
   return (
@@ -130,6 +158,7 @@ function TurnCard({ turn }: { turn: TurnView }) {
           </div>
         </div>
       )}
+      <ToolChips turn={turn} />
       <TurnFooter turn={turn} />
     </div>
   );

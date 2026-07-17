@@ -33,6 +33,8 @@ export interface SynthesisOptions {
   timesteps?: number;
   promptPrefix?: string;
   seed?: number;
+  /** Playback-rate multiplier; engines without rate control ignore it. */
+  speed?: number;
   prosodyPrompt?: boolean;
   continuationId?: string;
   onChunk?: OnChunk;
@@ -53,6 +55,7 @@ function speechInput(text: string, options: SynthesisOptions, end: boolean): Spe
     cfg_value: options.cfgValue ?? options.ttsDefaults.cfgValue,
     timesteps: options.timesteps ?? options.ttsDefaults.timesteps,
     ...(options.seed === undefined ? {} : { seed: options.seed }),
+    ...(options.speed === undefined ? {} : { speed: options.speed }),
     ...(options.prosodyPrompt ? { prosody_prompt: true } : {}),
     ...(options.continuationId === undefined ? {} : {
       continuation_id: options.continuationId,

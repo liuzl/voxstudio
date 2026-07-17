@@ -155,6 +155,59 @@ describe("realtime gateway", () => {
     client.close();
   });
 
+  test("a tool call executes mid-turn and retargets the next reply's voice", async () => {
+    const speechBodies: { voice?: string }[] = [];
+    let chatRound = 0;
+    gateway = startGateway({
+      config,
+      port: 0,
+      fetch: engineFetch({
+        "/v1/voices": async () => Response.json({ voices: [{ id: "zliu" }] }),
+        "/v1/audio/speech": async request => {
+          speechBodies.push(await request.json() as { voice?: string });
+          return new Response(new Uint8Array(writeWav(new Float32Array(48_000).fill(0.1), 24_000)));
+        },
+        "/v1/chat/completions": async () => {
+          chatRound += 1;
+          // Round 1: the model asks for the tool. Round 2 (tool result appended): words.
+          // Later turns: plain replies. Plain JSON exercises the degrade path too.
+          if (chatRound === 1) {
+            return Response.json({ choices: [{ message: { content: "", tool_calls: [
+              { id: "c1", type: "function", function: { name: "set_voice", arguments: "{\"voice\":\"zliu\"}" } },
+            ] } }] });
+          }
+          return Response.json({ choices: [{ message: { content: "好的，已切换。" } }] });
+        },
+      }),
+    });
+    const client = new TestClient(gateway.url);
+    await client.ready();
+    client.command({ type: "session.start", idempotencyKey: "start-1", options: startOptions });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "session.snapshot");
+
+    client.sendPcm(2, 0.2);
+    client.sendPcm(2, 0);
+    await client.until(events => events.some(event => event.type === "turn.completed"), "tool turn");
+
+    const call = client.events.find(event => event.type === "tool.call");
+    expect(call && "name" in call ? call.name : "").toBe("set_voice");
+    expect(call && "arguments" in call ? call.arguments : {}).toEqual({ voice: "zliu" });
+    const result = client.events.find(event => event.type === "tool.result");
+    expect(result && "ok" in result ? result.ok : false).toBe(true);
+    const reply = client.events.find(event => event.type === "response.text.final");
+    expect(reply && "text" in reply ? reply.text : "").toBe("好的，已切换。");
+
+    // The switch lands on the next turn's synthesis.
+    client.sendPcm(2, 0.2);
+    client.sendPcm(2, 0);
+    await client.until(
+      events => events.filter(event => event.type === "turn.completed").length >= 2, "second turn");
+    expect(speechBodies.length).toBeGreaterThan(1);
+    expect(speechBodies[speechBodies.length - 1]?.voice).toBe("zliu");
+
+    client.close();
+  });
+
   test("survives a dropped socket: reattach, snapshot resync, no stale or replayed commands", async () => {
     gateway = startGateway({ config, fetch: engineFetch(), port: 0, reconnectGraceMs: 2_000 });
     const first = new TestClient(gateway.url);

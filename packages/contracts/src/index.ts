@@ -80,6 +80,8 @@ export interface SpeechRequest {
   cfg_value: number;
   timesteps: number;
   seed?: number;
+  /** Playback-rate multiplier; engines without rate control ignore it. */
+  speed?: number;
   prosody_prompt?: boolean;
   continuation_id?: string;
   continuation_end?: boolean;
@@ -89,11 +91,28 @@ export interface SpeechRequest {
 
 export type SpeechInput = Omit<SpeechRequest, "model">;
 
-export type ChatRole = "system" | "user" | "assistant";
+export type ChatRole = "system" | "user" | "assistant" | "tool";
+
+/** One requested function invocation, OpenAI wire shape (arguments is a JSON string). */
+export interface ChatToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+/** A tool offered to the model, OpenAI wire shape. */
+export interface ChatToolDeclaration {
+  type: "function";
+  function: { name: string; description: string; parameters: Record<string, unknown> };
+}
 
 export interface ChatMessage {
   role: ChatRole;
   content: string;
+  /** Assistant messages that requested tools carry them back into history. */
+  tool_calls?: ChatToolCall[];
+  /** Tool messages name the call they answer. */
+  tool_call_id?: string;
 }
 
 export interface ChatCompletionRequest {
@@ -102,6 +121,8 @@ export interface ChatCompletionRequest {
   max_tokens: number;
   temperature?: number;
   stream?: boolean;
+  /** Offered tools; the engine may answer with tool_calls instead of content. */
+  tools?: ChatToolDeclaration[];
 }
 
 export interface Voice {

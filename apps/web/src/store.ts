@@ -16,6 +16,8 @@ export interface TurnView {
   statusAt: number;
   reopens: number;
   falseBargeIns: number;
+  /** Tool invocations this turn: name, a short argument detail, and the outcome. */
+  tools: { name: string; detail?: string; ok?: boolean }[];
   timing: Record<string, number> | undefined;
   endReason: string | undefined;
 }
@@ -126,6 +128,7 @@ export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sess
         statusAt: Date.now(),
         reopens: 0,
         falseBargeIns: 0,
+        tools: [],
         timing: undefined,
         endReason: undefined,
       };
@@ -173,6 +176,31 @@ export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sess
           statusAt: Date.now(),
           endReason: event.reason ?? "cancel",
         })),
+      };
+    case "tool.call": {
+      // The first primitive argument is detail enough for a caption chip.
+      const detail = Object.values(event.arguments ?? {}).find(
+        (value): value is string | number => typeof value === "string" || typeof value === "number");
+      return {
+        turns: updateTurn(state.turns, event.turnId, turn => ({
+          ...turn,
+          tools: [...turn.tools, { name: event.name, ...(detail === undefined ? {} : { detail: String(detail) }) }],
+        })),
+      };
+    }
+    case "tool.result":
+      return {
+        turns: updateTurn(state.turns, event.turnId, turn => {
+          let index = -1;
+          for (let i = turn.tools.length - 1; i >= 0; i -= 1) {
+            const candidate = turn.tools[i];
+            if (candidate && candidate.name === event.name && candidate.ok === undefined) { index = i; break; }
+          }
+          if (index < 0) return turn;
+          const tools = [...turn.tools];
+          tools[index] = { ...tools[index]!, ok: event.ok };
+          return { ...turn, tools };
+        }),
       };
     case "turn.false_barge_in":
       return {

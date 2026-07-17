@@ -96,6 +96,11 @@ export class ConversationController {
     const store = useStudio.getState();
     store.apply(event);
     switch (event.type) {
+      case "session.state":
+        // A server-side hangup (the end_call tool) must release the microphone too —
+        // an ended session with a live capture is a privacy bug, not a UI nit.
+        if (event.state === "closed") void stopConversation();
+        return;
       case "playback.format":
         this.playbackTurnId = event.turnId;
         this.speaker?.setFormat(event.sampleRate);

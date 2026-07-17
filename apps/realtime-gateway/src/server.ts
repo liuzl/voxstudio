@@ -151,7 +151,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   };
 
   /** Union voice bank: every TTS instance's registry, entries attributed to their engine. */
-  const aggregatedVoices = async (): Promise<Response> => {
+  const collectVoices = async (): Promise<{ id: string; engine: string; design_profile?: unknown; prompt_text?: string }[]> => {
     const instances = enginesOfKind(options.config, "tts");
     const collected = await Promise.all(instances.map(async ([name, target]) => {
       try {
@@ -182,11 +182,13 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         return [];
       }
     }));
-    return Response.json({ voices: collected.flat() });
+    return collected.flat();
   };
 
+  const aggregatedVoices = async (): Promise<Response> => Response.json({ voices: await collectVoices() });
+
   /** The registry, sanitized: names, kinds, capabilities, roles, live health — never addresses. */
-  const engineList = async (): Promise<Response> => {
+  const collectEngines = async () => {
     const roleEntries = Object.entries(options.config.roles);
     const legacyRoles = ["tts", "asr", "llm", "asr_longform"]
       .filter(role => options.config.roles[role] === undefined && options.config.engines[role]?.baseUrl);
@@ -229,8 +231,10 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         runtime,
       };
     }));
-    return Response.json({ engines });
+    return engines;
   };
+
+  const engineList = async (): Promise<Response> => Response.json({ engines: await collectEngines() });
 
   const sinkFor = (ws: ServerWebSocket<SocketData>): EventSink => {
     // One sink object per socket: attach/detach pair on its identity, so a stale socket's
@@ -246,6 +250,9 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         config: options.config,
         ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
         ...(options.pcmDecoder === undefined ? {} : { pcmDecoder: options.pcmDecoder }),
+        // The session tools see the same sanitized surfaces the facade serves.
+        listVoices: async () => (await collectVoices()).map(voice => ({ id: voice.id, engine: voice.engine })),
+        engineStatus: collectEngines,
         loadSileroVad: options.loadSileroVad,
         ...(options.reconnectGraceMs === undefined ? {} : { reconnectGraceMs: options.reconnectGraceMs }),
         onClosed: closed => { sessions.delete(closed.id); },

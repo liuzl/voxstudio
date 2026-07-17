@@ -1,6 +1,6 @@
-import { AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
+import { probeEngine, AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
 import { engine } from "@voxstudio/config";
-import { runConversation, type ConversationPlayer } from "@voxstudio/conversation";
+import { type ConversationTool, runConversation, type ConversationPlayer } from "@voxstudio/conversation";
 import type { VoxConfig } from "@voxstudio/contracts";
 import {
   DuplexSession,
@@ -136,8 +136,13 @@ export async function runListen(
   platform: ListenPlatform = defaultPlatform,
 ): Promise<number> {
   const options = parse(args);
+  let endAfterTurn = false;
   const session = new DuplexSession({
     onEvent: event => {
+      if (event.type === "turn.completed" && endAfterTurn) {
+        // The end_call tool hangs up after the farewell finished audibly.
+        queueMicrotask(() => stop());
+      }
       if (event.type === "audio.queue_overflow") {
         io.err(`listen: playback queue reached ${event.maxQueuedMs}ms; dropping audio`);
       } else if (event.type === "turn.false_barge_in") {
@@ -205,6 +210,70 @@ export async function runListen(
   session.start();
   io.err(options.speakerDuplex ? "listening with macOS speaker duplex; press Ctrl-C to stop" : "listening with protected speaker mode; press Ctrl-C to stop");
   try {
+    const tts = new TtsClient(engine(config, "tts"), fetch, ffmpegPcmDecoder());
+    const conversationOptions = {
+      language: options.language,
+      ...(options.system === undefined ? {} : { system: options.system }),
+      ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
+      ...(options.voice === undefined ? {} : { voice: options.voice }),
+      chunking: config.chunking,
+      // A run-local copy: the set_speed tool mutates it.
+      ttsDefaults: { ...config.ttsDefaults },
+      allowBargeIn: options.bargeIn || options.speakerDuplex,
+      turnTaking: options.turnTaking,
+      reopenMs: options.reopenMs,
+    } as Parameters<typeof runConversation>[1];
+    // The phase-1 session tools (docs/tool-loop.md), CLI edition: the voice bank is the
+    // configured tts engine's own registry (the CLI speaks through one instance).
+    const tools: ConversationTool[] = [
+      {
+        name: "set_voice", description: "切换当前对话使用的 TTS 音色", effect: "session",
+        parameters: { type: "object", properties: { voice: { type: "string", description: "音色 ID" } }, required: ["voice"] },
+        handler: async args => {
+          const requested = String(args.voice ?? "").trim();
+          if (!requested) return { error: "voice 不能为空" };
+          const bank = await tts.listVoices();
+          if (bank.length > 0 && !bank.some(entry => entry.id === requested)) {
+            return { error: `没有找到音色 ${requested}`, examples: bank.slice(0, 8).map(entry => entry.id) };
+          }
+          conversationOptions.voice = requested;
+          return { ok: true, voice: requested, note: "生效于下一句回复" };
+        },
+      },
+      {
+        name: "set_speed", description: "调整语音回复的语速倍率", effect: "session",
+        parameters: { type: "object", properties: { rate: { type: "number", description: "0.5 到 2.0，1.0 为正常" } }, required: ["rate"] },
+        handler: async args => {
+          const rate = Number(args.rate);
+          if (!Number.isFinite(rate)) return { error: "rate 必须是数字" };
+          const clamped = Math.min(2, Math.max(0.5, rate));
+          conversationOptions.speed = clamped;
+          return { ok: true, rate: clamped, note: "生效于下一句回复；不支持变速的引擎会忽略该设置" };
+        },
+      },
+      {
+        name: "get_engine_status", description: "查询各语音引擎（ASR/LLM/TTS）的健康状态", effect: "read",
+        parameters: { type: "object", properties: {} },
+        handler: async () => {
+          const entries = await Promise.all(Object.entries(config.engines)
+            .filter(([, target]) => target.baseUrl)
+            .map(async ([name, target]) => {
+              const probe = await probeEngine(name, target, fetch);
+              return { name, healthy: probe.ok };
+            }));
+          return { engines: entries };
+        },
+      },
+      {
+        name: "end_call", description: "结束本次语音对话", effect: "session",
+        parameters: { type: "object", properties: {} },
+        handler: async () => {
+          endAfterTurn = true;
+          return { ok: true, note: "本轮回复播完后挂断" };
+        },
+      },
+    ];
+    conversationOptions.tools = tools;
     await runConversation({
       session,
       vad,
@@ -212,21 +281,13 @@ export async function runListen(
       createPlayer: (): ConversationPlayer => speakerHost?.player ?? platform.createPlayer(),
       asr: new AsrClient(engine(config, "asr"), fetch),
       llm: new LlmClient(engine(config, "llm"), fetch),
-      tts: new TtsClient(engine(config, "tts"), fetch, ffmpegPcmDecoder()),
-    }, {
-      language: options.language,
-      ...(options.system === undefined ? {} : { system: options.system }),
-      ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
-      ...(options.voice === undefined ? {} : { voice: options.voice }),
-      chunking: config.chunking,
-      ttsDefaults: config.ttsDefaults,
-      allowBargeIn: options.bargeIn || options.speakerDuplex,
-      turnTaking: options.turnTaking,
-      reopenMs: options.reopenMs,
-    }, {
+      tts,
+    }, conversationOptions, {
       onTranscript: text => io.out(`transcript: ${text}`),
       onReply: text => io.out(`reply: ${text}`),
       onError: (_code, message) => io.err(`listen: ${message}`),
+      onToolCall: (name, args) => io.err(`tool: ${name} ${JSON.stringify(args)}`),
+      onToolResult: (name, ok) => io.err(`tool: ${name} ${ok ? "ok" : "failed"}`),
       ...(options.saveUtterances === undefined ? {} : {
         onUtterance: async (wav: Uint8Array, transcript: string) => {
           // An explicit opt-in per the privacy rules. The empty-transcript failures are the
