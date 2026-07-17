@@ -180,7 +180,7 @@ function StartCard({ starting, onStart }: { starting: boolean; onStart: () => vo
       <div className="text-base font-medium">{starting ? t("启动中…") : t("开始对话")}</div>
       <div className="flex w-full flex-wrap items-center justify-center gap-3">
         <label className="flex items-center gap-2 text-xs text-ink-300">
-          {t("语言")}
+          {t("识别语言")}
           <select
             value={language}
             onChange={event => setLanguage(event.target.value)}

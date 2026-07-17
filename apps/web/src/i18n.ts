@@ -73,6 +73,7 @@ const en = {
   "开始对话": "Start conversation",
   "启动中…": "Starting…",
   "语言": "Language",
+  "识别语言": "Speech language",
   "中文": "Chinese",
   "自动": "Auto",
   "授权麦克风后进入全双工对话：断句、识别、回答全自动，回答播放时直接开口即可打断，停顿后续说会自动合并。":
