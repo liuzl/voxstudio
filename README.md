@@ -77,6 +77,7 @@ bun run build:cli
 ./apps/cli/dist/vox listen --device "MacBook Pro microphone" --language zh --voice design-calm-clear
 ./platforms/macos-audio/build.sh
 ./apps/cli/dist/vox listen --speaker-duplex --language zh --voice design-calm-clear
+./apps/cli/dist/vox studio               # Web Studio: browser app + gateway from the same binary
 ./apps/cli/dist/vox voices add alice --audio sample.wav --text "参考音的逐字稿"
 ./apps/cli/dist/vox voices add bob --audio sample.wav --language zh  # transcript via ASR
 ./apps/cli/dist/vox voices add carol --record 15 --language zh       # record, ASR, register
@@ -171,7 +172,11 @@ speaks the versioned session protocol over WebSocket — binary PCM media, snaps
 idempotent commands, an endpoint-owned audible-playback clock — plus a REST facade that
 keeps engine addresses and credentials server-side, aggregates voices across engines, and
 routes requests through the engine registry (named instances, role defaults, capability
-tags, per-request pinning). The browser studio (`apps/web`) ships four panels on top of it:
+tags, per-request pinning). The whole studio also ships inside the compiled `vox` binary:
+`vox studio` embeds the built web app and serves it around the guarded API from one file
+(barge-in detection degrades loudly to the certified energy detector there — the binary
+carries no ONNX runtime). Remote TTS engines can stream Ogg/Opus (`stream_format: opus`,
+~12KB/s vs raw PCM's 187.5KB/s) for slow WAN links, decoded gateway-side via ffmpeg. The browser studio (`apps/web`) ships four panels on top of it:
 live conversation (worklet microphone capture, gapless streamed playback, captions with turn
 state and per-turn timing, the negotiated AEC capability snapshot), generation with takes,
 the voice bank (file upload or in-browser recording, plus design-profile create / audit /
