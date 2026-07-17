@@ -1,6 +1,6 @@
 # CLAUDE 入口
 
-**voxstudio** = 自托管、中文优先的语音 I/O 产品仓：ASR + LLM + TTS 引擎统一在一层 OpenAI 兼容契约后，之上是核心编排层 + 瘦表面（CLI/Web/MCP/移动端）。项目背景见 [README.md](./README.md)。
+**voxstudio** = 自托管、多语言的语音 I/O 产品仓：ASR + LLM + TTS 引擎统一在一层 OpenAI 兼容契约后，之上是核心编排层 + 瘦表面（CLI/Web/MCP/移动端）。项目背景见 [README.md](./README.md)。
 
 ## 仓边界（SoT）
 

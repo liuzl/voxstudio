@@ -199,7 +199,7 @@ export function SettingsPanel() {
       <section className="rounded-xl border border-ink-700 bg-ink-900 p-5 text-sm leading-relaxed text-ink-300">
         <h2 className="text-sm font-medium">关于</h2>
         <p className="mt-2">
-          VoxStudio Web —— 自托管中文优先语音工作台。设计与分期见 <code>docs/web-studio.md</code>；
+          VoxStudio Web —— 自托管多语言语音工作台。设计与分期见 <code>docs/web-studio.md</code>；
           实时会话契约见 <code>docs/duplex-audio-architecture.md</code>。
         </p>
       </section>
