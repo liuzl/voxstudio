@@ -163,9 +163,7 @@ function StartCard({ starting, onStart }: { starting: boolean; onStart: () => vo
   const t = useT();
   const voice = useStudio(state => state.voice);
   const voiceEngine = useStudio(state => state.voiceEngine);
-  const language = useStudio(state => state.language);
   const setVoice = useStudio(state => state.setVoice);
-  const setLanguage = useStudio(state => state.setLanguage);
 
   return (
     <div className="mx-auto flex h-full max-w-sm flex-col items-center justify-center gap-6 px-6 text-center">
@@ -179,20 +177,10 @@ function StartCard({ starting, onStart }: { starting: boolean; onStart: () => vo
       </button>
       <div className="text-base font-medium">{starting ? t("启动中…") : t("开始对话")}</div>
       <div className="flex w-full flex-wrap items-center justify-center gap-3">
-        <label className="flex items-center gap-2 text-xs text-ink-300">
-          {t("识别语言")}
-          <select
-            value={language}
-            onChange={event => setLanguage(event.target.value)}
-            className="rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100"
-          >
-            <option value="zh">{t("中文")}</option>
-            <option value="en">English</option>
-            <option value="auto">{t("自动")}</option>
-          </select>
-        </label>
-        {/* Choosing a voice routes the session's TTS to its owning engine —
-            a clone voice moves the conversation onto the quality line. */}
+        {/* One decision on the start card: the voice. Choosing one routes the session's
+            TTS to its owning engine — a clone voice moves onto the quality line. The ASR
+            language hint is fixed to auto (measured identical to zh on SenseVoice); the
+            protocol still carries it for engines that care. */}
         <VoicePicker value={voice} engine={voiceEngine} onChange={setVoice} className="max-w-44" />
       </div>
       <p className="text-xs leading-relaxed text-ink-500">

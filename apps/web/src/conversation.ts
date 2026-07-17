@@ -22,7 +22,10 @@ export class ConversationController {
     const client = new GatewayClient({
       url: realtimeUrl(),
       startOptions: {
-        language: store.language,
+        // The ASR hint stays "auto": measured identical to "zh" on the SenseVoice slot
+        // (2026-07-17, pure-zh / code-switched / pure-en all byte-equal), and neutral if
+        // the conversation ASR is ever routed to an engine that does care.
+        language: "auto",
         ...(store.voice ? { voice: store.voice } : {}),
         ...(store.voiceEngine ? { ttsEngine: store.voiceEngine } : {}),
         // The browser endpoint negotiates AEC in getUserMedia, so barge-in is on and the
