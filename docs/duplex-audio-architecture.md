@@ -183,12 +183,23 @@ testable independently from network conditions.
 
 ## Turn state and cancellation
 
-```text
-idle -> listening -> speech_started -> finalizing -> thinking -> speaking
- ^        ^                                                   |
- |        +------------------ barge_in -----------------------+
- +--------------------------- shutdown -----------------------+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> listening
+  listening --> speech_started : speech.confirmed
+  speech_started --> finalizing : silence threshold<br/>(soft-finalize, reopenable)
+  finalizing --> thinking : ASR dispatched
+  thinking --> speaking : first synthesized chunk
+  speaking --> listening : audible playback complete<br/>turn.completed
+  finalizing --> speech_started : reopen (revision+1)
+  thinking --> speech_started : reopen (revision+1)
+  speaking --> listening : barge-in / cancel<br/>turn.interrupted
 ```
+
+(The same state machine the technical report's figure 2 maintains — one canonical
+diagram. The earlier sketch omitted the reopen transitions, which are the default
+policy now.)
 
 While `speaking`, capture continues. The initial policy requires post-AEC VAD
 speech for a configurable minimum duration and level. The threshold is
