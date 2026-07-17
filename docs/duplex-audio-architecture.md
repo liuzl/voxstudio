@@ -47,15 +47,28 @@ contract for batch ASR, LLM, or TTS requests.
 
 ## Architecture
 
-```text
-                 platform endpoint                         product service
-
- macOS helper: AVAudioEngine + AEC  -- PCM/event IPC --\
- CLI headset: ffmpeg capture/playback -- PCM/event IPC ----> DuplexSession
- browser: capture AEC + WebRTC -------- LiveKit tracks ---/       |
-                                                                  |
-                  VAD -> streaming ASR -> LLM -> sentence TTS -> playback
+```mermaid
+flowchart LR
+  subgraph endpoints["Platform endpoints"]
+    MAC["macOS helper<br/>AVAudioEngine voice processing"]
+    HEADSET["CLI headset<br/>ffmpeg capture/playback"]
+    BROWSER["Browser<br/>getUserMedia AEC + AudioWorklet"]
+  end
+  GW["realtime-gateway<br/>WS: JSON control + binary PCM"]
+  CONV["conversation loop<br/>(packages/conversation)"]
+  DS["DuplexSession<br/>turns · cancellation · bounded queues"]
+  PIPE["VAD → ASR → LLM → sentence TTS → playback"]
+  MAC -->|"PCM/event IPC"| CONV
+  HEADSET -->|"PCM/event IPC"| CONV
+  BROWSER -->|"16 kHz PCM frames"| GW --> CONV
+  BROWSER -.->|"LiveKit/WebRTC (planned: remote deployment)"| GW
+  CONV --> DS
+  CONV --> PIPE
 ```
+
+The browser lane above is the implemented one (the WebSocket gateway of the
+realtime section below); LiveKit remains the planned transport for remote
+deployment per decision 4.
 
 `DuplexSession` is platform-neutral code. It consumes clean, timestamped input
 PCM frames and emits output PCM frames plus state events. It has no Bun,
