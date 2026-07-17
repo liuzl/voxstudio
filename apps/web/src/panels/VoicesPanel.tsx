@@ -13,8 +13,16 @@ import {
 } from "../lib/api";
 import { VoiceRecorder } from "../lib/audio";
 import { useStudio } from "../store";
+import { useT, type MessageKey } from "../i18n";
 
-const auditionText = "你好，这是一段试听。今天天气不错。";
+// The audition sentence is TTS corpus, not UI copy: it follows the voice's own
+// language (by bank prefix), not the UI locale.
+const auditionTextZh = "你好，这是一段试听。今天天气不错。";
+const auditionTextEn = "Hello, this is a quick audition. Lovely weather today.";
+
+function auditionTextFor(id: string): string {
+  return categoryOf(id).startsWith("英文") ? auditionTextEn : auditionTextZh;
+}
 const maxRecordMs = 30_000;
 const minRecordMs = 2_000;
 
@@ -22,19 +30,20 @@ const minRecordMs = 2_000;
  * Kokoro-style ids encode language and gender in their prefix; anything else in the bank
  * came from a clone/design engine — the user's own voices, the ones worth surfacing first.
  */
-const categoryLabels: Record<string, string> = {
+const categoryLabels: Record<string, MessageKey> = {
   zf: "中文·女", zm: "中文·男",
   af: "英文·女", am: "英文·男",
   bf: "英文·女(英)", bm: "英文·男(英)",
 };
-const ownCategory = "我的音色";
+const ownCategory: MessageKey = "我的音色";
 
-function categoryOf(id: string): string {
+function categoryOf(id: string): MessageKey {
   const prefix = id.split("_")[0] ?? "";
   return categoryLabels[prefix] ?? ownCategory;
 }
 
 export function VoicesPanel() {
+  const t = useT();
   const voicesList = useStudio(state => state.voicesList);
   const setVoicesList = useStudio(state => state.setVoicesList);
   const setGenerateVoice = useStudio(state => state.setGenerateVoice);
@@ -94,7 +103,7 @@ export function VoicesPanel() {
     const seq = ++auditionSeq.current;
     setAuditioning(id);
     try {
-      const url = await synthesize({ input: auditionText, voice: id, ...(engine ? { engine } : {}) });
+      const url = await synthesize({ input: auditionTextFor(id), voice: id, ...(engine ? { engine } : {}) });
       if (seq !== auditionSeq.current) {
         URL.revokeObjectURL(url);
         return;
@@ -121,7 +130,7 @@ export function VoicesPanel() {
   const remove = async (id: string, engine: string) => {
     try {
       await deleteVoice(id, engine || undefined);
-      toast("info", `已删除 ${id}`);
+      toast("info", t("已删除 {id}", { id }));
       await refresh();
     } catch (error) {
       // Fixed-bank engines (kokoro) have no registry; the facade passes their refusal through.
@@ -146,7 +155,7 @@ export function VoicesPanel() {
       setRecorder(next);
       setElapsedMs(0);
     } catch (error) {
-      toast("error", `无法开始录音：${error instanceof Error ? error.message : String(error)}`);
+      toast("error", t("无法开始录音：{error}", { error: error instanceof Error ? error.message : String(error) }));
     }
   };
 
@@ -154,7 +163,7 @@ export function VoicesPanel() {
     setRecorder(undefined);
     const samples = await active.stop();
     if (samples.length < minRecordMs * 16) {
-      toast("error", "录音太短：参考音需要至少 2 秒（建议 5–15 秒）。");
+      toast("error", t("录音太短：参考音需要至少 2 秒（建议 5–15 秒）。"));
       return;
     }
     const wav = writeWav(samples, 16_000);
@@ -179,13 +188,13 @@ export function VoicesPanel() {
   const fillTranscript = async () => {
     const file = referenceFile();
     if (!file) {
-      toast("error", "先录制或选择参考音频，再识别逐字稿。");
+      toast("error", t("先录制或选择参考音频，再识别逐字稿。"));
       return;
     }
     setTranscribing(true);
     try {
       const text = await transcribe(file, "zh");
-      if (!text) toast("error", "ASR 没有识别出内容；请人工填写逐字稿。");
+      if (!text) toast("error", t("ASR 没有识别出内容；请人工填写逐字稿。"));
       setNewText(text);
     } catch (error) {
       toast("error", error instanceof Error ? error.message : String(error));
@@ -197,14 +206,14 @@ export function VoicesPanel() {
   const register = async () => {
     const file = referenceFile();
     if (!newId.trim() || !newText.trim() || !file) {
-      toast("error", "注册需要：ID、参考音频（上传或录制）、参考音的逐字稿。");
+      toast("error", t("注册需要：ID、参考音频（上传或录制）、参考音的逐字稿。"));
       return;
     }
     setRegistering(true);
     try {
       const registered = newId.trim();
       await registerVoice(registered, newText.trim(), file);
-      toast("info", `已注册 ${registered} —— 见音色库首位，可试听或直接用于生成。`);
+      toast("info", t("已注册 {id} —— 见音色库首位，可试听或直接用于生成。", { id: registered }));
       setNewId("");
       setNewText("");
       if (fileInput.current) fileInput.current.value = "";
@@ -243,18 +252,18 @@ export function VoicesPanel() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-5 px-4 py-6 md:px-8 md:py-10">
-      <h1 className="text-2xl font-semibold">音色</h1>
+      <h1 className="text-2xl font-semibold">{t("音色")}</h1>
 
       <section className="rounded-xl border border-ink-700 bg-ink-900 p-4 md:p-5">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <h2 className="text-sm font-medium text-ink-300">
-            音色库 <span className="text-ink-500">{filtered.length}/{voicesList.length}</span>
+            {t("音色库")} <span className="text-ink-500">{filtered.length}/{voicesList.length}</span>
           </h2>
           <div className="flex-1" />
           <input
             value={query}
             onChange={event => setQuery(event.target.value)}
-            placeholder="搜索…"
+            placeholder={t("搜索…")}
             className="w-32 rounded border border-ink-700 bg-ink-800 px-2 py-1 text-xs text-ink-100 placeholder:text-ink-500"
           />
           <button
@@ -263,12 +272,12 @@ export function VoicesPanel() {
               showRegister ? "border-accent-500/60 text-accent-500" : "border-ink-700 text-ink-300 hover:text-ink-100"
             }`}
           >
-            {showRegister ? "收起注册" : "＋ 注册音色"}
+            {showRegister ? t("收起注册") : t("＋ 注册音色")}
           </button>
         </div>
         {categories.length > 1 && (
           <div className="mt-2.5 flex flex-wrap gap-1.5">
-            {["全部", ...categories.map(([name]) => name)].map(name => (
+            {(["全部", ...categories.map(([name]) => name)] as MessageKey[]).map(name => (
               <button
                 key={name}
                 onClick={() => setCategory(name)}
@@ -276,7 +285,7 @@ export function VoicesPanel() {
                   category === name ? "bg-accent-600/25 text-accent-500" : "bg-ink-800 text-ink-300 hover:text-ink-100"
                 }`}
               >
-                {name}
+                {t(name)}
                 {name !== "全部" && (
                   <span className="ml-1 opacity-60">{categories.find(([label]) => label === name)?.[1]}</span>
                 )}
@@ -285,8 +294,8 @@ export function VoicesPanel() {
           </div>
         )}
         <div className="mt-3 max-h-[45vh] overflow-y-auto pr-1">
-          {voicesList.length === 0 && <p className="text-sm text-ink-500">引擎没有返回音色；克隆型引擎可用下方表单注册。</p>}
-          {voicesList.length > 0 && filtered.length === 0 && <p className="text-sm text-ink-500">没有匹配的音色。</p>}
+          {voicesList.length === 0 && <p className="text-sm text-ink-500">{t("引擎没有返回音色；克隆型引擎可用下方表单注册。")}</p>}
+          {voicesList.length > 0 && filtered.length === 0 && <p className="text-sm text-ink-500">{t("没有匹配的音色。")}</p>}
           <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
             {filtered.map(voice => (
               <div
@@ -299,9 +308,9 @@ export function VoicesPanel() {
                   className={`min-w-0 flex-1 truncate text-left hover:text-accent-500 disabled:opacity-40 ${
                     playing === voice.id ? "text-accent-500" : "text-ink-100"
                   }`}
-                  title={playing === voice.id ? "停止" : `试听 ${voice.id}（${voice.engine}）`}
+                  title={playing === voice.id ? t("停止") : t("试听 {id}（{engine}）", { id: voice.id, engine: voice.engine })}
                 >
-                  {auditioning === voice.id ? "▶ 合成中…" : playing === voice.id ? `■ ${voice.id}` : voice.id}
+                  {auditioning === voice.id ? t("▶ 合成中…") : playing === voice.id ? `■ ${voice.id}` : voice.id}
                 </button>
                 {confirmDelete === `${voice.engine}/${voice.id}` ? (
                   <>
@@ -312,13 +321,13 @@ export function VoicesPanel() {
                       }}
                       className="shrink-0 rounded bg-red-500/20 px-2 py-1 text-red-300 hover:bg-red-500/30"
                     >
-                      删除
+                      {t("删除")}
                     </button>
                     <button
                       onClick={() => setConfirmDelete("")}
                       className="shrink-0 rounded px-2 py-1 text-ink-500 hover:text-ink-300"
                     >
-                      取消
+                      {t("取消")}
                     </button>
                   </>
                 ) : (
@@ -329,17 +338,17 @@ export function VoicesPanel() {
                     <button
                       onClick={() => {
                         setGenerateVoice(voice.id, voice.engine);
-                        toast("info", `已将 ${voice.id} 设为「生成」页的音色`);
+                        toast("info", t("已将 {id} 设为「生成」页的音色", { id: voice.id }));
                       }}
                       className="shrink-0 rounded px-1.5 py-1 text-ink-500 hover:text-accent-500"
-                      title="设为生成音色"
+                      title={t("设为生成音色")}
                     >
-                      用
+                      {t("用")}
                     </button>
                     <button
                       onClick={() => setConfirmDelete(`${voice.engine}/${voice.id}`)}
                       className="shrink-0 rounded px-1.5 py-1 text-ink-500 hover:text-red-300"
-                      title="删除（引擎侧参考音一并删除）"
+                      title={t("删除（引擎侧参考音一并删除）")}
                     >
                       ×
                     </button>
@@ -349,18 +358,18 @@ export function VoicesPanel() {
             ))}
           </div>
         </div>
-        <p className="mt-2 text-[11px] text-ink-500">点音色名试听；「用」发送到生成页。</p>
+        <p className="mt-2 text-[11px] text-ink-500">{t("点音色名试听；「用」发送到生成页。")}</p>
         {showRegister && (
           <div className="mt-3 rounded-lg border border-ink-700/60 bg-ink-800/40 p-3">
             <p className="text-[11px] text-ink-500">
-              注册到克隆型引擎：5–15 秒干净参考音（上传或现场录制）+ 与音频逐字对应的文本；逐字稿可先用 ASR 识别再修正。
+              {t("注册到克隆型引擎：5–15 秒干净参考音（上传或现场录制）+ 与音频逐字对应的文本；逐字稿可先用 ASR 识别再修正。")}
             </p>
             <div className="mt-2 flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-3">
             <input
               value={newId}
               onChange={event => setNewId(event.target.value)}
-              placeholder="音色 ID（字母数字._-）"
+              placeholder={t("音色 ID（字母数字._-）")}
               className="w-44 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100"
             />
             <div className="flex overflow-hidden rounded-lg border border-ink-700 text-xs">
@@ -370,7 +379,7 @@ export function VoicesPanel() {
                   onClick={() => setSource(mode)}
                   className={`px-3 py-1.5 ${source === mode ? "bg-ink-700 text-ink-100" : "text-ink-300 hover:text-ink-100"}`}
                 >
-                  {mode === "upload" ? "上传文件" : "现场录制"}
+                  {mode === "upload" ? t("上传文件") : t("现场录制")}
                 </button>
               ))}
             </div>
@@ -400,14 +409,14 @@ export function VoicesPanel() {
                   className="flex items-center gap-2 rounded-lg bg-red-500/90 px-4 py-2 text-sm font-medium text-white hover:bg-red-500"
                 >
                   <span className="inline-block size-2 animate-pulse rounded-full bg-white" />
-                  停止（{(elapsedMs / 1_000).toFixed(1)}s / 30s）
+                  {t("停止（{elapsed}s / 30s）", { elapsed: (elapsedMs / 1_000).toFixed(1) })}
                 </button>
               ) : (
                 <button
                   onClick={() => void startRecording()}
                   className="rounded-lg border border-ink-700 px-4 py-2 text-sm text-ink-100 hover:bg-ink-800"
                 >
-                  {recorded ? "重新录制" : "🎙 开始录制"}
+                  {recorded ? t("重新录制") : `🎙 ${t("开始录制")}`}
                 </button>
               )}
               {recorded && !recorder && (
@@ -424,16 +433,16 @@ export function VoicesPanel() {
               value={newText}
               onChange={event => setNewText(event.target.value)}
               rows={2}
-              placeholder="参考音的逐字稿…"
+              placeholder={t("参考音的逐字稿…")}
               className="w-full flex-1 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100"
             />
             <button
               onClick={() => void fillTranscript()}
               disabled={transcribing}
               className="shrink-0 rounded border border-ink-700 px-2 py-1.5 text-[11px] text-ink-300 hover:text-ink-100 disabled:opacity-40"
-              title="用 ASR 识别参考音，生成逐字稿草稿"
+              title={t("用 ASR 识别参考音，生成逐字稿草稿")}
             >
-              {transcribing ? "识别中…" : "ASR 识别"}
+              {transcribing ? t("识别中…") : t("ASR 识别")}
             </button>
           </div>
           <div>
@@ -442,7 +451,7 @@ export function VoicesPanel() {
               disabled={registering || recorder !== undefined}
               className="rounded-lg bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-500 disabled:opacity-40"
             >
-              {registering ? "注册中…" : "注册"}
+              {registering ? t("注册中…") : t("注册")}
             </button>
           </div>
         </div>
@@ -464,11 +473,12 @@ export function VoicesPanel() {
 
 /** Fingerprint short form: enough to eyeball identity, click-to-copy for the rest. */
 function Fingerprint({ sha }: { sha: string | undefined }) {
-  if (!sha) return <span className="text-ink-500">无指纹</span>;
+  const t = useT();
+  if (!sha) return <span className="text-ink-500">{t("无指纹")}</span>;
   return (
     <button
       onClick={() => void navigator.clipboard?.writeText(sha)}
-      title={`${sha}（点击复制）`}
+      title={`${sha}${t("（点击复制）")}`}
       className="rounded bg-ink-800 px-1.5 py-0.5 font-mono text-[10px] text-ink-300 hover:text-accent-500"
     >
       {sha.slice(0, 8)}
@@ -483,6 +493,7 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
   auditioning: string;
   playing: string;
 }) {
+  const t = useT();
   const [engines, setEngines] = useState<EngineEntry[]>([]);
   const toast = useStudio(state => state.toast);
   const [verifying, setVerifying] = useState("");
@@ -498,23 +509,29 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
   const auditOf = (profile: VoiceEntry): { label: string; tone: string; title: string } => {
     const meta = profile.designProfile;
     const runtime = engines.find(entry => entry.name === profile.engine)?.runtime;
-    if (!meta || !runtime) return { label: "未知", tone: "bg-ink-700 text-ink-300", title: "引擎身份不可达" };
-    if (meta.model !== runtime.model) return { label: "模型漂移", tone: "bg-red-500/20 text-red-300", title: `档案 ${meta.model} ≠ 运行时 ${runtime.model}` };
-    if ((meta.model_manifest_sha256 ?? null) !== runtime.manifestSha256) {
-      return { label: "清单漂移", tone: "bg-amber-500/20 text-amber-300", title: "模型清单指纹与运行时不一致" };
+    if (!meta || !runtime) return { label: t("未知"), tone: "bg-ink-700 text-ink-300", title: t("引擎身份不可达") };
+    if (meta.model !== runtime.model) {
+      return {
+        label: t("模型漂移"),
+        tone: "bg-red-500/20 text-red-300",
+        title: t("档案 {profile} ≠ 运行时 {runtime}", { profile: meta.model, runtime: runtime.model }),
+      };
     }
-    return { label: "与运行时一致", tone: "bg-emerald-500/20 text-emerald-300", title: "模型与清单指纹均一致" };
+    if ((meta.model_manifest_sha256 ?? null) !== runtime.manifestSha256) {
+      return { label: t("清单漂移"), tone: "bg-amber-500/20 text-amber-300", title: t("模型清单指纹与运行时不一致") };
+    }
+    return { label: t("与运行时一致"), tone: "bg-emerald-500/20 text-emerald-300", title: t("模型与清单指纹均一致") };
   };
 
   // Verify = reproduce under a throwaway id, compare the audio fingerprint, clean up.
   const verify = async (profile: VoiceEntry) => {
     const meta = profile.designProfile;
     if (!meta || !profile.promptText) {
-      toast("error", `${profile.id} 缺少锚文本或指纹，无法验证。`);
+      toast("error", t("{id} 缺少锚文本或指纹，无法验证。", { id: profile.id }));
       return;
     }
     setVerifying(profile.id);
-    toast("info", `正在重现 ${profile.id}（同参数重新生成并比对指纹）…`);
+    toast("info", t("正在重现 {id}（同参数重新生成并比对指纹）…", { id: profile.id }));
     const probe = `${profile.id}-vfy-${Date.now().toString(36)}`;
     try {
       const copy = await createDesignProfile({
@@ -527,8 +544,8 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
       }, profile.engine || undefined);
       const match = copy.designProfile?.audio_sha256 !== undefined
         && copy.designProfile.audio_sha256 === meta.audio_sha256;
-      if (match) toast("info", `✓ ${profile.id} 可逐字节重现（指纹一致）`);
-      else toast("error", `✗ ${profile.id} 重现结果指纹不一致 —— 运行时已漂移或参数缺失`);
+      if (match) toast("info", t("✓ {id} 可逐字节重现（指纹一致）", { id: profile.id }));
+      else toast("error", t("✗ {id} 重现结果指纹不一致 —— 运行时已漂移或参数缺失", { id: profile.id }));
       await deleteVoice(probe, profile.engine || undefined).catch(() => {});
     } catch (error) {
       toast("error", error instanceof Error ? error.message : String(error));
@@ -540,11 +557,11 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
   const create = async () => {
     const seed = Number(form.seed);
     if (!form.id.trim() || !form.description.trim() || !form.anchorText.trim() || !Number.isInteger(seed)) {
-      toast("error", "创建需要：ID、英文声音描述、锚文本、整数 seed。");
+      toast("error", t("创建需要：ID、英文声音描述、锚文本、整数 seed。"));
       return;
     }
     setCreating(true);
-    toast("info", "生成锚音频并登记指纹…");
+    toast("info", t("生成锚音频并登记指纹…"));
     try {
       await createDesignProfile({
         id: form.id.trim(),
@@ -554,7 +571,7 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
         cfgValue: Number(form.cfg) || 2,
         timesteps: Number(form.timesteps) || 10,
       });
-      toast("info", `已创建设计档 ${form.id.trim()}`);
+      toast("info", t("已创建设计档 {id}", { id: form.id.trim() }));
       setForm({ ...form, id: "", description: "" });
       setShowForm(false);
       onChanged();
@@ -568,30 +585,30 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
   return (
     <section className="rounded-xl border border-ink-700 bg-ink-900 p-4 md:p-5">
       <div className="flex items-center gap-3">
-        <h2 className="text-sm font-medium text-ink-300">设计档（{profiles.length}）</h2>
+        <h2 className="text-sm font-medium text-ink-300">{t("设计档（{n}）", { n: profiles.length })}</h2>
         <div className="flex-1" />
         <button
           onClick={() => setShowForm(value => !value)}
           className="rounded-lg border border-ink-700 px-3 py-1.5 text-xs text-ink-300 hover:text-ink-100"
         >
-          {showForm ? "收起" : "新建设计档"}
+          {showForm ? t("收起") : t("新建设计档")}
         </button>
       </div>
       <p className="mt-1 text-[11px] text-ink-500">
-        零样本声音设计：描述 + 锚文本 + seed 固定一个可复现的音色；指纹（SHA-256）保证同一运行时可逐字节重现。
+        {t("零样本声音设计：描述 + 锚文本 + seed 固定一个可复现的音色；指纹（SHA-256）保证同一运行时可逐字节重现。")}
       </p>
 
       {showForm && (
         <div className="mt-3 flex flex-col gap-2 rounded-lg border border-ink-700/60 bg-ink-800/40 p-3">
           <div className="flex flex-wrap gap-2">
-            <input value={form.id} onChange={event => setForm({ ...form, id: event.target.value })} placeholder="设计档 ID"
+            <input value={form.id} onChange={event => setForm({ ...form, id: event.target.value })} placeholder={t("设计档 ID")}
               className="w-40 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100" />
             <input value={form.description} onChange={event => setForm({ ...form, description: event.target.value })}
-              placeholder="声音描述（英文，如 calm clear female voice）"
+              placeholder={t("声音描述（英文，如 calm clear female voice）")}
               className="min-w-64 flex-1 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100" />
           </div>
           <textarea value={form.anchorText} onChange={event => setForm({ ...form, anchorText: event.target.value })}
-            rows={2} placeholder="锚文本（将被固定为该音色的参考语料）"
+            rows={2} placeholder={t("锚文本（将被固定为该音色的参考语料）")}
             className="w-full rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100" />
           <div className="flex flex-wrap items-center gap-3 text-xs text-ink-300">
             <label className="flex items-center gap-1">seed
@@ -609,7 +626,7 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
             <div className="flex-1" />
             <button onClick={() => void create()} disabled={creating}
               className="rounded-lg bg-accent-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-accent-500 disabled:opacity-40">
-              {creating ? "生成中…" : "创建"}
+              {creating ? t("生成中…") : t("创建")}
             </button>
           </div>
         </div>
@@ -617,7 +634,7 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
 
       <div className="mt-3 space-y-2">
         {profiles.length === 0 && (
-          <p className="text-sm text-ink-500">还没有设计档；需要具备 design 能力的引擎（见设置页注册表）。</p>
+          <p className="text-sm text-ink-500">{t("还没有设计档；需要具备 design 能力的引擎（见设置页注册表）。")}</p>
         )}
         {profiles.map(profile => {
           const meta = profile.designProfile;
@@ -634,12 +651,12 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
                 <div className="flex-1" />
                 <button onClick={() => onAudition(profile.id, profile.engine)} disabled={auditioning === profile.id}
                   className="rounded border border-ink-700 px-2 py-1 text-[11px] text-ink-300 hover:text-ink-100 disabled:opacity-40">
-                  {auditioning === profile.id ? "合成中…" : playing === profile.id ? "■ 停止" : "试听"}
+                  {auditioning === profile.id ? t("合成中…") : playing === profile.id ? t("■ 停止") : t("试听")}
                 </button>
                 <button onClick={() => void verify(profile)} disabled={verifying !== ""}
-                  title="同参数重新生成一次并比对音频指纹（可逐字节重现性检验）"
+                  title={t("同参数重新生成一次并比对音频指纹（可逐字节重现性检验）")}
                   className="rounded border border-ink-700 px-2 py-1 text-[11px] text-ink-300 hover:text-ink-100 disabled:opacity-40">
-                  {verifying === profile.id ? "验证中…" : "验证"}
+                  {verifying === profile.id ? t("验证中…") : t("验证")}
                 </button>
               </div>
               <p className="mt-1 truncate text-[11px] text-ink-500" title={`${meta?.description ?? ""} · ${meta?.model ?? ""}`}>

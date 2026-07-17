@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { listEngines, type EngineEntry } from "../lib/api";
 import { useStudio } from "../store";
+import { useI18n, useT, type Locale } from "../i18n";
 
 interface Health {
   ok: boolean;
@@ -9,6 +10,7 @@ interface Health {
 }
 
 function EnginesTable() {
+  const t = useT();
   const [engines, setEngines] = useState<EngineEntry[] | "error" | undefined>(undefined);
 
   const load = () => {
@@ -23,17 +25,17 @@ function EnginesTable() {
   return (
     <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
       <div className="flex items-center gap-3">
-        <h2 className="text-sm font-medium text-ink-300">引擎（注册表）</h2>
+        <h2 className="text-sm font-medium text-ink-300">{t("引擎（注册表）")}</h2>
         <div className="flex-1" />
         <button
           onClick={load}
           className="rounded-lg border border-ink-700 px-3 py-1 text-xs text-ink-300 hover:text-ink-100"
         >
-          刷新
+          {t("刷新")}
         </button>
       </div>
-      {engines === undefined && <p className="mt-2 text-sm text-ink-500">探测中…</p>}
-      {engines === "error" && <p className="mt-2 text-sm text-red-300">无法获取引擎列表（/v1/engines）</p>}
+      {engines === undefined && <p className="mt-2 text-sm text-ink-500">{t("探测中…")}</p>}
+      {engines === "error" && <p className="mt-2 text-sm text-red-300">{t("无法获取引擎列表（/v1/engines）")}</p>}
       {/* A six-column table has no honest 390px rendering; small screens get cards. */}
       {Array.isArray(engines) && (
         <div className="mt-3 space-y-2 md:hidden">
@@ -46,7 +48,7 @@ function EnginesTable() {
                 <span
                   className={`inline-block size-2 rounded-full ${entry.healthy ? "bg-emerald-400" : "bg-red-400"}`}
                   role="img"
-                  aria-label={entry.healthy ? "在线" : "离线"}
+                  aria-label={entry.healthy ? t("在线") : t("离线")}
                 />
               </div>
               <div className="mt-1 text-xs text-ink-300">{entry.model || "—"}</div>
@@ -69,12 +71,12 @@ function EnginesTable() {
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="text-xs text-ink-500">
-                <th className="pb-2 pr-3 font-normal">实例</th>
-                <th className="pb-2 pr-3 font-normal">类型</th>
-                <th className="pb-2 pr-3 font-normal">模型</th>
-                <th className="pb-2 pr-3 font-normal">角色</th>
-                <th className="pb-2 pr-3 font-normal">能力</th>
-                <th className="pb-2 font-normal">状态</th>
+                <th className="pb-2 pr-3 font-normal">{t("实例")}</th>
+                <th className="pb-2 pr-3 font-normal">{t("类型")}</th>
+                <th className="pb-2 pr-3 font-normal">{t("模型")}</th>
+                <th className="pb-2 pr-3 font-normal">{t("角色")}</th>
+                <th className="pb-2 pr-3 font-normal">{t("能力")}</th>
+                <th className="pb-2 font-normal">{t("状态")}</th>
               </tr>
             </thead>
             <tbody>
@@ -97,8 +99,8 @@ function EnginesTable() {
                     <span
                       className={`inline-block size-2 rounded-full ${entry.healthy ? "bg-emerald-400" : "bg-red-400"}`}
                       role="img"
-                      aria-label={entry.healthy ? "在线" : "离线"}
-                      title={entry.healthy ? "在线" : "离线"}
+                      aria-label={entry.healthy ? t("在线") : t("离线")}
+                      title={entry.healthy ? t("在线") : t("离线")}
                     />
                   </td>
                 </tr>
@@ -108,13 +110,16 @@ function EnginesTable() {
         </div>
       )}
       <p className="mt-3 text-xs text-ink-500">
-        实例与角色在网关侧配置（见 docs/engine-registry.md）；地址与密钥不出网关。
+        {t("实例与角色在网关侧配置（见 docs/engine-registry.md）；地址与密钥不出网关。")}
       </p>
     </section>
   );
 }
 
 export function SettingsPanel() {
+  const t = useT();
+  const locale = useI18n(state => state.locale);
+  const setLocale = useI18n(state => state.setLocale);
   const [health, setHealth] = useState<Health | "unreachable" | undefined>(undefined);
   const capability = useStudio(state => state.capability);
   const sessionId = useStudio(state => state.sessionId);
@@ -132,75 +137,87 @@ export function SettingsPanel() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 px-4 py-6 md:space-y-8 md:px-8 md:py-10">
-      <h1 className="text-2xl font-semibold">设置</h1>
+      <h1 className="text-2xl font-semibold">{t("设置")}</h1>
 
       <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
         <div className="flex items-center gap-3">
-          <h2 className="text-sm font-medium text-ink-300">网关</h2>
+          <h2 className="text-sm font-medium text-ink-300">{t("网关")}</h2>
           <div className="flex-1" />
           <button
             onClick={probe}
             className="rounded-lg border border-ink-700 px-3 py-1 text-xs text-ink-300 hover:text-ink-100"
           >
-            刷新
+            {t("刷新")}
           </button>
         </div>
-        {health === undefined && <p className="mt-2 text-sm text-ink-500">探测中…</p>}
-        {health === "unreachable" && <p className="mt-2 text-sm text-red-300">无法连接网关（/healthz）</p>}
+        {health === undefined && <p className="mt-2 text-sm text-ink-500">{t("探测中…")}</p>}
+        {health === "unreachable" && <p className="mt-2 text-sm text-red-300">{t("无法连接网关（/healthz）")}</p>}
         {health !== undefined && health !== "unreachable" && (
           <dl className="mt-3 grid grid-cols-3 gap-3 text-sm">
             <div>
-              <dt className="text-xs text-ink-500">状态</dt>
-              <dd className="mt-0.5 text-emerald-300">{health.ok ? "在线" : "异常"}</dd>
+              <dt className="text-xs text-ink-500">{t("状态")}</dt>
+              <dd className="mt-0.5 text-emerald-300">{health.ok ? t("在线") : t("异常")}</dd>
             </div>
             <div>
-              <dt className="text-xs text-ink-500">协议</dt>
+              <dt className="text-xs text-ink-500">{t("协议")}</dt>
               <dd className="mt-0.5">v{health.protocol}</dd>
             </div>
             <div>
-              <dt className="text-xs text-ink-500">活动会话</dt>
+              <dt className="text-xs text-ink-500">{t("活动会话")}</dt>
               <dd className="mt-0.5">{health.sessions}</dd>
             </div>
           </dl>
         )}
         <p className="mt-3 text-xs text-ink-500">
-          引擎地址与凭据只存在于网关侧；浏览器仅访问 /v1 契约与 /v1/realtime。
+          {t("引擎地址与凭据只存在于网关侧；浏览器仅访问 /v1 契约与 /v1/realtime。")}
         </p>
       </section>
 
       <EnginesTable />
 
       <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
-        <h2 className="text-sm font-medium text-ink-300">端点能力（本次会话协商结果）</h2>
-        {!capability && <p className="mt-2 text-sm text-ink-500">尚未开始对话；开始后展示 getUserMedia 协商到的 AEC/NS/AGC 与采样率。</p>}
+        <h2 className="text-sm font-medium text-ink-300">{t("端点能力（本次会话协商结果）")}</h2>
+        {!capability && <p className="mt-2 text-sm text-ink-500">{t("尚未开始对话；开始后展示 getUserMedia 协商到的 AEC/NS/AGC 与采样率。")}</p>}
         {capability && (
           <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4 text-sm">
             <div>
-              <dt className="text-xs text-ink-500">回声消除</dt>
-              <dd className="mt-0.5">{capability.echoCancellation === false ? "关" : "开"}</dd>
+              <dt className="text-xs text-ink-500">{t("回声消除")}</dt>
+              <dd className="mt-0.5">{capability.echoCancellation === false ? t("关") : t("开")}</dd>
             </div>
             <div>
-              <dt className="text-xs text-ink-500">降噪</dt>
-              <dd className="mt-0.5">{capability.noiseSuppression === false ? "关" : "开"}</dd>
+              <dt className="text-xs text-ink-500">{t("降噪")}</dt>
+              <dd className="mt-0.5">{capability.noiseSuppression === false ? t("关") : t("开")}</dd>
             </div>
             <div>
-              <dt className="text-xs text-ink-500">自动增益</dt>
-              <dd className="mt-0.5">{capability.autoGainControl === false ? "关" : "开"}</dd>
+              <dt className="text-xs text-ink-500">{t("自动增益")}</dt>
+              <dd className="mt-0.5">{capability.autoGainControl === false ? t("关") : t("开")}</dd>
             </div>
             <div>
-              <dt className="text-xs text-ink-500">采集采样率</dt>
+              <dt className="text-xs text-ink-500">{t("采集采样率")}</dt>
               <dd className="mt-0.5">{capability.contextSampleRate}Hz</dd>
             </div>
           </dl>
         )}
-        {sessionId && <p className="mt-3 text-xs text-ink-500">会话 {sessionId}</p>}
+        {sessionId && <p className="mt-3 text-xs text-ink-500">{t("会话 {id}", { id: sessionId })}</p>}
+      </section>
+
+      <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
+        <h2 className="text-sm font-medium text-ink-300">{t("语言")}</h2>
+        <select
+          value={locale}
+          onChange={event => setLocale(event.target.value as Locale)}
+          className="mt-3 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-sm text-ink-100"
+        >
+          <option value="auto">{t("自动（跟随浏览器）")}</option>
+          <option value="zh">中文</option>
+          <option value="en">English</option>
+        </select>
       </section>
 
       <section className="rounded-xl border border-ink-700 bg-ink-900 p-5 text-sm leading-relaxed text-ink-300">
-        <h2 className="text-sm font-medium">关于</h2>
+        <h2 className="text-sm font-medium">{t("关于")}</h2>
         <p className="mt-2">
-          VoxStudio Web —— 自托管多语言语音工作台。设计与分期见 <code>docs/web-studio.md</code>；
-          实时会话契约见 <code>docs/duplex-audio-architecture.md</code>。
+          {t("VoxStudio Web —— 自托管多语言语音工作台。设计与分期见 docs/web-studio.md；实时会话契约见 docs/duplex-audio-architecture.md。")}
         </p>
       </section>
     </div>

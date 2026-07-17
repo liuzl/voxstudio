@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { VoicePicker } from "../components/VoicePicker";
 import { synthesize } from "../lib/api";
 import { useStudio } from "../store";
+import { useT } from "../i18n";
 
 /** Ticks once a second while a synthesis runs — long texts deserve a visible clock. */
 function Elapsed({ since }: { since: number }) {
@@ -15,6 +16,7 @@ function Elapsed({ since }: { since: number }) {
 }
 
 export function GeneratePanel() {
+  const t = useT();
   const [text, setText] = useState("");
   const voice = useStudio(state => state.generateVoice);
   const engine = useStudio(state => state.generateEngine);
@@ -40,13 +42,13 @@ export function GeneratePanel() {
       addTake({
         id: crypto.randomUUID(),
         text: text.trim(),
-        voice: `${voice || "默认"}${engine ? ` @${engine}` : ""}`,
+        voice: `${voice || t("默认")}${engine ? ` @${engine}` : ""}`,
         at: Date.now(),
         url,
       });
     } catch (failure) {
       if (controller.signal.aborted) {
-        toast("info", "已取消合成");
+        toast("info", t("已取消合成"));
       } else {
         toast("error", failure instanceof Error ? failure.message : String(failure));
       }
@@ -58,7 +60,7 @@ export function GeneratePanel() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 px-4 py-6 md:px-8 md:py-10">
-      <h1 className="text-2xl font-semibold">生成</h1>
+      <h1 className="text-2xl font-semibold">{t("生成")}</h1>
 
       <section className="space-y-3 rounded-xl border border-ink-700 bg-ink-900 p-4 md:p-5">
         <textarea
@@ -71,14 +73,15 @@ export function GeneratePanel() {
             }
           }}
           rows={5}
-          placeholder="输入要合成的文本…（⌘+Enter 生成）"
+          placeholder={t("输入要合成的文本…（⌘+Enter 生成）")}
           className="w-full resize-y rounded-lg border border-ink-700 bg-ink-800 px-3 py-2.5 text-sm leading-relaxed text-ink-100 placeholder:text-ink-500"
         />
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <VoicePicker value={voice} engine={engine} onChange={setVoice} />
           {text.trim() && (
             <span className="text-[11px] text-ink-500">
-              预计 {seconds}s{chunks > 1 ? ` · 长文将按 ${chunks} 块合成（CLI 长文管线）` : ""}
+              {t("预计 {seconds}s", { seconds })}
+              {chunks > 1 ? t(" · 长文将按 {chunks} 块合成（CLI 长文管线）", { chunks }) : ""}
             </span>
           )}
           <div className="flex-1" />
@@ -87,7 +90,7 @@ export function GeneratePanel() {
               onClick={() => abort.current?.abort()}
               className="rounded-lg border border-ink-700 px-4 py-2 text-sm text-ink-300 hover:text-ink-100"
             >
-              取消
+              {t("取消")}
             </button>
           )}
           <button
@@ -95,14 +98,14 @@ export function GeneratePanel() {
             disabled={busy || !text.trim()}
             className="rounded-lg bg-accent-600 px-5 py-2 text-sm font-medium text-white hover:bg-accent-500 disabled:opacity-40"
           >
-            {busy ? <>合成中… <Elapsed since={busySince} /></> : "生成"}
+            {busy ? <>{t("合成中…")} <Elapsed since={busySince} /></> : t("生成")}
           </button>
         </div>
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-medium text-ink-300">生成记录（本页保留最近 30 条，刷新即失）</h2>
-        {takes.length === 0 && <p className="text-sm text-ink-500">还没有生成记录。</p>}
+        <h2 className="text-sm font-medium text-ink-300">{t("生成记录（本页保留最近 30 条，刷新即失）")}</h2>
+        {takes.length === 0 && <p className="text-sm text-ink-500">{t("还没有生成记录。")}</p>}
         {takes.map(take => (
           <div key={take.id} className="rounded-xl border border-ink-700 bg-ink-900 p-4">
             <div className="flex items-start gap-3">
@@ -117,13 +120,13 @@ export function GeneratePanel() {
                 download={`take-${new Date(take.at).toISOString().replace(/[:.]/g, "-")}.wav`}
                 className="shrink-0 rounded border border-ink-700 px-2 py-1 text-[11px] text-ink-300 hover:text-ink-100"
               >
-                下载
+                {t("下载")}
               </a>
               <button
                 onClick={() => removeTake(take.id)}
                 className="shrink-0 rounded border border-ink-700 px-2 py-1 text-[11px] text-ink-300 hover:text-red-300"
               >
-                删除
+                {t("删除")}
               </button>
             </div>
             <audio controls src={take.url} className="mt-3 h-9 w-full" />

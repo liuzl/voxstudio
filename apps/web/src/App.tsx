@@ -5,10 +5,11 @@ import { PlaceholderPanel } from "./panels/PlaceholderPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { VoicesPanel } from "./panels/VoicesPanel";
 import { useStudio, type ToastView } from "./store";
+import { useT, type MessageKey } from "./i18n";
 
 type Tab = "conversation" | "generate" | "voices" | "library" | "settings";
 
-const tabs: { id: Tab; label: string; icon: string; hint?: string }[] = [
+const tabs: { id: Tab; label: MessageKey; icon: string; hint?: MessageKey }[] = [
   { id: "conversation", label: "对话", icon: "🎙" },
   { id: "generate", label: "生成", icon: "✍️" },
   { id: "voices", label: "音色", icon: "🎭" },
@@ -17,7 +18,7 @@ const tabs: { id: Tab; label: string; icon: string; hint?: string }[] = [
   { id: "settings", label: "设置", icon: "⚙️" },
 ];
 
-const sessionLabels: Record<string, { text: string; tone: string }> = {
+const sessionLabels: Record<string, { text: MessageKey; tone: string }> = {
   connecting: { text: "连接中", tone: "bg-yellow-400" },
   reconnecting: { text: "重连中", tone: "bg-yellow-400" },
   connected: { text: "会话中", tone: "bg-emerald-400" },
@@ -28,6 +29,7 @@ const sessionLabels: Record<string, { text: string; tone: string }> = {
  * reachability — an idle studio is "就绪", not a scary "未连接".
  */
 function ConnectionDot({ withText = true }: { withText?: boolean }) {
+  const t = useT();
   const connection = useStudio(state => state.connection);
   const [gateway, setGateway] = useState<"probing" | "ok" | "down">("probing");
 
@@ -42,7 +44,7 @@ function ConnectionDot({ withText = true }: { withText?: boolean }) {
     return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
-  const status = sessionLabels[connection]
+  const status: { text: MessageKey; tone: string } = sessionLabels[connection]
     ?? (gateway === "ok"
       ? { text: "就绪", tone: "bg-emerald-400/60" }
       : gateway === "down"
@@ -51,12 +53,13 @@ function ConnectionDot({ withText = true }: { withText?: boolean }) {
   return (
     <span className="flex items-center gap-2 text-xs text-ink-300">
       <span className={`inline-block size-2 rounded-full ${status.tone}`} />
-      {withText && <span>{status.text}</span>}
+      {withText && <span>{t(status.text)}</span>}
     </span>
   );
 }
 
 function Toast({ toast, onDismiss }: { toast: ToastView; onDismiss: () => void }) {
+  const t = useT();
   useEffect(() => {
     // Errors wait for the user; info leaves on its own.
     if (toast.kind === "error") return;
@@ -72,7 +75,7 @@ function Toast({ toast, onDismiss }: { toast: ToastView; onDismiss: () => void }
           ? "border-red-400/40 bg-ink-900 text-red-300"
           : "border-ink-700 bg-ink-900 text-ink-100"
       }`}
-      title="点击关闭"
+      title={t("点击关闭")}
     >
       {toast.text}
     </button>
@@ -96,6 +99,7 @@ function Toasts() {
 }
 
 export function App() {
+  const t = useT();
   const [tab, setTab] = useState<Tab>("conversation");
   const hasTakes = useStudio(state => state.takes.length > 0);
 
@@ -114,9 +118,9 @@ export function App() {
       {tab === "voices" && <VoicesPanel />}
       {tab === "library" && (
         <PlaceholderPanel
-          title="素材库"
+          title={t("素材库")}
           phase="Web Studio Phase 4"
-          description="每条录音/话语与其转写配对：重转写、行内修正（回馈 ASR 参考集工作流）、一键升级为音色样本。落库为网关侧 SQLite。"
+          description={t("每条录音/话语与其转写配对：重转写、行内修正（回馈 ASR 参考集工作流）、一键升级为音色样本。落库为网关侧 SQLite。")}
         />
       )}
       {tab === "settings" && <SettingsPanel />}
@@ -142,8 +146,8 @@ export function App() {
               }`}
             >
               <span aria-hidden>{item.icon}</span>
-              <span>{item.label}</span>
-              {item.hint && <span className="ml-auto text-[10px] text-ink-500">{item.hint}</span>}
+              <span>{t(item.label)}</span>
+              {item.hint && <span className="ml-auto text-[10px] text-ink-500">{t(item.hint)}</span>}
             </button>
           ))}
         </nav>
@@ -164,7 +168,7 @@ export function App() {
       {/* Mobile: bottom tab bar */}
       <nav
         className="flex border-t border-ink-700 bg-ink-900 pb-[env(safe-area-inset-bottom)] md:hidden"
-        aria-label="主导航"
+        aria-label={t("主导航")}
       >
         {tabs.map(item => (
           <button
@@ -176,7 +180,7 @@ export function App() {
             } ${item.hint ? "opacity-60" : ""}`}
           >
             <span aria-hidden className="text-lg leading-none">{item.icon}</span>
-            <span>{item.label}</span>
+            <span>{t(item.label)}</span>
           </button>
         ))}
       </nav>

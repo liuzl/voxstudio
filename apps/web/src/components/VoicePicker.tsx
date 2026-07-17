@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { listVoices } from "../lib/api";
 import { useStudio } from "../store";
+import { useT } from "../i18n";
 
 /**
  * The one voice select: engine-grouped, 默认 falls to the role default, and picking a
@@ -12,6 +13,7 @@ export function VoicePicker({ value, engine, onChange, className }: {
   onChange: (voice: string, engine?: string) => void;
   className?: string;
 }) {
+  const t = useT();
   const voicesList = useStudio(state => state.voicesList);
   const setVoicesList = useStudio(state => state.setVoicesList);
 
@@ -30,7 +32,7 @@ export function VoicePicker({ value, engine, onChange, className }: {
 
   return (
     <label className="flex items-center gap-2 text-xs text-ink-300">
-      音色
+      {t("音色")}
       <select
         value={value ? `${engine}::${value}` : ""}
         onChange={event => {
@@ -39,7 +41,7 @@ export function VoicePicker({ value, engine, onChange, className }: {
         }}
         className={`rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100 ${className ?? "max-w-48"}`}
       >
-        <option value="">默认（{byEngine[0]?.[0] || "引擎默认"}）</option>
+        <option value="">{t("默认（{engine}）", { engine: byEngine[0]?.[0] || t("引擎默认") })}</option>
         {byEngine.map(([groupEngine, ids]) => (
           <optgroup key={groupEngine} label={groupEngine}>
             {ids.map(id => (

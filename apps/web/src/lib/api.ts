@@ -1,6 +1,7 @@
 /** REST facade helpers: same-origin /v1 endpoints proxied by the gateway. */
+import { t, type MessageKey } from "../i18n";
 
-async function fail(response: Response, what: string): Promise<never> {
+async function fail(response: Response, what: MessageKey): Promise<never> {
   let detail = "";
   try {
     const body = await response.json() as { error?: { message?: string } };
@@ -8,7 +9,11 @@ async function fail(response: Response, what: string): Promise<never> {
   } catch {
     // Non-JSON error body; the status is the message.
   }
-  throw new Error(`${what}失败（${response.status}${detail ? `：${detail}` : ""}）`);
+  throw new Error(t("{what}失败（{status}{detail}）", {
+    what: t(what),
+    status: response.status,
+    detail: detail ? `: ${detail}` : "",
+  }));
 }
 
 export interface DesignProfileMeta {
