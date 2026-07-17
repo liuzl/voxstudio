@@ -43,11 +43,16 @@ describe("ffmpegPcmDecoder", () => {
     if (!decoder) throw new Error("unreachable: ffmpeg present");
     let samples = 0;
     let peak = 0;
+    const pieceSizes: number[] = [];
     for await (const piece of decoder.decode(body)) {
       expect(piece.sampleRate).toBe(48_000);
+      pieceSizes.push(piece.samples.length);
       samples += piece.samples.length;
       for (const value of piece.samples) peak = Math.max(peak, Math.abs(value));
     }
+    // Coalesced pieces: every one but the tail is >=240ms — tiny per-packet pieces made
+    // the browser schedule ~50 buffers/s and each boundary crackled.
+    for (const size of pieceSizes.slice(0, -1)) expect(size).toBeGreaterThanOrEqual(0.24 * 48_000);
     // Opus pads with codec delay; the duration must be within ~100ms of the input.
     expect(Math.abs(samples - pcm.length)).toBeLessThan(4_800);
     expect(peak).toBeGreaterThan(0.2); // decoded audio, not silence

@@ -1,6 +1,14 @@
 import type { PcmStreamDecoder } from "@voxstudio/clients";
 
 const decodedRate = 48_000; // Opus decodes natively at 48kHz; ffmpeg is pinned to match.
+/**
+ * Coalesce decoded PCM before yielding: ffmpeg emits one ~20ms piece per Opus packet
+ * once the trickle is generation-paced, and a browser scheduling ~50 tiny buffers a
+ * second turns each boundary's rounding into audible crackle (measured 2026-07-17:
+ * median piece 20ms mid-reply — exactly where the noise sat). Raw-PCM streaming always
+ * arrived in network-sized chunks; this restores that granularity.
+ */
+const minPieceSamples = Math.floor(0.24 * decodedRate);
 
 /**
  * Ogg/Opus -> mono f32 PCM through the system ffmpeg — the same optional dependency
@@ -36,6 +44,8 @@ export function ffmpegPcmDecoder(): PcmStreamDecoder | undefined {
       try {
         // Network chunks split anywhere; samples are 4-byte floats, so carry the remainder.
         let pending = new Uint8Array(0);
+        let gathered: Float32Array[] = [];
+        let gatheredLength = 0;
         for await (const chunk of proc.stdout) {
           signal?.throwIfAborted();
           const bytes = new Uint8Array(pending.length + chunk.length);
@@ -49,7 +59,27 @@ export function ffmpegPcmDecoder(): PcmStreamDecoder | undefined {
           for (let index = 0; index < samples.length; index += 1) {
             samples[index] = view.getFloat32(index * 4, true);
           }
-          yield { samples, sampleRate: decodedRate };
+          gathered.push(samples);
+          gatheredLength += samples.length;
+          if (gatheredLength < minPieceSamples) continue;
+          const piece = new Float32Array(gatheredLength);
+          let offset = 0;
+          for (const part of gathered) {
+            piece.set(part, offset);
+            offset += part.length;
+          }
+          gathered = [];
+          gatheredLength = 0;
+          yield { samples: piece, sampleRate: decodedRate };
+        }
+        if (gatheredLength > 0) {
+          const piece = new Float32Array(gatheredLength);
+          let offset = 0;
+          for (const part of gathered) {
+            piece.set(part, offset);
+            offset += part.length;
+          }
+          yield { samples: piece, sampleRate: decodedRate };
         }
         await feed;
       } finally {
