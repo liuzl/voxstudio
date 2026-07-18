@@ -39,8 +39,9 @@ prompt rules (retested: no new false triggers):
 2. **Claiming an action requires calling its tool** — otherwise the model answers
    "好的，我调慢一点" without calling `set_speed`: a state-change lie.
 
-Honest limits: single-turn, temperature 0, 16 cases. Multi-turn stability and
-consecutive tool calls are measured by the phase-1 gate, not assumed.
+Honest limits at spike time: single-turn, temperature 0, 16 cases. Both were
+measured off on 2026-07-18 (phase 2 below): the suite holds at turn 9 without
+degradation, and compound commands land both tools through the loop's rounds.
 
 ## Decisions
 
@@ -106,6 +107,15 @@ consecutive tool calls are measured by the phase-1 gate, not assumed.
 2. **Multi-turn hardening**: measure tool reliability inside real multi-turn
    histories (does the 16-case suite hold at turn 8?); design the spoken
    confirmation flow for `external` tools on the `effect` field.
+   **Measured 2026-07-18.** The gate gained two phases: the 16 cases asked at
+   turn 9 of a realistic 8-exchange history that deliberately contains an
+   earlier voice-switch conversation — 8/8 explicit, 0/5 false triggers, 3/3
+   edge, identical to single-turn (the vague "换一个声音" even improved into a
+   clarifying question citing example ids); and three compound commands driven
+   through the loop's execute-and-refeed rounds — both tools landed every time,
+   including `set_voice` → `end_call` sequencing, with zero malformed JSON or
+   invented tools across all phases. The external-tool confirmation flow stays
+   deferred until an external tool exists to need it.
 3. **Consumers**: the OpenAI Realtime adapter maps its tool events onto this loop;
    an MCP surface presents MCP tools through the same registration.
 
