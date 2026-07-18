@@ -248,7 +248,15 @@ export function parseConfig(input: unknown = {}, env: Environment = {}): VoxConf
     responseFormat: stringValue(rawTts.response_format, defaultTts.responseFormat),
   };
 
-  return { engines, roles, ttsDefaults, chunking: chunkingFromRaw(raw.chunking, env) };
+  const keyterms = raw.keyterms;
+  if (keyterms !== undefined && (!Array.isArray(keyterms) || keyterms.some(entry => typeof entry !== "string"))) {
+    throw new ConfigError("`keyterms` must be a list of strings");
+  }
+  return {
+    engines, roles, ttsDefaults,
+    chunking: chunkingFromRaw(raw.chunking, env),
+    keyterms: (keyterms as string[] | undefined) ?? [],
+  };
 }
 
 /**

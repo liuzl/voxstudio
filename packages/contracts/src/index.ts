@@ -50,6 +50,8 @@ export interface VoxConfig {
   roles: Record<string, string>;
   ttsDefaults: TtsDefaults;
   chunking: ChunkConfig;
+  /** Product terms ASR tends to mishear; transcripts are conservatively corrected toward them. */
+  keyterms: string[];
 }
 
 export interface Transcription {

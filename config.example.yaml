@@ -47,6 +47,10 @@ tts_defaults:
   timesteps: 10
   response_format: wav
 
+# Terms ASR tends to mishear (brands, product names); transcripts are conservatively
+# corrected toward them. Registered voice ids are added automatically at runtime.
+# keyterms: ["VoxStudio", "kokoro"]
+
 chunking:
   # The budget is estimated speech duration, not characters -- 85 Chinese characters
   # and 275 English ones both take about 15s to say. See docs/chunking.md.

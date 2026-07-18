@@ -298,3 +298,4 @@ export function chunkText(input: string, options: ChunkOptions = {}): string[] {
   if (start !== null) emit(start, chars.length);
   return chunks;
 }
+export { correctKeyterms, type KeytermCorrection } from "./keyterms";

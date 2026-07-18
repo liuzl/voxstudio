@@ -274,6 +274,13 @@ export async function runListen(
       },
     ];
     conversationOptions.tools = tools;
+    let keytermCache: { at: number; terms: string[] } | undefined;
+    conversationOptions.keyterms = async () => {
+      if (keytermCache && Date.now() - keytermCache.at < 60_000) return keytermCache.terms;
+      const bank = await tts.listVoices().catch(() => []);
+      keytermCache = { at: Date.now(), terms: [...config.keyterms, ...bank.map(entry => entry.id)] };
+      return keytermCache.terms;
+    };
     await runConversation({
       session,
       vad,
@@ -286,6 +293,7 @@ export async function runListen(
       onTranscript: text => io.out(`transcript: ${text}`),
       onReply: text => io.out(`reply: ${text}`),
       onError: (_code, message) => io.err(`listen: ${message}`),
+      onKeytermCorrection: (from, to) => io.err(`keyterm: "${from}" -> "${to}"`),
       onToolCall: (name, args) => io.err(`tool: ${name} ${JSON.stringify(args)}`),
       onToolResult: (name, ok) => io.err(`tool: ${name} ${ok ? "ok" : "failed"}`),
       ...(options.saveUtterances === undefined ? {} : {

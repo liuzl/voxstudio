@@ -237,3 +237,38 @@ describe("runConversation tool cycle", () => {
     expect(errors).toEqual([]);
   });
 });
+
+describe("runConversation keyterm correction", () => {
+  test("corrects the transcript for LLM and captions but never the utterance sample", async () => {
+    const session = new DuplexSession();
+    session.start();
+    const seen: Record<string, string> = {};
+    let llmSaw = "";
+    await runConversation({
+      session,
+      vad: new EnergyVadSegmenter({ sampleRate: 16_000, threshold: 0.1, minSpeechMs: 40, silenceMs: 20 }),
+      frames: frames(),
+      createPlayer: () => ({ write: async () => {}, close: async () => {} }),
+      asr: { transcribe: async () => ({ text: "帮我换成ZF001的声音" }) },
+      llm: {
+        chatStream: async function* (messages) {
+          llmSaw = messages[messages.length - 1]!.content;
+          yield "好的。";
+        },
+      },
+      tts: { speech: async () => new Uint8Array(writeWav(new Float32Array(48_000).fill(0.1), 24_000)) },
+    }, {
+      language: "zh", chunking, ttsDefaults, voice: "demo",
+      allowBargeIn: true, turnTaking: "conservative", reopenMs: 7_000,
+      keyterms: async () => ["zf_001", "zliu"],
+    }, {
+      onUtterance: (_wav, transcript) => { seen.utterance = transcript; },
+      onTranscript: text => { seen.transcript = text; },
+      onKeytermCorrection: (from, to) => { seen.correction = `${from}->${to}`; },
+    });
+    expect(seen.utterance).toBe("帮我换成ZF001的声音");   // raw: the ASR test set stays honest
+    expect(seen.transcript).toBe("帮我换成zf_001的声音"); // corrected: what the model and captions see
+    expect(seen.correction).toBe("ZF001->zf_001");
+    expect(llmSaw).toBe("帮我换成zf_001的声音");
+  });
+});

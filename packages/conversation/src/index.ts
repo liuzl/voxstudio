@@ -2,7 +2,7 @@ import { writeWav, type PcmAudio } from "@voxstudio/audio";
 import type { ChatMessage, ChatToolCall, ChatToolDeclaration, ChunkConfig, TtsDefaults } from "@voxstudio/contracts";
 import type { DuplexSession, DuplexTurn, VadSegmenter } from "@voxstudio/duplex-session";
 import { streamReply, type SpeechEngine } from "@voxstudio/orchestration";
-import { sanitizeForTts } from "@voxstudio/text";
+import { correctKeyterms, sanitizeForTts } from "@voxstudio/text";
 
 /** Mono float32 microphone audio at 16kHz, stamped with a Date.now()-based clock. */
 export interface ConversationFrame {
@@ -103,6 +103,12 @@ export interface ConversationOptions {
   tools?: ConversationTool[];
   /** Reply playback-rate multiplier; engines without rate control ignore it. */
   speed?: number;
+  /**
+   * Terms ASR tends to mishear (voice ids above all); transcripts are conservatively
+   * corrected toward them (see @voxstudio/text correctKeyterms). A provider, because
+   * the voice bank changes at runtime; surfaces cache it.
+   */
+  keyterms?: () => Promise<string[]>;
 }
 
 export type ConversationErrorCode = "asr_empty" | "llm_empty" | "turn_failed";
@@ -117,6 +123,7 @@ export interface ConversationCallbacks {
    */
   onUtterance?(wav: Uint8Array, transcript: string): void | Promise<void>;
   onError?(code: ConversationErrorCode, message: string, turn?: DuplexTurn): void;
+  onKeytermCorrection?(from: string, to: string, turn: DuplexTurn): void;
   onToolCall?(name: string, args: Record<string, unknown>, turn: DuplexTurn): void;
   onToolResult?(name: string, ok: boolean, result: unknown, turn: DuplexTurn): void;
 }
@@ -179,15 +186,28 @@ export async function runConversation(
         "utterance.wav", options.language, {}, turn.signal,
       );
       session.mark(turn.id, "asr_done");
-      const transcript = transcription.text.trim();
+      let transcript = transcription.text.trim();
       // The empty-transcript failures are the most valuable samples in the set, so the
-      // utterance callback fires regardless of the result.
+      // utterance callback fires regardless of the result — and it receives the RAW
+      // transcript: the utterance set exists to measure ASR, so keyterm correction
+      // must never launder its samples.
       await callbacks.onUtterance?.(wav, transcript);
       if (turn.signal.aborted) return;
       if (!transcript) {
         callbacks.onError?.("asr_empty", "ASR returned empty text", turn);
         session.interrupt("cancel");
         return;
+      }
+      if (options.keyterms) {
+        try {
+          const corrected = correctKeyterms(transcript, await options.keyterms());
+          for (const correction of corrected.corrections) {
+            callbacks.onKeytermCorrection?.(correction.from, correction.to, turn);
+          }
+          transcript = corrected.text;
+        } catch {
+          // A failed keyterm fetch must not cost the turn; the raw transcript stands.
+        }
       }
       callbacks.onTranscript?.(transcript, turn);
       // The reply pipelines: sentences flow into TTS while the model is still generating,

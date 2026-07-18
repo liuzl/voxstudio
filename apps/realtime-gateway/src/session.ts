@@ -121,6 +121,8 @@ export class GatewaySession {
   private readonly sawDelta = new Set<string>();
   /** Set by the end_call tool: hang up after the current turn finishes audibly. */
   private endAfterTurn = false;
+  /** The keyterm list (config terms + live voice ids), cached briefly per session. */
+  private keytermCache: { at: number; terms: string[] } | undefined;
 
   constructor(options: GatewaySessionOptions) {
     this.options = options;
@@ -177,6 +179,12 @@ export class GatewaySession {
       turnTaking,
       reopenMs: start.reopenMs ?? 7_000,
     } as Parameters<typeof runConversation>[1];
+    conversationOptions.keyterms = async () => {
+      if (this.keytermCache && Date.now() - this.keytermCache.at < 60_000) return this.keytermCache.terms;
+      const bank = await this.options.listVoices?.().catch(() => []) ?? [];
+      this.keytermCache = { at: Date.now(), terms: [...config.keyterms, ...bank.map(voice => voice.id)] };
+      return this.keytermCache.terms;
+    };
     conversationOptions.tools = this.buildTools(conversationOptions, {
       retargetTts: engineName => {
         ttsClient = new TtsClient(pick("tts", "tts", engineName), this.options.fetch, this.options.pcmDecoder);
