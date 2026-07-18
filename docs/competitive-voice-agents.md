@@ -44,7 +44,7 @@ de-facto realtime-voice wire standard across vendors.
 | Model stack | Grok, integrated and opaque | three swappable stages behind one contract (registry roles/capabilities) |
 | Reach | **PSTN phone numbers**, WS API | browser studio, CLI, single binary; no telephony |
 | Wire protocol | OpenAI Realtime de-facto shape (base64-in-JSON) | custom v1 (raw binary PCM, idempotent reconnect, endpoint-owned audible clock) — stronger semantics, isolated ecosystem |
-| Agent abilities | **tools, OAuth connectors, RAG file collections, guardrails** — mature | conversation loop has no tool loop yet (the evaluated "Phase B") |
+| Agent abilities | **tools, OAuth connectors, RAG file collections, guardrails** — mature | typed tool loop shipped 2026-07-18 (4 session tools, by-voice demo, measured gate: 0 false triggers, multi-turn stable — [tool-loop.md](./tool-loop.md)); connectors/RAG not yet |
 | Voices | built-in + custom, pronunciation/keyterm tuning; cloning depth unknown | cloning + zero-shot design + **SHA-256 reproducibility auditing** |
 | Barge-in / turns | an interrupt toggle; quality not observable | certified gates with numbers (0 self-interruptions, 12/12 barge-ins, 574 ms p50 detection) |
 | Data boundary | audio on their infra; 30-day conversation retention | in-memory by default; retention only by explicit action |
@@ -62,8 +62,13 @@ de-facto realtime-voice wire standard across vendors.
 2. **The agent-ability gap (tools / connectors / RAG) is a product gap, not a
    speech-technology gap.** Our loop is harder engineering where it counts
    (certified barge-in, reproducibility, measured latency), but "does things for
-   you" is empty. The tool loop is the highest-leverage next capability — it feeds
-   the CLI, the Web Studio, and a future MCP surface simultaneously.
+   you" was empty when surveyed. *Update 2026-07-18*: the tool loop shipped the
+   next day ([tool-loop.md](./tool-loop.md)) — typed tools with declared effects,
+   a measured gate (0 false triggers, no multi-turn degradation, compound
+   commands landing both tools), and by-voice switch/hang-up demos on both
+   surfaces. The remaining gap narrows to connectors (OAuth integrations) and
+   RAG file collections — both `external`-effect territory awaiting the
+   confirmation-flow design.
 3. **Cheap adoptions worth taking**: the welcome-message toggle (with its own
    interruptibility), the follow-up-after-silence nudge, and pronunciation/keyterm
    hints (both are really engine-level parameters our engine layer can carry).
