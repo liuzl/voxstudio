@@ -238,6 +238,177 @@ describe("runConversation tool cycle", () => {
   });
 });
 
+describe("runConversation external confirmation flow", () => {
+  const base = {
+    language: "zh", chunking, ttsDefaults, voice: "demo",
+    allowBargeIn: true, turnTaking: "conservative" as const, reopenMs: 7_000,
+  };
+
+  function scriptedLlm(rounds: (
+    | { text: string[] }
+    | { calls: { id: string; name: string; args: string }[]; text?: string[] }
+  )[]): ChatEngine & { seen: { toolsOffered: number }[] } {
+    let round = 0;
+    const seen: { toolsOffered: number }[] = [];
+    return {
+      seen,
+      chatStream: async function* () { yield "unused"; },
+      chatToolStream: async function* (_messages, tools) {
+        seen.push({ toolsOffered: tools.length });
+        const script = rounds[round];
+        round += 1;
+        if (!script) return;
+        for (const text of script.text ?? []) yield { type: "text" as const, text };
+        if ("calls" in script && script.calls.length > 0) {
+          yield {
+            type: "tool_calls" as const,
+            calls: script.calls.map(call => ({
+              id: call.id, type: "function" as const,
+              function: { name: call.name, arguments: call.args },
+            })),
+          };
+        }
+      },
+    };
+  }
+
+  /** One speech burst per utterance, the next paced to start only after the turn settles. */
+  function pacedFrames(session: DuplexSession, utterances: number): AsyncIterable<ConversationFrame> {
+    const settle = async (): Promise<void> => {
+      const wait = (predicate: () => boolean): Promise<void> => new Promise(resolve => {
+        const poll = (): void => { predicate() ? resolve() : setTimeout(poll, 5); };
+        poll();
+      });
+      await wait(() => session.snapshot().state !== "listening");
+      await wait(() => session.snapshot().state === "listening");
+    };
+    return (async function* () {
+      for (let index = 0; index < utterances; index += 1) {
+        const t = index * 1_000;
+        yield { samples: new Float32Array(320).fill(0.2), timestampMs: t };
+        yield { samples: new Float32Array(320).fill(0.2), timestampMs: t + 20 };
+        yield { samples: new Float32Array(320), timestampMs: t + 40 };
+        if (index < utterances - 1) await settle();
+      }
+    })();
+  }
+
+  async function runTurns(
+    llm: ChatEngine,
+    tools: ConversationTool[],
+    transcripts: string[],
+    callbacks: Parameters<typeof runConversation>[2] = {},
+  ): Promise<void> {
+    const session = new DuplexSession();
+    session.start();
+    let turn = 0;
+    await runConversation({
+      session,
+      vad: new EnergyVadSegmenter({ sampleRate: 16_000, threshold: 0.1, minSpeechMs: 40, silenceMs: 20 }),
+      frames: pacedFrames(session, transcripts.length),
+      createPlayer: () => ({ write: async () => {}, close: async () => {} }),
+      asr: { transcribe: async () => ({ text: transcripts[Math.min(turn++, transcripts.length - 1)] as string }) },
+      llm,
+      tts: { speech: async () => new Uint8Array(writeWav(new Float32Array(48_000).fill(0.1), 24_000)) },
+    }, { ...base, tools }, callbacks);
+  }
+
+  function memoTool(invoked: Record<string, unknown>[]): ConversationTool {
+    return {
+      name: "add_memo", description: "记一条备忘", effect: "external",
+      parameters: { type: "object", properties: { content: { type: "string" } } },
+      handler: async args => { invoked.push(args); return { ok: true }; },
+    };
+  }
+
+  test("an external call is held, asked about, and executed only on spoken confirmation", async () => {
+    const invoked: Record<string, unknown>[] = [];
+    const events: string[] = [];
+    const llm = scriptedLlm([
+      { calls: [{ id: "c1", name: "add_memo", args: '{"content":"买牛奶"}' }] },
+      { text: ["要我记下“买牛奶”这条备忘吗？"] },
+      { calls: [{ id: "c2", name: "confirm_action", args: "{}" }] },
+      { text: ["已经记下了。"] },
+    ]);
+    await runTurns(llm, [memoTool(invoked)], ["帮我记一条备忘，买牛奶", "确认"], {
+      onToolPending: (name, args) => events.push(`pending:${name}:${JSON.stringify(args)}`),
+      onToolCall: (name, args) => events.push(`call:${name}:${JSON.stringify(args)}`),
+      onToolResult: (name, ok) => events.push(`result:${name}:${ok}`),
+      onReply: text => events.push(`reply:${text}`),
+    });
+    // Turn 1 parks the action — the handler must not run; turn 2's confirm runs it with
+    // the original arguments and reports under the real tool's name.
+    expect(invoked).toEqual([{ content: "买牛奶" }]);
+    expect(events).toEqual([
+      'pending:add_memo:{"content":"买牛奶"}',
+      "result:add_memo:true",
+      "reply:要我记下“买牛奶”这条备忘吗？",
+      'call:add_memo:{"content":"买牛奶"}',
+      "result:add_memo:true",
+      "reply:已经记下了。",
+    ]);
+    // The confirmation tools exist exactly in the pending turn's declarations.
+    expect(llm.seen.map(entry => entry.toolsOffered)).toEqual([1, 1, 3, 3]);
+  });
+
+  test("a spoken cancel discards the pending action without executing it", async () => {
+    const invoked: Record<string, unknown>[] = [];
+    const events: string[] = [];
+    const llm = scriptedLlm([
+      { calls: [{ id: "c1", name: "add_memo", args: '{"content":"买牛奶"}' }] },
+      { text: ["要我记下这条备忘吗？"] },
+      { calls: [{ id: "c2", name: "cancel_action", args: "{}" }] },
+      { text: ["好的，不记了。"] },
+    ]);
+    await runTurns(llm, [memoTool(invoked)], ["记条备忘", "算了"], {
+      onToolResult: (name, ok) => events.push(`result:${name}:${ok}`),
+    });
+    expect(invoked).toEqual([]);
+    expect(events).toContain("result:cancel_action:true");
+  });
+
+  test("an unrelated turn consumes the window: a later confirm lands on nothing", async () => {
+    const invoked: Record<string, unknown>[] = [];
+    const results: { name: string; ok: boolean }[] = [];
+    const llm = scriptedLlm([
+      { calls: [{ id: "c1", name: "add_memo", args: '{"content":"买牛奶"}' }] },
+      { text: ["要我记下这条备忘吗？"] },
+      { text: ["今天天气不错。"] },
+      { calls: [{ id: "c2", name: "confirm_action", args: "{}" }] },
+      { text: ["现在没有等待确认的操作。"] },
+    ]);
+    await runTurns(llm, [memoTool(invoked)], ["记条备忘", "今天天气怎么样", "确认"], {
+      onToolResult: (name, ok) => results.push({ name, ok }),
+    });
+    expect(invoked).toEqual([]);
+    expect(results.at(-1)).toEqual({ name: "confirm_action", ok: false });
+    // Turn 2 still offered the confirm tools; turn 3, after the drop, did not.
+    expect(llm.seen.map(entry => entry.toolsOffered)).toEqual([1, 1, 3, 1, 1]);
+  });
+
+  test("a second external call while one is pending is refused, not queued", async () => {
+    const invoked: Record<string, unknown>[] = [];
+    const events: string[] = [];
+    const llm = scriptedLlm([
+      { calls: [
+        { id: "a", name: "add_memo", args: '{"content":"买牛奶"}' },
+        { id: "b", name: "add_memo", args: '{"content":"倒垃圾"}' },
+      ] },
+      { text: ["要我记下“买牛奶”吗？另一条现在加不了。"] },
+    ]);
+    await runTurns(llm, [memoTool(invoked)], ["记两条备忘"], {
+      onToolPending: (name, args) => events.push(`pending:${name}:${JSON.stringify(args)}`),
+      onToolResult: (name, ok) => events.push(`result:${name}:${ok}`),
+    });
+    expect(invoked).toEqual([]);
+    expect(events).toEqual([
+      'pending:add_memo:{"content":"买牛奶"}',
+      "result:add_memo:true",
+      "result:add_memo:false",
+    ]);
+  });
+});
+
 describe("runConversation keyterm correction", () => {
   test("corrects the transcript for LLM and captions but never the utterance sample", async () => {
     const session = new DuplexSession();

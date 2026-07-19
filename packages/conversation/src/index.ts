@@ -51,8 +51,43 @@ export interface ChatEngine {
   ): AsyncIterable<{ type: "text"; text: string } | { type: "tool_calls"; calls: ChatToolCall[] }>;
 }
 
-/** Phase 1 scope: session-local effects only; "external" arrives with a confirmation flow. */
-export type ToolEffect = "read" | "session";
+/**
+ * How much ceremony an invocation deserves. `read` and `session` execute immediately;
+ * `external` (docs/mcp-tools.md) is never executed without spoken confirmation — the
+ * loop holds it pending, the model asks aloud, and the next completed turn either
+ * confirms, cancels, or drops it.
+ */
+export type ToolEffect = "read" | "session" | "external";
+
+export const confirmToolName = "confirm_action";
+export const cancelToolName = "cancel_action";
+
+/**
+ * What the model receives instead of a result when it calls an `external` tool. An
+ * exported constant because the MCP gate (bun run measure:mcp) must measure the model
+ * against exactly what the loop sends; changing it means re-running that gate.
+ */
+export function externalPendingResult(name: string, args: Record<string, unknown>): Record<string, unknown> {
+  return {
+    pending_confirmation: true,
+    action: name,
+    arguments: args,
+    note: "该操作需要用户口头确认后才会执行。请向用户简要复述这个操作并询问是否执行，不要自行执行，也不要声称已经完成。",
+  };
+}
+
+/**
+ * The system line for the one turn a pending action is confirmable in. Same gate rule as
+ * above. The hard sentence is measured (2026-07-19): without it the model cancels in
+ * words without calling cancel_action — the same claiming-without-calling failure the
+ * original tool spike found, fixed the same way.
+ */
+export function pendingSystemLine(name: string, args: Record<string, unknown>): string {
+  return `当前有一个等待用户确认的操作：${name} ${JSON.stringify(args)}。`
+    + `用户表示确认或同意时调用 ${confirmToolName}；用户表示取消、拒绝或反悔时调用 ${cancelToolName}；`
+    + `确认和取消都必须通过调用对应工具完成，不能只在口头上回应。`
+    + `用户说了无关的内容时正常回应，不要调用这两个工具。`;
+}
 
 /**
  * A typed capability the model may invoke mid-turn. Handlers are injected per surface
@@ -126,6 +161,8 @@ export interface ConversationCallbacks {
   onKeytermCorrection?(from: string, to: string, turn: DuplexTurn): void;
   onToolCall?(name: string, args: Record<string, unknown>, turn: DuplexTurn): void;
   onToolResult?(name: string, ok: boolean, result: unknown, turn: DuplexTurn): void;
+  /** An `external` tool was requested and now waits for spoken confirmation. */
+  onToolPending?(name: string, args: Record<string, unknown>, turn: DuplexTurn): void;
 }
 
 export interface ConversationDeps {
@@ -172,6 +209,10 @@ export async function runConversation(
   const historyLimit = options.historyLimit ?? 16;
   let activeTurn: DuplexTurn | undefined;
   let suppressInputUntil = 0;
+  // The confirmation flow (docs/mcp-tools.md): at most one external call waits for a
+  // spoken yes, and only across turns the user actually heard — an aborted or reopened
+  // dispatch leaves it intact, a completed turn that ignored it drops it.
+  let pendingExternal: { tool: ConversationTool; args: Record<string, unknown> } | undefined;
   // Speculative turn-taking state: the last soft-ended turn (reopenable until it speaks)
   // and, while a continuation is being captured, the audio it continues.
   let speculative: { turnId: string; samples: Float32Array; softEndedAtMs: number } | undefined;
@@ -217,13 +258,30 @@ export async function runConversation(
       let toolsRan = 0;
       const tools = options.tools ?? [];
       const useTools = tools.length > 0 && llm.chatToolStream !== undefined;
-      const system = [options.system, useTools ? toolPromptRules : undefined]
+      // The pending action this dispatch may confirm. Captured, not consumed: the window
+      // closes when the turn completes audibly, not when a dispatch starts.
+      const offeredPending = useTools ? pendingExternal : undefined;
+      const system = [
+        options.system,
+        useTools ? toolPromptRules : undefined,
+        offeredPending ? pendingSystemLine(offeredPending.tool.name, offeredPending.args) : undefined,
+      ]
         .filter((part): part is string => part !== undefined && part !== "")
         .join("\n");
-      const declarations: ChatToolDeclaration[] = tools.map(tool => ({
-        type: "function",
-        function: { name: tool.name, description: tool.description, parameters: tool.parameters },
-      }));
+      const declarations: ChatToolDeclaration[] = [
+        ...tools.map(tool => ({
+          type: "function" as const,
+          function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+        })),
+        ...(offeredPending ? [
+          { type: "function" as const, function: {
+            name: confirmToolName, description: "执行当前等待用户确认的操作",
+            parameters: { type: "object", properties: {} } } },
+          { type: "function" as const, function: {
+            name: cancelToolName, description: "取消当前等待用户确认的操作",
+            parameters: { type: "object", properties: {} } } },
+        ] : []),
+      ];
       const messages: ChatMessage[] = [
         ...(system === "" ? [] : [{ role: "system" as const, content: system }]),
         ...history,
@@ -263,6 +321,7 @@ export async function runConversation(
           for (const call of calls) {
             if (turn.signal.aborted) return;
             const tool = tools.find(candidate => candidate.name === call.function.name);
+            let reportName = call.function.name;
             let args: Record<string, unknown> = {};
             let ok = false;
             let result: unknown;
@@ -271,24 +330,54 @@ export async function runConversation(
             } catch {
               result = { error: "arguments were not valid JSON" };
             }
+            const execute = async (target: ConversationTool, targetArgs: Record<string, unknown>): Promise<void> => {
+              callbacks.onToolCall?.(target.name, targetArgs, turn);
+              try {
+                result = await target.handler(targetArgs, turn.signal) ?? { ok: true };
+                // Convention: a handler that returns { error } (so the model can read a
+                // structured refusal) still reports as a failed invocation.
+                ok = !(typeof result === "object" && result !== null && "error" in result);
+                if (ok) toolsRan += 1;
+              } catch (error) {
+                result = { error: error instanceof Error ? error.message : String(error) };
+              }
+            };
             if (result === undefined) {
-              if (!tool) {
+              if (call.function.name === confirmToolName || call.function.name === cancelToolName) {
+                // Valid only for the action offered to THIS dispatch and not yet settled.
+                const pending = offeredPending !== undefined && pendingExternal === offeredPending ? offeredPending : undefined;
+                if (!pending) {
+                  result = { error: "当前没有等待确认的操作" };
+                } else if (call.function.name === cancelToolName) {
+                  pendingExternal = undefined;
+                  ok = true;
+                  toolsRan += 1;
+                  result = { cancelled: true, action: pending.tool.name };
+                } else {
+                  pendingExternal = undefined;
+                  reportName = pending.tool.name;
+                  await execute(pending.tool, pending.args);
+                }
+              } else if (!tool) {
                 // The model invented a name; a structured refusal keeps it honest.
                 result = { error: `unknown tool ${call.function.name}` };
-              } else {
-                callbacks.onToolCall?.(call.function.name, args, turn);
-                try {
-                  result = await tool.handler(args, turn.signal) ?? { ok: true };
-                  // Convention: a handler that returns { error } (so the model can read a
-                  // structured refusal) still reports as a failed invocation.
-                  ok = !(typeof result === "object" && result !== null && "error" in result);
-                  if (ok) toolsRan += 1;
-                } catch (error) {
-                  result = { error: error instanceof Error ? error.message : String(error) };
+              } else if (tool.effect === "external") {
+                if (pendingExternal) {
+                  result = { error: "已有一个等待用户确认的操作，请先让用户确认或取消它" };
+                } else {
+                  // Held, not run: the model is told to ask aloud, and the next completed
+                  // turn confirms, cancels, or drops it (docs/mcp-tools.md, decision 3).
+                  pendingExternal = { tool, args };
+                  ok = true;
+                  toolsRan += 1;
+                  result = externalPendingResult(tool.name, args);
+                  callbacks.onToolPending?.(tool.name, args, turn);
                 }
+              } else {
+                await execute(tool, args);
               }
             }
-            callbacks.onToolResult?.(call.function.name, ok, result, turn);
+            callbacks.onToolResult?.(reportName, ok, result, turn);
             messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
           }
         }
@@ -337,7 +426,13 @@ export async function runConversation(
           session.interrupt("cancel");
           return;
         }
-        if (!turn.signal.aborted) callbacks.onReply?.(replyText, turn);
+        if (!turn.signal.aborted) {
+          callbacks.onReply?.(replyText, turn);
+          // The confirmation window is one completed turn wide: an offer this turn
+          // neither confirmed nor cancelled is dropped — unless this turn parked a new
+          // action, which gets its own window.
+          if (offeredPending !== undefined && pendingExternal === offeredPending) pendingExternal = undefined;
+        }
         if (replyText.trim()) {
           // Reached only when generation finished: a barge-in during the audible tail still
           // lands here (the user heard the reply's start), one mid-generation does not.
