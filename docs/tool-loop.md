@@ -118,5 +118,10 @@ degradation, and compound commands land both tools through the loop's rounds.
    deferred until an external tool exists to need it.
 3. **Consumers**: the OpenAI Realtime adapter maps its tool events onto this loop;
    an MCP surface presents MCP tools through the same registration.
+   **Both delivered 2026-07-19**: client-declared Realtime functions ride the loop
+   as bridged tools ([openai-realtime-adapter.md](./openai-realtime-adapter.md)),
+   and MCP servers' tools join with the `external` effect and the spoken
+   confirmation flow the `effect` field was holding a place for
+   ([mcp-tools.md](./mcp-tools.md)).
 
 No phase creates empty directories; each lands with its first tested module.
