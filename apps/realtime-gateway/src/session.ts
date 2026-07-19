@@ -31,6 +31,12 @@ export interface GatewaySessionOptions {
   listVoices?: () => Promise<{ id: string; engine: string }[]>;
   /** Live engine health, for the get_engine_status tool. */
   engineStatus?: () => Promise<{ name: string; kind: string | null; healthy: boolean }[]>;
+  /**
+   * Surface-injected tools appended after the built-in session tools — the OpenAI
+   * adapter registers client-declared functions here. Names must not collide with
+   * `builtinToolNames`; the injecting surface guards that.
+   */
+  extraTools?: ConversationTool[];
   loadSileroVad?: (() => Promise<SpeechProbabilityModel>) | undefined;
   /** How long a detached session survives waiting for a reconnect. */
   reconnectGraceMs?: number;
@@ -39,6 +45,9 @@ export interface GatewaySessionOptions {
   /** Operational logging (session lifecycle, turn milestones, errors). No transcript text. */
   log?: (line: string) => void;
 }
+
+/** The session tools every conversation gets; surface-injected extras may not shadow them. */
+export const builtinToolNames = ["set_voice", "set_speed", "get_engine_status", "end_call"] as const;
 
 const inputSampleRate = 16_000;
 /** Buffered microphone audio beyond this is dropped oldest-first; the VAD sees a gap, not unbounded memory. */
@@ -185,13 +194,16 @@ export class GatewaySession {
       this.keytermCache = { at: Date.now(), terms: [...config.keyterms, ...bank.map(voice => voice.id)] };
       return this.keytermCache.terms;
     };
-    conversationOptions.tools = this.buildTools(conversationOptions, {
-      retargetTts: engineName => {
-        ttsClient = new TtsClient(pick("tts", "tts", engineName), this.options.fetch, this.options.pcmDecoder);
-        ttsEngineName = engineName;
-      },
-      currentEngine: () => ttsEngineName,
-    });
+    conversationOptions.tools = [
+      ...this.buildTools(conversationOptions, {
+        retargetTts: engineName => {
+          ttsClient = new TtsClient(pick("tts", "tts", engineName), this.options.fetch, this.options.pcmDecoder);
+          ttsEngineName = engineName;
+        },
+        currentEngine: () => ttsEngineName,
+      }),
+      ...(this.options.extraTools ?? []),
+    ];
     this.conversation = runConversation({
       session: this.duplex,
       vad,

@@ -18,5 +18,8 @@
     "@voxstudio/contracts": "workspace:*",
     "@voxstudio/duplex-session": "workspace:*",
     "@voxstudio/platform-bun": "workspace:*"
+  },
+  "devDependencies": {
+    "openai": "^6.48.0"
   }
 }

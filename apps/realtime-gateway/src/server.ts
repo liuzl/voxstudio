@@ -3,8 +3,10 @@ import { engine, engineByCapability, enginesOfKind, roleInstance } from "@voxstu
 import type { EngineKind, ResolvedEngineConfig, VoxConfig } from "@voxstudio/contracts";
 import type { SpeechProbabilityModel } from "@voxstudio/duplex-session";
 import type { ServerWebSocket } from "bun";
+import type { ConversationTool } from "@voxstudio/conversation";
+import { OpenAiRealtimeConnection } from "./openai-realtime";
 import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand } from "./protocol";
-import { GatewaySession, type EventSink } from "./session";
+import { builtinToolNames, GatewaySession, type EventSink } from "./session";
 
 export interface GatewayServerOptions {
   config: VoxConfig;
@@ -15,6 +17,8 @@ export interface GatewayServerOptions {
   /** Optional bearer token required on every request and WebSocket upgrade. */
   token?: string;
   reconnectGraceMs?: number;
+  /** OpenAI-dialect connections: how long a client may take to answer a function call. */
+  openAiFunctionCallTimeoutMs?: number;
   loadSileroVad?: () => Promise<SpeechProbabilityModel>;
   /** Decodes compressed (Opus) TTS streams from engines configured with stream_format. */
   pcmDecoder?: PcmStreamDecoder;
@@ -39,6 +43,10 @@ export interface GatewayServer {
 interface SocketData {
   session: GatewaySession | undefined;
   sink: EventSink | undefined;
+  /** Present when the connection speaks the OpenAI Realtime dialect instead of the native protocol. */
+  openai?: OpenAiRealtimeConnection | undefined;
+  /** The ?model= the OpenAI-dialect client asked for, captured at upgrade. */
+  openaiModel?: string;
 }
 
 /** Engine endpoints the facade forwards, keyed by public path. The browser sees only these. */
@@ -243,22 +251,28 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     return ws.data.sink;
   };
 
+  const createSession = (extraTools: ConversationTool[] = []): GatewaySession => {
+    const session = new GatewaySession({
+      config: options.config,
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      ...(options.pcmDecoder === undefined ? {} : { pcmDecoder: options.pcmDecoder }),
+      // The session tools see the same sanitized surfaces the facade serves.
+      listVoices: async () => (await collectVoices()).map(voice => ({ id: voice.id, engine: voice.engine })),
+      engineStatus: collectEngines,
+      ...(extraTools.length === 0 ? {} : { extraTools }),
+      loadSileroVad: options.loadSileroVad,
+      ...(options.reconnectGraceMs === undefined ? {} : { reconnectGraceMs: options.reconnectGraceMs }),
+      onClosed: closed => { sessions.delete(closed.id); },
+      ...(options.log === undefined ? {} : { log: options.log }),
+    });
+    sessions.set(session.id, session);
+    return session;
+  };
+
   const handleFirstCommand = (ws: ServerWebSocket<SocketData>, command: GatewayCommand): void => {
     const sink = sinkFor(ws);
     if (command.type === "session.start") {
-      const session = new GatewaySession({
-        config: options.config,
-        ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-        ...(options.pcmDecoder === undefined ? {} : { pcmDecoder: options.pcmDecoder }),
-        // The session tools see the same sanitized surfaces the facade serves.
-        listVoices: async () => (await collectVoices()).map(voice => ({ id: voice.id, engine: voice.engine })),
-        engineStatus: collectEngines,
-        loadSileroVad: options.loadSileroVad,
-        ...(options.reconnectGraceMs === undefined ? {} : { reconnectGraceMs: options.reconnectGraceMs }),
-        onClosed: closed => { sessions.delete(closed.id); },
-        ...(options.log === undefined ? {} : { log: options.log }),
-      });
-      sessions.set(session.id, session);
+      const session = createSession();
       ws.data.session = session;
       session.recordCommand(command);
       void session.start(command.options ?? {}, sink)
@@ -305,7 +319,25 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       if (page) return page;
       if (!authorized(request)) return new Response("unauthorized", { status: 401 });
       if (url.pathname === "/v1/realtime") {
-        const data: SocketData = { session: undefined, sink: undefined };
+        // Dialect detection (openai-realtime-adapter.md, decision 1): the OpenAI SDKs
+        // derive this exact path from their baseURL and always carry ?model= plus a
+        // `realtime` WebSocket subprotocol; native clients send neither. The choice must
+        // precede the first frame — the OpenAI server speaks first (session.created),
+        // the native server never does.
+        const subprotocols = (request.headers.get("sec-websocket-protocol") ?? "")
+          .split(",").map(entry => entry.trim());
+        const openai = url.searchParams.has("model")
+          || url.searchParams.get("protocol") === "openai"
+          || request.headers.has("openai-beta")
+          || subprotocols.includes("realtime");
+        const data: SocketData = {
+          session: undefined,
+          sink: undefined,
+          ...(openai ? { openaiModel: url.searchParams.get("model") ?? "voxstudio-realtime" } : {}),
+        };
+        // Clients that offer subprotocols (the OpenAI SDKs offer `realtime`) get their
+        // first choice echoed back by Bun's upgrade; adding it manually here duplicates
+        // the header and fails the handshake.
         if (server.upgrade(request, { data })) return undefined;
         return new Response("expected a WebSocket upgrade", { status: 426 });
       }
@@ -344,7 +376,24 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       return new Response("not found", { status: 404 });
     },
     websocket: {
+      open(ws) {
+        if (ws.data.openaiModel === undefined) return;
+        ws.data.openai = new OpenAiRealtimeConnection({
+          send: text => { ws.send(text); },
+          close: () => { ws.close(); },
+          createSession: extraTools => createSession(extraTools),
+          reservedToolNames: builtinToolNames,
+          model: ws.data.openaiModel,
+          ...(options.openAiFunctionCallTimeoutMs === undefined ? {} : { functionCallTimeoutMs: options.openAiFunctionCallTimeoutMs }),
+          ...(options.log === undefined ? {} : { log: options.log }),
+        });
+      },
       message(ws, data) {
+        if (ws.data.openai) {
+          if (typeof data === "string") ws.data.openai.handleMessage(data);
+          // The OpenAI dialect is JSON-only; binary frames have no meaning on this wire.
+          return;
+        }
         if (typeof data !== "string") {
           const bytes = data instanceof ArrayBuffer
             ? new Uint8Array(data)
@@ -365,6 +414,12 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         else handleFirstCommand(ws, command);
       },
       close(ws) {
+        if (ws.data.openai) {
+          // No reattach in this dialect: the socket's end is the session's end.
+          ws.data.openai.handleClose();
+          ws.data.openai = undefined;
+          return;
+        }
         const session = ws.data.session;
         if (!session) return;
         ws.data.session = undefined;
