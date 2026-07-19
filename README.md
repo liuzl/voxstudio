@@ -11,10 +11,11 @@ flowchart LR
   subgraph surfaces["surfaces — dashed: planned"]
     CLI["vox CLI — first surface"]
     WEB["Web Studio (browser)"]
-    MCP["MCP server (agent voice)"]
+    MCP["vox-mcp (agent voice)"]
+    OAI["OpenAI/xAI Realtime clients"]
     APP["desktop / mobile"]
   end
-  GW["realtime-gateway<br/>WS /v1/realtime + REST facade<br/>credential hiding · engine routing"]
+  GW["realtime-gateway<br/>WS /v1/realtime (native + OpenAI dialect)<br/>REST facade · credential hiding · engine routing"]
   CORE["core orchestration (packages/)<br/>conversation loop · duplex session<br/>chunking · voice profiles"]
   subgraph engines["engines"]
     ASR["ASR<br/>SenseVoice/FunASR — realtime slot<br/>parakeet.cpp · moss-transcribe (longform)"]
@@ -23,7 +24,8 @@ flowchart LR
   end
   CLI --> CORE
   WEB -->|"WebSocket + REST"| GW --> CORE
-  MCP -.-> CORE
+  OAI -->|"OpenAI Realtime wire"| GW
+  MCP --> CORE
   APP -.-> CORE
   CORE -->|"/v1/* contract"| ASR & TTS & LLM
 ```
@@ -41,12 +43,14 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | `engines/kokoro/` | Local CPU TTS server — the conversation fast lane (fixed voice bank, ~0.2s first audio) |
 | `packages/` | Shared TypeScript contracts, clients, configuration, text, audio, and orchestration |
 | `packages/duplex-session/` | Platform-neutral realtime turn state, cancellation, events, and bounded playback queue |
-| `packages/conversation/` | The shared conversation loop (VAD turns, barge-in policy, speculative turn-taking, streaming replies) behind `vox listen` and the gateway |
+| `packages/conversation/` | The shared conversation loop (VAD turns, barge-in policy, speculative turn-taking, streaming replies, typed tools with a spoken confirmation flow) behind `vox listen` and the gateway |
+| `packages/mcp/` | The MCP client bridge: configured servers' tools join the conversation with annotation-derived effects |
 | `platforms/bun/` | Filesystem, process, recording, and playback adapters for Bun apps |
 | `core/` | Transitional Python parity implementation and research-facing core |
 | `apps/cli/` | Compiled TypeScript `vox` CLI plus the transitional Python fallback |
 | `apps/realtime-gateway/` | Web Studio server: the duplex session protocol over WebSocket plus a credential-hiding REST facade |
 | `apps/web/` | The browser studio (React + Tailwind + Zustand): conversation, generation, voice bank + design profiles, and engine settings panels |
+| `apps/mcp/` | `vox-mcp` — voxstudio's voice I/O as an MCP server (speak / transcribe / list_voices) for any agent |
 | `docs/` | Product design docs |
 
 The product workspace uses Bun 1.3.14. Shared packages use Web APIs and remain independent
@@ -77,7 +81,10 @@ bun run build:cli
 ./apps/cli/dist/vox listen --device "MacBook Pro microphone" --language zh --voice design-calm-clear
 ./platforms/macos-audio/build.sh
 ./apps/cli/dist/vox listen --speaker-duplex --language zh --voice design-calm-clear
+./apps/cli/dist/vox listen --welcome "你好，我在，请讲。" --nudge-after 20   # conversation etiquette
 ./apps/cli/dist/vox studio               # Web Studio: browser app + gateway from the same binary
+bun apps/mcp/src/main.ts                 # vox-mcp: this machine's voice as an MCP server
+# claude mcp add voxstudio -- bun /path/to/voxstudio/apps/mcp/src/main.ts
 ./apps/cli/dist/vox voices add alice --audio sample.wav --text "参考音的逐字稿"
 ./apps/cli/dist/vox voices add bob --audio sample.wav --language zh  # transcript via ASR
 ./apps/cli/dist/vox voices add carol --record 15 --language zh       # record, ASR, register
@@ -151,11 +158,22 @@ phases — is specified in [docs/web-studio.md](./docs/web-studio.md).
 The engine backend and compiled TypeScript CLI are verified end-to-end against live
 engines. Long-text synthesis streams, and named voices support file input, microphone
 recording, automatic ASR, and transcript editing. Native CI builds and executes the CLI on
-macOS arm64, Linux x64, and Windows x64. The MCP surfaces exist in both directions:
-external MCP servers' tools join the voice conversation with a spoken confirmation flow
-([docs/mcp-tools.md](./docs/mcp-tools.md)), and `vox-mcp` gives any MCP client a voice on
-the host machine ([docs/agent-voice-mcp.md](./docs/agent-voice-mcp.md)). Signed release
-artifacts, desktop, and persona rewriting are not built yet.
+macOS arm64, Linux x64, and Windows x64.
+
+The conversation does things, politely: a measured tool loop (voice-switch, speed,
+hang-up by voice — [docs/tool-loop.md](./docs/tool-loop.md)), external MCP tools behind a
+spoken confirmation flow ([docs/mcp-tools.md](./docs/mcp-tools.md)), and conversation
+etiquette — an interruptible welcome line, one follow-up after silence, pronunciation
+overrides ([docs/conversation-etiquette.md](./docs/conversation-etiquette.md)). The MCP
+surfaces run in both directions: `vox-mcp` gives any MCP client a voice on the host
+machine ([docs/agent-voice-mcp.md](./docs/agent-voice-mcp.md)). The gateway also speaks
+the **OpenAI Realtime wire dialect** on the same `/v1/realtime` path — the official
+`openai` SDK (or anything written for OpenAI/xAI realtime endpoints) connects with only a
+base-URL change, client-declared function tools riding the same loop
+([docs/openai-realtime-adapter.md](./docs/openai-realtime-adapter.md)). On the local
+stack, end of speech to first reply audio measures ≈1.0 s for long answers (the
+first-chunk clause fast path; [docs/duplex-audio-architecture.md](./docs/duplex-audio-architecture.md)
+§Turn timing). Signed release artifacts, desktop, and persona rewriting are not built yet.
 
 The duplex conversation session kernel and the headset-oriented `vox listen` command are
 implemented and tested with simulated audio. `listen` uses an energy-VAD fallback with a
