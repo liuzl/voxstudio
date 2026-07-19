@@ -7,50 +7,11 @@ export interface EndpointCapability {
   contextSampleRate: number;
 }
 
-/**
- * Streaming linear resampler: arbitrary input chunks in, continuous output at the target
- * rate, with one sample of carry so chunk boundaries do not click. Identity when the rates
- * already match.
- */
-export class LinearResampler {
-  /** Input samples advanced per output sample. */
-  private readonly ratio: number;
-  /** Unconsumed input: everything from the read head's left neighbor onward. */
-  private tail = new Float32Array(0);
-  /** Fractional read position within `tail`. */
-  private offset = 0;
+// The streaming resampler now lives in @voxstudio/audio (the realtime gateway's OpenAI
+// adapter shares it); re-exported so this module remains the web audio toolbox.
+import { LinearResampler } from "@voxstudio/audio";
 
-  constructor(fromRate: number, toRate: number) {
-    if (!Number.isFinite(fromRate) || fromRate <= 0 || !Number.isFinite(toRate) || toRate <= 0) {
-      throw new TypeError("sample rates must be positive finite numbers");
-    }
-    this.ratio = fromRate / toRate;
-  }
-
-  push(input: Float32Array): Float32Array {
-    if (this.ratio === 1) return input;
-    const stream = new Float32Array(this.tail.length + input.length);
-    stream.set(this.tail);
-    stream.set(input, this.tail.length);
-    const output: number[] = [];
-    let position = this.offset;
-    while (position + 1 < stream.length) {
-      const index = Math.floor(position);
-      const fraction = position - index;
-      const a = stream[index] as number;
-      const b = stream[index + 1] as number;
-      output.push(a + (b - a) * fraction);
-      position += this.ratio;
-    }
-    // Keep everything from the read head's left neighbor. The head may sit past the end
-    // of the received input (a large ratio can overshoot); the overshoot must survive in
-    // `offset`, not be truncated to its fraction, or the stream slowly stretches.
-    const keep = Math.min(Math.floor(position), stream.length);
-    this.tail = stream.slice(keep);
-    this.offset = position - keep;
-    return Float32Array.from(output);
-  }
-}
+export { LinearResampler };
 
 /**
  * Schedule math for gapless streamed playback: each chunk starts where the previous one

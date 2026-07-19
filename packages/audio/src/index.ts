@@ -138,6 +138,60 @@ export function writeWav(samples: Float32Array, sampleRate: number): Uint8Array 
   return output;
 }
 
+export function decodePcm16(bytes: Uint8Array): Float32Array {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength - bytes.byteLength % 2);
+  const samples = new Float32Array(view.byteLength / 2);
+  for (let index = 0; index < samples.length; index += 1) {
+    samples[index] = view.getInt16(index * 2, true) / 32768;
+  }
+  return samples;
+}
+
+/**
+ * Streaming linear resampler: arbitrary input chunks in, continuous output at the target
+ * rate, with one sample of carry so chunk boundaries do not click. Identity when the rates
+ * already match.
+ */
+export class LinearResampler {
+  /** Input samples advanced per output sample. */
+  private readonly ratio: number;
+  /** Unconsumed input: everything from the read head's left neighbor onward. */
+  private tail = new Float32Array(0);
+  /** Fractional read position within `tail`. */
+  private offset = 0;
+
+  constructor(fromRate: number, toRate: number) {
+    if (!Number.isFinite(fromRate) || fromRate <= 0 || !Number.isFinite(toRate) || toRate <= 0) {
+      throw new TypeError("sample rates must be positive finite numbers");
+    }
+    this.ratio = fromRate / toRate;
+  }
+
+  push(input: Float32Array): Float32Array {
+    if (this.ratio === 1) return input;
+    const stream = new Float32Array(this.tail.length + input.length);
+    stream.set(this.tail);
+    stream.set(input, this.tail.length);
+    const output: number[] = [];
+    let position = this.offset;
+    while (position + 1 < stream.length) {
+      const index = Math.floor(position);
+      const fraction = position - index;
+      const a = stream[index] as number;
+      const b = stream[index + 1] as number;
+      output.push(a + (b - a) * fraction);
+      position += this.ratio;
+    }
+    // Keep everything from the read head's left neighbor. The head may sit past the end
+    // of the received input (a large ratio can overshoot); the overshoot must survive in
+    // `offset`, not be truncated to its fraction, or the stream slowly stretches.
+    const keep = Math.min(Math.floor(position), stream.length);
+    this.tail = stream.slice(keep);
+    this.offset = position - keep;
+    return Float32Array.from(output);
+  }
+}
+
 function frameDb(samples: Float32Array, sampleRate: number): number[] {
   const frame = Math.max(1, Math.floor(sampleRate * frameMs / 1000));
   const count = Math.floor(samples.length / frame);
