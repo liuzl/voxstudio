@@ -151,8 +151,11 @@ phases — is specified in [docs/web-studio.md](./docs/web-studio.md).
 The engine backend and compiled TypeScript CLI are verified end-to-end against live
 engines. Long-text synthesis streams, and named voices support file input, microphone
 recording, automatic ASR, and transcript editing. Native CI builds and executes the CLI on
-macOS arm64, Linux x64, and Windows x64. Signed release artifacts, MCP, desktop, and persona
-rewriting are not built yet.
+macOS arm64, Linux x64, and Windows x64. The MCP surfaces exist in both directions:
+external MCP servers' tools join the voice conversation with a spoken confirmation flow
+([docs/mcp-tools.md](./docs/mcp-tools.md)), and `vox-mcp` gives any MCP client a voice on
+the host machine ([docs/agent-voice-mcp.md](./docs/agent-voice-mcp.md)). Signed release
+artifacts, desktop, and persona rewriting are not built yet.
 
 The duplex conversation session kernel and the headset-oriented `vox listen` command are
 implemented and tested with simulated audio. `listen` uses an energy-VAD fallback with a
