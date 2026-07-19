@@ -299,6 +299,25 @@ clause boundary in the reply pipeline (the first synthesizable piece may end
 at clause punctuation instead of a sentence ender), and the MTP source build
 (59 → ~200 chars/s generation) as the deeper lever.
 
+### First-chunk clause fast path (built 2026-07-19)
+
+The successor named above, delivered the same day: before anything has been
+synthesized, once the reply's un-terminated text speaks for
+`chunking.first_clause_seconds` (config knob; the conversation loop defaults
+it to 1.2 s), the first chunk may end at clause punctuation — the existing
+`clauseBreaks` set, digit-guarded for ASCII separators, closing quotes riding
+along. Every later chunk keeps the sentence rule, so exactly one seam can fall
+mid-sentence, cushioned by the same `join_pause_ms` every seam gets. Long-form
+reading (`vox say`) is seam-bound, not latency-bound, and stays sentence-only
+unless configured.
+
+Measured (2026-07-19, interleaved A/B against old and new gateways, same
+long-answer question): `llm_first → speaking` fell from 1057–1124 ms to
+**638–659 ms (−40%)**, taking end-of-speech → first audio to **~1.0 s**; on a
+short-first-sentence reply the path never triggers and the numbers are
+unchanged — the fast path caps the wait exactly when the first sentence is
+long, which is when it hurt.
+
 ## VAD policy
 
 `EnergyVadSegmenter` is the tested fallback used by the first headset CLI loop.
