@@ -36,8 +36,10 @@ SSE legacy transport.
        trust: true                    # optional: skip confirmation for this server
    ```
    Secrets never enter the yaml — `token_env` names an environment variable. A
-   server that fails to connect is logged and skipped: a dead memo server must not
-   cost the conversation.
+   server that fails to connect is logged and skipped, and one that hangs is
+   skipped at a 5s ceiling (adversarial review, 2026-07-19: surfaces await this
+   connection before their first conversation, so unbounded meant a session that
+   never starts): a dead memo server must not cost the conversation.
 2. **Annotations choose the effect; the effect chooses the ceremony.**
    `readOnlyHint: true` → `effect: "read"` (executes immediately, like
    `get_engine_status`). Everything else → the new `effect: "external"` — the
@@ -70,8 +72,10 @@ SSE legacy transport.
    are what their authors tuned the model-facing descriptions for. A name that
    collides with a built-in session tool or an earlier server's tool is prefixed
    `<server>_`; config map order makes this deterministic. The gateway composes
-   per-session tools as built-ins → MCP tools → surface extras (OpenAI-adapter
-   client tools), deduplicating by name, first wins.
+   per-session tools as built-ins → surface extras (OpenAI-adapter client
+   tools) → MCP tools, deduplicating by name, first wins: a connected client
+   owns the function names it declared, so an ambient MCP tool must never
+   absorb its calls (found by adversarial review, 2026-07-19).
 5. **The bridge is a small package, not loop code.** `@voxstudio/mcp` exposes
    `connectMcpServers(configs) → { tools(), close() }`; tool results map text
    content through as-is (parsed as JSON when possible), `structuredContent`

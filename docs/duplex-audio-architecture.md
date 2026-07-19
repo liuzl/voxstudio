@@ -316,7 +316,8 @@ long-answer question): `llm_first → speaking` fell from 1057–1124 ms to
 **638–659 ms (−40%)**, taking end-of-speech → first audio to **~1.0 s**; on a
 short-first-sentence reply the path never triggers and the numbers are
 unchanged — the fast path caps the wait exactly when the first sentence is
-long, which is when it hurt.
+long, which is when it hurt. The ear test (2026-07-19, live Web Studio
+conversation): the seam was judged not noticeable.
 
 ## VAD policy
 
