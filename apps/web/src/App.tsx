@@ -98,10 +98,34 @@ function Toasts() {
   );
 }
 
+/**
+ * Each tab is a URL (the gateway's static fallback anticipated exactly this): "/" is the
+ * conversation, "/generate" and friends deep-link and survive refresh. History API only —
+ * five routes do not need a router dependency.
+ */
+const tabPath = (tab: Tab): string => (tab === "conversation" ? "/" : `/${tab}`);
+
+function tabFromPath(pathname: string): Tab {
+  const name = pathname.replace(/^\/+|\/+$/g, "");
+  return (tabs.find(item => item.id === name)?.id ?? "conversation") as Tab;
+}
+
 export function App() {
   const t = useT();
-  const [tab, setTab] = useState<Tab>("conversation");
+  const [tab, setTabState] = useState<Tab>(() => tabFromPath(window.location.pathname));
   const hasTakes = useStudio(state => state.takes.length > 0);
+
+  const setTab = (next: Tab): void => {
+    if (next !== tab) window.history.pushState(null, "", tabPath(next));
+    setTabState(next);
+  };
+
+  // Back/forward move between tabs like between pages — that is the point of the URLs.
+  useEffect(() => {
+    const onPop = (): void => setTabState(tabFromPath(window.location.pathname));
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   // Generation takes are in-memory object URLs; a reload silently discards them.
   useEffect(() => {
