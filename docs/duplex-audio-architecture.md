@@ -274,6 +274,31 @@ stamp their own points; engine milestones are marked explicitly by the loop
 that awaits them. The event is in-memory session telemetry; surfacing it is
 opt-in per the privacy rules below.
 
+### Streaming ASR (measured 2026-07-19, retired)
+
+The "streaming ASR upgrade" this document deferred (`transcript.partial`) is
+retired on two independent measurements pointing the same way:
+
+1. **Engine-side** (technical report, 2026-07): MPS acceleration took a single
+   SenseVoice utterance from 475 ms to 26 ms — batch inference stopped being
+   the thing streaming would have hidden.
+2. **End-to-end** (2026-07-19, five live-replay turns against the local stack,
+   `turn.timing` offsets): the full ASR leg — WAV assembly, HTTP, wrapper,
+   inference — costs **100–134 ms**, ~8% of the ~1.2–2.1 s from end of speech
+   to first reply audio. The dominant segment is `llm_first → speaking` at
+   **~700–1070 ms (60–70%)**: the reply pipeline waits for the model
+   (~59 chars/s) to finish the first *sentence* before synthesis may start.
+
+A real streaming ASR would mean an engine swap (SenseVoice is an offline AED
+model; streaming means paraformer-online/zipformer), a partial-transcript
+protocol, and reworking keyterm correction over unstable prefixes — all to
+attack the smallest slice of the budget, bounded at ~100 ms. The
+`transcript.partial` event name stays reserved in the wire format, but nothing
+plans to send it. What the same measurement points at instead: a first-chunk
+clause boundary in the reply pipeline (the first synthesizable piece may end
+at clause punctuation instead of a sentence ender), and the MTP source build
+(59 → ~200 chars/s generation) as the deeper lever.
+
 ## VAD policy
 
 `EnergyVadSegmenter` is the tested fallback used by the first headset CLI loop.
@@ -394,7 +419,7 @@ session.notice      { message }
 command.accepted|duplicate|rejected { commandType, idempotencyKey, reason? }
 error               { code, message, recoverable, turnId? }
 audio.level         { rmsDb, clipped, source }        # deferred to the browser endpoint
-transcript.partial  { turnId, text }                  # deferred: streaming ASR upgrade
+transcript.partial  { turnId, text }                  # reserved; streaming ASR retired (see Turn timing)
 endpoint.capability { aec, ns, agc, route, sampleRate } # deferred to the browser endpoint
 ```
 
@@ -563,9 +588,9 @@ supported macOS hardware. Browser and CLI metrics are reported separately.
    `streamReply` pipelines the token stream into synthesis: the first complete
    sentence is synthesized immediately while the model keeps generating, later
    sentences accumulate into growing chunks, and one continuation session spans
-   the reply. `vox listen` speaks through this pipeline. Streaming ASR and
-   engine-side TTS audio streaming (the ~2.5s fixed per-request synthesis
-   overhead) remain.
+   the reply. `vox listen` speaks through this pipeline. Streaming ASR was
+   retired on measurement (see Turn timing); engine-side TTS audio streaming
+   (the ~2.5s fixed per-request synthesis overhead) remains.
 4. **macOS audio helper**: `platforms/macos-audio/vox-audio-host.swift` now
    builds a narrow stdin/stdout PCM helper using `AVAudioEngine` Voice
    Processing; `vox listen --speaker-duplex` selects it. The empirical gate
