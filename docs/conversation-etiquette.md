@@ -71,5 +71,8 @@ and free; a generated nudge needs its own measured gate), Web start-card fields
    frames (a muted client that stops streaming will not be nudged) — real
    endpoints stream silence continuously, so this is the intended coupling,
    recorded here rather than discovered later.
-2. **Later**: model-generated nudge text with its own measured gate; Web
-   start-card fields; a follow-up count knob if real use wants more than one.
+2. **Later**: model-generated nudge text with its own measured gate; a follow-up
+   count knob if real use wants more than one. *Web fields delivered 2026-07-19*
+   — in Settings, not the start card: the start card keeps its one decision (the
+   voice), and etiquette is configuration, not a per-session choice. Applies
+   from the next started conversation.

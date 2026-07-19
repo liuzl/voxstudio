@@ -33,6 +33,8 @@ export class ConversationController {
         bargeIn: true,
         playbackAck: true,
         turnTaking: "speculative",
+        ...(store.welcome.trim() ? { welcome: store.welcome.trim() } : {}),
+        ...(store.nudgeAfterSeconds > 0 ? { nudgeAfterSeconds: store.nudgeAfterSeconds } : {}),
       },
       onEvent: event => this.handleEvent(event),
       onAudio: samples => this.speaker?.enqueue(samples),

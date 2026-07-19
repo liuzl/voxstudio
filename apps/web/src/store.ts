@@ -58,6 +58,10 @@ interface StudioState {
   voice: string;
   /** The engine owning the conversation voice; routes the session's TTS when set. */
   voiceEngine: string;
+  /** Etiquette (docs/conversation-etiquette.md): spoken once at session start when set. */
+  welcome: string;
+  /** Silence seconds before the one spoken follow-up; 0 disables. */
+  nudgeAfterSeconds: number;
   /** Generation takes, newest first. Object URLs are revoked on eviction/removal. */
   takes: TakeView[];
   voicesList: VoiceEntry[];
@@ -80,6 +84,8 @@ interface StudioState {
   clearHistory(): void;
   setCapability(capability: EndpointCapability): void;
   setVoice(voice: string, engine?: string): void;
+  setWelcome(welcome: string): void;
+  setNudgeAfterSeconds(seconds: number): void;
   notice(kind: NoticeView["kind"], text: string): void;
   toasts: ToastView[];
   toast(kind: ToastView["kind"], text: string): void;
@@ -87,6 +93,12 @@ interface StudioState {
   apply(event: GatewayEvent): void;
   resetSession(): void;
 }
+
+// Etiquette persists like the locale does: plain localStorage, read once at load.
+const welcomeKey = "voxstudio.etiquette.welcome";
+const nudgeKey = "voxstudio.etiquette.nudgeAfterSeconds";
+const storedWelcome = typeof localStorage !== "undefined" ? localStorage.getItem(welcomeKey) ?? "" : "";
+const storedNudge = typeof localStorage !== "undefined" ? Number(localStorage.getItem(nudgeKey)) || 0 : 0;
 
 const maxTurns = 50;
 const maxNotices = 30;
@@ -252,6 +264,8 @@ export const useStudio = create<StudioState>((set, get) => ({
   capability: undefined,
   voice: "",
   voiceEngine: "",
+  welcome: storedWelcome,
+  nudgeAfterSeconds: storedNudge,
   takes: [],
   voicesList: [],
   enginesList: [],
@@ -259,6 +273,14 @@ export const useStudio = create<StudioState>((set, get) => ({
   generateEngine: "",
 
   setGenerateVoice: (generateVoice, engine) => set({ generateVoice, generateEngine: engine ?? "" }),
+  setWelcome: welcome => {
+    if (typeof localStorage !== "undefined") localStorage.setItem(welcomeKey, welcome);
+    set({ welcome });
+  },
+  setNudgeAfterSeconds: nudgeAfterSeconds => {
+    if (typeof localStorage !== "undefined") localStorage.setItem(nudgeKey, String(nudgeAfterSeconds));
+    set({ nudgeAfterSeconds });
+  },
   addTake: take =>
     set(state => {
       const next = [take, ...state.takes];

@@ -116,6 +116,47 @@ function EnginesTable() {
   );
 }
 
+/** Etiquette (docs/conversation-etiquette.md): applies to sessions started after saving. */
+function EtiquetteSection() {
+  const t = useT();
+  const welcome = useStudio(state => state.welcome);
+  const nudgeAfterSeconds = useStudio(state => state.nudgeAfterSeconds);
+  const setWelcome = useStudio(state => state.setWelcome);
+  const setNudgeAfterSeconds = useStudio(state => state.setNudgeAfterSeconds);
+
+  return (
+    <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
+      <h2 className="text-sm font-medium text-ink-300">{t("对话礼仪")}</h2>
+      <div className="mt-3 space-y-3">
+        <label className="block">
+          <span className="text-xs text-ink-500">{t("开场白（留空则不说）")}</span>
+          <input
+            type="text"
+            value={welcome}
+            onChange={event => setWelcome(event.target.value)}
+            placeholder={t("例如：你好，我在，请讲。")}
+            className="mt-1 w-full rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-sm text-ink-100 placeholder:text-ink-600"
+          />
+        </label>
+        <label className="block">
+          <span className="text-xs text-ink-500">{t("静默追问（秒，0 关闭）")}</span>
+          <input
+            type="number"
+            min={0}
+            step={5}
+            value={nudgeAfterSeconds}
+            onChange={event => setNudgeAfterSeconds(Math.max(0, Number(event.target.value) || 0))}
+            className="mt-1 w-28 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-sm text-ink-100"
+          />
+        </label>
+      </div>
+      <p className="mt-3 text-xs text-ink-500">
+        {t("开场白在会话开始时先说、可打断；静默追问在回答播完后你不说话时轻声追问一次。下次开始对话生效。")}
+      </p>
+    </section>
+  );
+}
+
 export function SettingsPanel() {
   const t = useT();
   const locale = useI18n(state => state.locale);
@@ -200,6 +241,8 @@ export function SettingsPanel() {
         )}
         {sessionId && <p className="mt-3 text-xs text-ink-500">{t("会话 {id}", { id: sessionId })}</p>}
       </section>
+
+      <EtiquetteSection />
 
       <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
         <h2 className="text-sm font-medium text-ink-300">{t("语言")}</h2>

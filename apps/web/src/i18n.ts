@@ -64,6 +64,14 @@ const en = {
   "挂断": "Hang up",
   "待确认": "awaiting confirmation",
 
+  // Settings — conversation etiquette
+  "对话礼仪": "Conversation etiquette",
+  "开场白（留空则不说）": "Welcome line (empty = none)",
+  "例如：你好，我在，请讲。": "e.g. Hello, I'm here — go ahead.",
+  "静默追问（秒，0 关闭）": "Follow-up after silence (seconds, 0 = off)",
+  "开场白在会话开始时先说、可打断；静默追问在回答播完后你不说话时轻声追问一次。下次开始对话生效。":
+    "The welcome is spoken once at session start and can be interrupted; the follow-up speaks once when you stay silent after a reply. Takes effect on the next conversation.",
+
   // Conversation panel — mic and controls
   "已静音": "Muted",
   "麦克风电平": "Microphone level",
