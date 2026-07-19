@@ -428,7 +428,14 @@ the snapshot being the resync mechanism. Bounded input buffering (30s,
 oldest-first drop) means the gateway never retains an unbounded live
 recording while an engine stalls.
 
-### OpenAI Realtime compatibility (evaluated 2026-07-16, deferred)
+### OpenAI Realtime compatibility (evaluated 2026-07-16; built 2026-07-19)
+
+> **Update 2026-07-19 — the subset adapter shipped.** Design, event mapping, and
+> the SDK-as-client gate live in
+> [openai-realtime-adapter.md](./openai-realtime-adapter.md); the evaluation and
+> tiering below are the record of how it was scoped. The adapter shares
+> `/v1/realtime` with the native protocol via dialect detection at upgrade, and
+> client-declared function tools ride the conversation tool loop.
 
 Our `/v1/realtime` shares a path with `api.openai.com/v1/realtime` and nothing
 else: the wire formats are unrelated, and an OpenAI Realtime client cannot
