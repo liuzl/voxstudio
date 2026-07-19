@@ -18,7 +18,7 @@ export const listenUsage = `usage: vox listen [--device NAME] [--language LANG] 
                  [--voice VOICE] [--barge-in | --speaker-duplex] [--vad energy|silero]
                  [--turn-taking conservative|speculative] [--reopen-ms N]
                  [--threshold N] [--silence-ms N] [--min-speech-ms N] [--timing]
-                 [--save-utterances DIR]
+                 [--welcome TEXT] [--nudge-after SECONDS] [--save-utterances DIR]
 
 Run a continuous voice conversation. Press Ctrl-C to stop.
 Without --barge-in, microphone input is suppressed while the agent speaks so external speakers
@@ -34,7 +34,9 @@ reply starts immediately; if you keep talking within --reopen-ms (default 7000) 
 begins, the turn reopens and answers your complete utterance instead. --turn-taking conservative
 restores the single 650ms-silence policy. --save-utterances writes each
 utterance to DIR as a WAV plus what ASR heard — an explicit opt-in for building an ASR test set
-from your own voice; nothing is recorded without it.`;
+from your own voice; nothing is recorded without it. --welcome speaks TEXT once at start,
+interruptible like any reply; --nudge-after speaks one short follow-up when the user stays
+silent that many seconds after an exchange (docs/conversation-etiquette.md).`;
 
 interface ListenOptions {
   device?: string;
@@ -48,6 +50,8 @@ interface ListenOptions {
   vadExplicit: boolean;
   turnTaking: "conservative" | "speculative";
   reopenMs: number;
+  welcome?: string;
+  nudgeAfterSeconds?: number;
   threshold?: number;
   silenceMs: number;
   minSpeechMs: number;
@@ -109,6 +113,8 @@ function parse(args: string[]): ListenOptions {
       }
       options.turnTaking = value;
     } else if (arg === "--reopen-ms") options.reopenMs = numberOption(args, ++index, arg);
+    else if (arg === "--welcome") options.welcome = required(args, ++index, arg);
+    else if (arg === "--nudge-after") options.nudgeAfterSeconds = numberOption(args, ++index, arg);
     else if (arg === "--vad") {
       const value = required(args, ++index, arg);
       if (value !== "energy" && value !== "silero") throw new TypeError("listen: --vad must be energy or silero");
@@ -224,6 +230,9 @@ export async function runListen(
       allowBargeIn: options.bargeIn || options.speakerDuplex,
       turnTaking: options.turnTaking,
       reopenMs: options.reopenMs,
+      ...(options.welcome === undefined ? {} : { welcome: options.welcome }),
+      ...(options.nudgeAfterSeconds === undefined ? {} : { nudgeAfterSeconds: options.nudgeAfterSeconds }),
+      ...(Object.keys(config.pronunciations).length === 0 ? {} : { pronunciations: config.pronunciations }),
     } as Parameters<typeof runConversation>[1];
     // The phase-1 session tools (docs/tool-loop.md), CLI edition: the voice bank is the
     // configured tts engine's own registry (the CLI speaks through one instance).

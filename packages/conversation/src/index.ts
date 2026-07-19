@@ -2,7 +2,7 @@ import { writeWav, type PcmAudio } from "@voxstudio/audio";
 import type { ChatMessage, ChatToolCall, ChatToolDeclaration, ChunkConfig, TtsDefaults } from "@voxstudio/contracts";
 import type { DuplexSession, DuplexTurn, VadSegmenter } from "@voxstudio/duplex-session";
 import { streamReply, type SpeechEngine } from "@voxstudio/orchestration";
-import { correctKeyterms, sanitizeForTts } from "@voxstudio/text";
+import { applyPronunciations, correctKeyterms, sanitizeForTts } from "@voxstudio/text";
 
 /** Mono float32 microphone audio at 16kHz, stamped with a Date.now()-based clock. */
 export interface ConversationFrame {
@@ -144,6 +144,14 @@ export interface ConversationOptions {
    * the voice bank changes at runtime; surfaces cache it.
    */
   keyterms?: () => Promise<string[]>;
+  /** Spoken once at session start, before any user speech; interruptible like any reply. */
+  welcome?: string;
+  /** After a completed exchange, this much silence earns one spoken follow-up. Off unless set. */
+  nudgeAfterSeconds?: number;
+  /** What the silence nudge says (docs/conversation-etiquette.md; fixed text in phase 1). */
+  nudgeText?: string;
+  /** Term → reading substitutions applied at the TTS boundary only; captions keep the spelling. */
+  pronunciations?: Record<string, string>;
 }
 
 export type ConversationErrorCode = "asr_empty" | "llm_empty" | "turn_failed";
@@ -213,6 +221,13 @@ export async function runConversation(
   // spoken yes, and only across turns the user actually heard — an aborted or reopened
   // dispatch leaves it intact, a completed turn that ignored it drops it.
   let pendingExternal: { tool: ConversationTool; args: Record<string, unknown> } | undefined;
+  // What the engine speaks may diverge from what captions show: pronunciations first,
+  // then the unspeakable-character sweep (docs/conversation-etiquette.md).
+  const toSpeakable = (text: string): string =>
+    sanitizeForTts(options.pronunciations ? applyPronunciations(text, options.pronunciations) : text).text;
+  // Silence-nudge state: armed by an audibly completed exchange, disarmed by any speech,
+  // at most one nudge per gap — a follow-up that repeats is nagging.
+  let nudgeDeadlineMs: number | undefined;
   // Speculative turn-taking state: the last soft-ended turn (reopenable until it speaks)
   // and, while a continuation is being captured, the audio it continues.
   let speculative: { turnId: string; samples: Float32Array; softEndedAtMs: number } | undefined;
@@ -412,7 +427,7 @@ export async function runConversation(
           continuationId: crypto.randomUUID(),
           signal: turn.signal,
           streaming: true,
-          transformChunk: text => sanitizeForTts(text).text,
+          transformChunk: toSpeakable,
         })) {
           if (turn.signal.aborted) return;
           if (session.state === "thinking" && !session.startSpeaking(turn.id)) return;
@@ -450,7 +465,71 @@ export async function runConversation(
         // audio. The turn stays `speaking` until the reply is audibly done.
         if (!turn.signal.aborted) {
           await player.close();
-          if (!turn.signal.aborted) session.complete(turn.id);
+          if (!turn.signal.aborted) {
+            session.complete(turn.id);
+            if (options.nudgeAfterSeconds !== undefined) nudgeDeadlineMs = Date.now() + options.nudgeAfterSeconds * 1_000;
+          }
+        }
+      } finally {
+        turn.signal.removeEventListener("abort", abort);
+        if (!options.allowBargeIn) suppressInputUntil = Date.now() + 750;
+      }
+    } catch (error) {
+      if (!turn.signal.aborted) {
+        callbacks.onError?.("turn_failed", error instanceof Error ? error.message : String(error), turn);
+        session.interrupt("cancel");
+      }
+    }
+  };
+
+  /**
+   * Agent-initiated speech (docs/conversation-etiquette.md): the reply pipeline with no
+   * ASR and no LLM — a welcome line or a silence nudge. Completed turns enter history as
+   * assistant messages (the model knows it greeted); interrupted ones leave no trace.
+   */
+  const speakAgentTurn = async (turn: DuplexTurn, text: string, armsNudge: boolean): Promise<void> => {
+    try {
+      if (!session.startThinking(turn.id)) return;
+      const player = deps.createPlayer(turn);
+      const abort = (): void => { void stopPlayer(player); };
+      turn.signal.addEventListener("abort", abort, { once: true });
+      try {
+        callbacks.onReplyDelta?.(text, turn);
+        const voice = options.voice ?? options.ttsDefaults.voice;
+        for await (const piece of streamReply(tts, (async function* (): AsyncGenerator<string> { yield text; })(), {
+          chunking: {
+            ...options.chunking,
+            firstMaxSeconds: Math.min(options.chunking.firstMaxSeconds, 2.5),
+            maxSeconds: Math.min(options.chunking.maxSeconds, 8),
+            firstClauseSeconds: options.chunking.firstClauseSeconds ?? 1.2,
+          },
+          ttsDefaults: options.ttsDefaults,
+          voice,
+          ...(options.speed === undefined ? {} : { speed: options.speed }),
+          ...(voice === "clone" || voice === "design" ? {} : { prosodyPrompt: true }),
+          continuationId: crypto.randomUUID(),
+          signal: turn.signal,
+          streaming: true,
+          transformChunk: toSpeakable,
+        })) {
+          if (turn.signal.aborted) return;
+          if (session.state === "thinking" && !session.startSpeaking(turn.id)) return;
+          if (!options.allowBargeIn) suppressInputUntil = Number.POSITIVE_INFINITY;
+          session.mark(turn.id, "tts_first_audio");
+          await player.write(piece);
+          session.mark(turn.id, "playback_first");
+        }
+        if (!turn.signal.aborted) callbacks.onReply?.(text, turn);
+        if (!turn.signal.aborted) {
+          await player.close();
+          if (!turn.signal.aborted) {
+            session.complete(turn.id);
+            history.push({ role: "assistant", content: text });
+            while (history.length > historyLimit) history.splice(0, 2);
+            if (armsNudge && options.nudgeAfterSeconds !== undefined) {
+              nudgeDeadlineMs = Date.now() + options.nudgeAfterSeconds * 1_000;
+            }
+          }
         }
       } finally {
         turn.signal.removeEventListener("abort", abort);
@@ -470,15 +549,35 @@ export async function runConversation(
     void task.finally(() => work.delete(task));
   };
 
+  const startAgentWork = (turn: DuplexTurn, text: string, armsNudge: boolean): void => {
+    const task = speakAgentTurn(turn, text, armsNudge);
+    work.add(task);
+    void task.finally(() => work.delete(task));
+  };
+
   try {
+    // The welcome line: the agent speaks first, once, interruptibly. The kernel refuses
+    // the turn if the user somehow beat it to the microphone.
+    if (options.welcome !== undefined && options.welcome.trim() !== "") {
+      const welcomeTurn = session.startAgentTurn();
+      if (welcomeTurn) startAgentWork(welcomeTurn, options.welcome.trim(), true);
+    }
     for await (const frame of deps.frames) {
       if (session.state === "closed") break;
       if (!options.allowBargeIn && (session.state === "speaking" || frame.timestampMs < suppressInputUntil)) {
         vad.reset();
         continue;
       }
+      // The silence nudge fires only into an idle gap — never over a turn, a reopenable
+      // soft end, or suppressed input — and startAgentTurn re-checks the kernel state.
+      if (nudgeDeadlineMs !== undefined && frame.timestampMs >= nudgeDeadlineMs && !activeTurn && !speculative) {
+        nudgeDeadlineMs = undefined;
+        const nudgeTurn = session.startAgentTurn();
+        if (nudgeTurn) startAgentWork(nudgeTurn, options.nudgeText ?? "还在吗？需要我继续帮你吗？", false);
+      }
       for (const event of await vad.push(frame.samples, frame.timestampMs)) {
         if (event.type === "speech.start") {
+          nudgeDeadlineMs = undefined;
           // Continuation hysteresis: resuming a soft-ended turn takes a single voiced frame,
           // not full confirmation, because before the commitment point a wrong reopen costs
           // an aborted speculative dispatch and nothing audible. The kernel refuses the

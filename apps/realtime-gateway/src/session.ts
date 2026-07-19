@@ -191,6 +191,9 @@ export class GatewaySession {
       allowBargeIn: start.bargeIn ?? false,
       turnTaking,
       reopenMs: start.reopenMs ?? 7_000,
+      ...(start.welcome === undefined ? {} : { welcome: start.welcome }),
+      ...(start.nudgeAfterSeconds === undefined ? {} : { nudgeAfterSeconds: start.nudgeAfterSeconds }),
+      ...(Object.keys(config.pronunciations).length === 0 ? {} : { pronunciations: config.pronunciations }),
     } as Parameters<typeof runConversation>[1];
     conversationOptions.keyterms = async () => {
       if (this.keytermCache && Date.now() - this.keytermCache.at < 60_000) return this.keytermCache.terms;

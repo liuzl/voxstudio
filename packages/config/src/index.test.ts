@@ -93,3 +93,11 @@ describe("chunking first_clause_seconds", () => {
     expect(() => parseConfig({ chunking: { first_clause_seconds: -1 } })).toThrow("first_clause_seconds");
   });
 });
+
+describe("pronunciations", () => {
+  test("absent is empty; configured parses; junk rejects", () => {
+    expect(parseConfig({}).pronunciations).toEqual({});
+    expect(parseConfig({ pronunciations: { VoxStudio: "沃克斯" } }).pronunciations).toEqual({ VoxStudio: "沃克斯" });
+    expect(() => parseConfig({ pronunciations: { X: "" } })).toThrow("pronunciations");
+  });
+});

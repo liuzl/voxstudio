@@ -34,6 +34,10 @@ export interface SessionStartOptions {
   asrEngine?: string;
   llmEngine?: string;
   ttsEngine?: string;
+  /** Spoken once at session start, before any user speech; interruptible like any reply. */
+  welcome?: string;
+  /** After a completed exchange, this much silence earns one spoken follow-up. */
+  nudgeAfterSeconds?: number;
   /**
    * The endpoint owns the audible-playback clock: after the last piece of a reply is sent,
    * the turn stays `speaking` until the client's `playback.complete` for that turn (or a
@@ -144,6 +148,8 @@ function parseStartOptions(value: unknown): SessionStartOptions {
   const threshold = optionalNumber(value, "threshold");
   const silenceMs = optionalNumber(value, "silenceMs");
   const minSpeechMs = optionalNumber(value, "minSpeechMs");
+  const welcome = optionalString(value, "welcome");
+  const nudgeAfterSeconds = optionalNumber(value, "nudgeAfterSeconds");
   if (language !== undefined) options.language = language;
   if (system !== undefined) options.system = system;
   if (asrEngine !== undefined) options.asrEngine = asrEngine;
@@ -159,6 +165,8 @@ function parseStartOptions(value: unknown): SessionStartOptions {
   if (threshold !== undefined) options.threshold = threshold;
   if (silenceMs !== undefined) options.silenceMs = silenceMs;
   if (minSpeechMs !== undefined) options.minSpeechMs = minSpeechMs;
+  if (welcome !== undefined) options.welcome = welcome;
+  if (nudgeAfterSeconds !== undefined) options.nudgeAfterSeconds = nudgeAfterSeconds;
   return options;
 }
 

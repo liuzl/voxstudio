@@ -396,3 +396,39 @@ describe("duplex session", () => {
     expect(() => value.startUserSpeech()).toThrow("closed");
   });
 });
+
+describe("agent-initiated turns", () => {
+  test("opens directly in finalizing and runs the ordinary downstream lifecycle", () => {
+    const session = new DuplexSession();
+    session.start();
+    const turn = session.startAgentTurn();
+    expect(turn).toBeDefined();
+    expect(session.snapshot().state).toBe("finalizing");
+    expect(session.startThinking(turn!.id)).toBe(true);
+    expect(session.startSpeaking(turn!.id)).toBe(true);
+    expect(session.complete(turn!.id)).toBe(true);
+    expect(session.snapshot().state).toBe("listening");
+  });
+
+  test("refused everywhere except idle listening: the agent never talks over the user", () => {
+    const session = new DuplexSession();
+    expect(session.startAgentTurn()).toBeUndefined();
+    session.start();
+    const user = session.startUserSpeech();
+    expect(session.startAgentTurn()).toBeUndefined();
+    session.finalizeUserSpeech(user.id);
+    expect(session.startAgentTurn()).toBeUndefined();
+  });
+
+  test("user speech barges into an agent turn like into any reply", () => {
+    const session = new DuplexSession();
+    session.start();
+    const agent = session.startAgentTurn();
+    session.startThinking(agent!.id);
+    session.startSpeaking(agent!.id);
+    const user = session.startUserSpeech();
+    expect(agent!.signal.aborted).toBe(true);
+    expect(user.id).not.toBe(agent!.id);
+    expect(session.snapshot().state).toBe("speech_started");
+  });
+});

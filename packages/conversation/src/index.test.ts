@@ -443,3 +443,135 @@ describe("runConversation keyterm correction", () => {
     expect(llmSaw).toBe("帮我换成zf_001的声音");
   });
 });
+
+describe("runConversation etiquette", () => {
+  const base = {
+    language: "zh", chunking, ttsDefaults, voice: "demo",
+    allowBargeIn: true, turnTaking: "conservative" as const, reopenMs: 7_000,
+  };
+
+  function capturingTts(): { inputs: string[]; speech: (input: { input: string }) => Promise<Uint8Array> } {
+    const inputs: string[] = [];
+    return {
+      inputs,
+      speech: async ({ input }) => {
+        inputs.push(input);
+        return new Uint8Array(writeWav(new Float32Array(4_800).fill(0.1), 24_000));
+      },
+    };
+  }
+
+  function fixedLlm(reply: string): ChatEngine {
+    return { chatStream: async function* () { yield reply; } };
+  }
+
+  /** Wall-clock frames: a settle-gated burst per utterance, then silence until stopped. */
+  function etiquetteFrames(
+    session: DuplexSession,
+    utterances: number,
+    stopped: () => boolean,
+    trailingSilence: boolean,
+  ): AsyncIterable<ConversationFrame> {
+    const wait = (predicate: () => boolean): Promise<void> => new Promise(resolve => {
+      const poll = (): void => { predicate() ? resolve() : setTimeout(poll, 5); };
+      poll();
+    });
+    return (async function* () {
+      for (let index = 0; index < utterances; index += 1) {
+        // Speak only into an idle session: never race the welcome or a reply.
+        await wait(() => session.snapshot().state === "listening" && !stopped());
+        if (stopped()) return;
+        yield { samples: new Float32Array(320).fill(0.2), timestampMs: Date.now() };
+        yield { samples: new Float32Array(320).fill(0.2), timestampMs: Date.now() };
+        yield { samples: new Float32Array(320), timestampMs: Date.now() };
+        await wait(() => session.snapshot().state !== "listening" || stopped());
+        await wait(() => session.snapshot().state === "listening" || stopped());
+      }
+      while (trailingSilence && !stopped()) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        yield { samples: new Float32Array(320), timestampMs: Date.now() };
+      }
+    })();
+  }
+
+  async function runEtiquette(options: {
+    llm: ChatEngine;
+    extra: Record<string, unknown>;
+    utterances: number;
+    trailingSilence?: boolean;
+    until?: (replies: string[]) => boolean;
+  }): Promise<{ replies: string[]; ttsInputs: string[] }> {
+    const session = new DuplexSession();
+    session.start();
+    const tts = capturingTts();
+    const replies: string[] = [];
+    let finished = false;
+    const timer = setTimeout(() => { finished = true; session.close(); }, 3_000);
+    await runConversation({
+      session,
+      vad: new EnergyVadSegmenter({ sampleRate: 16_000, threshold: 0.1, minSpeechMs: 40, silenceMs: 20 }),
+      frames: etiquetteFrames(session, options.utterances, () => finished, options.trailingSilence ?? false),
+      createPlayer: () => ({ write: async () => {}, close: async () => {} }),
+      asr: { transcribe: async () => ({ text: "讲个笑话" }) },
+      llm: options.llm,
+      tts,
+    }, { ...base, ...options.extra } as Parameters<typeof runConversation>[1], {
+      onReply: text => {
+        replies.push(text);
+        if (options.until?.(replies)) {
+          finished = true;
+          session.close();
+        }
+      },
+    });
+    clearTimeout(timer);
+    return { replies, ttsInputs: tts.inputs };
+  }
+
+  test("the welcome speaks first, enters history, and the reply follows", async () => {
+    const llm = fixedLlm("哈哈，好的。");
+    const seen: number[] = [];
+    const counting: ChatEngine = {
+      chatStream: async function* (messages) {
+        seen.push(messages.length);
+        yield* llm.chatStream([], undefined, undefined);
+      },
+    };
+    const { replies, ttsInputs } = await runEtiquette({
+      llm: counting,
+      extra: { welcome: "你好，我在。" },
+      utterances: 1,
+      until: replies => replies.length >= 2,
+    });
+    expect(replies[0]).toBe("你好，我在。");
+    expect(ttsInputs[0]).toBe("你好，我在。");
+    // The model sees the welcome as history: assistant welcome + user (no system configured).
+    expect(seen[0]).toBe(2);
+    expect(replies[1]).toBe("哈哈，好的。");
+  });
+
+  test("the nudge fires once into silence and never repeats", async () => {
+    const { replies, ttsInputs } = await runEtiquette({
+      llm: fixedLlm("好的。"),
+      extra: { nudgeAfterSeconds: 0.08, nudgeText: "还在吗？" },
+      utterances: 1,
+      trailingSilence: true,
+      until: replies => replies.length >= 2 && Date.now() > 0,
+    });
+    // Give the silence window time to prove there is no second nudge.
+    expect(replies).toEqual(["好的。", "还在吗？"]);
+    expect(ttsInputs.filter(input => input === "还在吗？").length).toBe(1);
+  });
+
+  test("pronunciations change what the engine speaks and nothing the captions see", async () => {
+    const { replies, ttsInputs } = await runEtiquette({
+      llm: fixedLlm("欢迎使用 VoxStudio。"),
+      extra: { pronunciations: { VoxStudio: "沃克斯" } },
+      utterances: 1,
+      until: replies => replies.length >= 1,
+    });
+    expect(replies[0]).toBe("欢迎使用 VoxStudio。");
+    expect(ttsInputs.some(input => input.includes("沃克斯"))).toBe(true);
+    expect(ttsInputs.some(input => input.includes("VoxStudio"))).toBe(false);
+  });
+});

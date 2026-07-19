@@ -12,7 +12,7 @@ import {
   WavFileSink,
   writeBytes,
 } from "@voxstudio/platform-bun";
-import { estSeconds, sanitizeForTts } from "@voxstudio/text";
+import { applyPronunciations, estSeconds, sanitizeForTts } from "@voxstudio/text";
 import type { CliIo } from "../io";
 
 interface SayArgs {
@@ -116,7 +116,11 @@ export async function runSay(
     : options.text && options.text !== "-" ? options.text : await readStdinText();
   if (!text.trim()) throw new TypeError("no text to speak");
 
-  const sanitized = sanitizeForTts(text);
+  // Pronunciations first, then the unspeakable sweep — what long-form reading speaks
+  // follows the same config the conversation loop uses (docs/conversation-etiquette.md).
+  const sanitized = sanitizeForTts(
+    Object.keys(config.pronunciations).length === 0 ? text : applyPronunciations(text, config.pronunciations),
+  );
   text = sanitized.text;
   if (sanitized.dropped.length && !options.quiet) {
     io.err(`dropped ${sanitized.dropped.length} unspeakable character(s): ${[

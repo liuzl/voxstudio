@@ -266,7 +266,19 @@ export function parseConfig(input: unknown = {}, env: Environment = {}): VoxConf
     chunking: chunkingFromRaw(raw.chunking, env),
     keyterms: (keyterms as string[] | undefined) ?? [],
     mcpServers: mcpServersFromRaw(raw.mcp_servers),
+    pronunciations: pronunciationsFromRaw(raw.pronunciations),
   };
+}
+
+function pronunciationsFromRaw(input: unknown): Record<string, string> {
+  if (input === undefined) return {};
+  const entries = record(input);
+  for (const [term, reading] of Object.entries(entries)) {
+    if (typeof reading !== "string" || reading === "") {
+      throw new ConfigError(`pronunciations.${term}: the reading must be a non-empty string`);
+    }
+  }
+  return entries as Record<string, string>;
 }
 
 function mcpServersFromRaw(input: unknown): McpServerConfig[] {

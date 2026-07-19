@@ -61,6 +61,8 @@ export interface VoxConfig {
   keyterms: string[];
   /** MCP servers whose tools join the conversation (docs/mcp-tools.md); config order is registration order. */
   mcpServers: McpServerConfig[];
+  /** Term → reading substitutions for the TTS boundary (docs/conversation-etiquette.md). */
+  pronunciations: Record<string, string>;
 }
 
 /** One entry under `mcp_servers:` — stdio (command) or streamable HTTP (url), never both. */

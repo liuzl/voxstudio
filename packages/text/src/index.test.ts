@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import chunks from "../../../fixtures/text/chunks.json" with { type: "json" };
 import estimates from "../../../fixtures/text/estimate.json" with { type: "json" };
 import sanitization from "../../../fixtures/text/sanitize.json" with { type: "json" };
-import { chunkText, estSeconds, sanitizeForTts, SentenceAssembler } from "./index";
+import { applyPronunciations, chunkText, estSeconds, sanitizeForTts, SentenceAssembler } from "./index";
 
 describe("shared text fixtures", () => {
   for (const fixture of sanitization) {
@@ -125,5 +125,16 @@ describe("SentenceAssembler.takeClause boundary edges", () => {
     assembler.push(" وهذا كثير");
     // "١٢," is inside a number; the clause comma later is the boundary.
     expect(assembler.takeClause(0.5)).toBe("المجموع ١٢,٣٤٥ ريال تقريبا يا صديقي,");
+  });
+});
+
+describe("applyPronunciations", () => {
+  test("longest term first, every occurrence, case-insensitive latin", () => {
+    const entries = { "VoxStudio Pro": "沃克斯 Pro", "VoxStudio": "沃克斯" };
+    expect(applyPronunciations("用 voxstudio 和 VoxStudio Pro。", entries)).toBe("用 沃克斯 和 沃克斯 Pro。");
+  });
+
+  test("regex metacharacters in terms are literal", () => {
+    expect(applyPronunciations("价格是 C++ 之上", { "C++": "西加加" })).toBe("价格是 西加加 之上");
   });
 });

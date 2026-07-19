@@ -198,6 +198,23 @@ export interface ChunkOptions {
 }
 
 /**
+ * Pronunciation overrides (docs/conversation-etiquette.md): configured term → reading
+ * substitutions for the TTS boundary. Longest term first so "VoxStudio Pro" wins over
+ * "VoxStudio"; whole occurrences, case-insensitive for Latin terms. The mirror twin of
+ * keyterm correction — ASR pulls misheard words back in, this pushes hard words out
+ * right — and it must only ever touch what the engine speaks, never captions or history.
+ */
+export function applyPronunciations(input: string, entries: Record<string, string>): string {
+  let output = input;
+  for (const [term, reading] of Object.entries(entries).sort((a, b) => b[0].length - a[0].length)) {
+    if (!term) continue;
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    output = output.replace(new RegExp(escaped, "giu"), reading);
+  }
+  return output;
+}
+
+/**
  * Assembles a token stream into complete sentences. `push` returns each sentence the moment
  * its terminator arrives — the bridge that lets TTS start on sentence one while the model
  * is still generating sentence three. Unfinished text stays buffered until `flush`.

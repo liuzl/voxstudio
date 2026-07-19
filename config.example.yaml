@@ -82,3 +82,8 @@ chunking:
 # long-form reading (vox say) keeps sentence seams unless configured.
 # chunking:
 #   first_clause_seconds: 1.2
+
+# Pronunciation overrides (docs/conversation-etiquette.md): what the engine speaks may
+# diverge from what captions show. Applied longest-term-first at the TTS boundary only.
+# pronunciations:
+#   VoxStudio: 沃克斯

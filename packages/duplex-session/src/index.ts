@@ -566,6 +566,31 @@ export class DuplexSession {
     return { id: turn.id, revision: turn.revision, signal: turn.signal };
   }
 
+  /**
+   * An agent-initiated turn (docs/conversation-etiquette.md): a welcome line or a
+   * silence nudge. Created directly in `finalizing` — no speech states, no VAD — so
+   * everything downstream (thinking, speaking, completion, barge-in interrupting it)
+   * is the ordinary machinery. Refused unless the session is idle in `listening`:
+   * the agent never talks over the user.
+   */
+  startAgentTurn(): DuplexTurn | undefined {
+    if (this.currentState !== "listening" || this.active !== undefined) return undefined;
+    const controller = new AbortController();
+    const turn: ActiveTurn = {
+      id: this.newTurnId(),
+      revision: 0,
+      signal: controller.signal,
+      controller,
+      startedAtMs: this.now(),
+      timing: {},
+      reopenable: false,
+    };
+    this.active = turn;
+    this.transition("finalizing");
+    this.emit({ type: "turn.started", turnId: turn.id });
+    return { id: turn.id, revision: turn.revision, signal: turn.signal };
+  }
+
   finalizeUserSpeech(turnId: string): boolean {
     if (!this.isCurrent(turnId) || this.currentState !== "speech_started") return false;
     if (this.active) this.active.reopenable = false;
