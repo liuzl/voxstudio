@@ -72,6 +72,12 @@ de-facto realtime-voice wire standard across vendors.
 3. **Cheap adoptions worth taking**: the welcome-message toggle (with its own
    interruptibility), the follow-up-after-silence nudge, and pronunciation/keyterm
    hints (both are really engine-level parameters our engine layer can carry).
+   *Update 2026-07-19*: all three taken —
+   [conversation-etiquette.md](./conversation-etiquette.md) (welcome as an
+   interruptible agent turn, one nudge per silence gap, pronunciations at the
+   TTS boundary); ASR keyterms had landed 07-18 as engine-agnostic transcript
+   correction. The connectors gap closed differently than xAI built it: MCP
+   ([mcp-tools.md](./mcp-tools.md)) instead of proprietary OAuth integrations.
    **Not worth chasing**: PSTN telephony — that is their moat, not our battlefield.
    Ours is self-hosting + swappable engines + reproducibility, and the comparison
    table says that positioning is real.
