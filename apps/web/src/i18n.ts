@@ -62,6 +62,7 @@ const en = {
   "调整语速": "Adjust speed",
   "查询引擎状态": "Engine status",
   "挂断": "Hang up",
+  "待确认": "awaiting confirmation",
 
   // Conversation panel — mic and controls
   "已静音": "Muted",

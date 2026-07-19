@@ -119,12 +119,13 @@ function ToolChips({ turn }: { turn: TurnView }) {
         <span
           key={index}
           className={`rounded-full px-2 py-0.5 text-[11px] ${
-            tool.ok === false ? "bg-red-500/15 text-red-300" : "bg-ink-800 text-ink-300"
+            tool.pending ? "bg-amber-500/15 text-amber-300"
+              : tool.ok === false ? "bg-red-500/15 text-red-300" : "bg-ink-800 text-ink-300"
           }`}
         >
-          🔧 {labels[tool.name] ?? tool.name}
+          {tool.pending ? "⏳" : "🔧"} {labels[tool.name] ?? tool.name}
           {tool.detail !== undefined && ` → ${tool.detail}`}
-          {tool.ok === true ? " ✓" : tool.ok === false ? " ✗" : " …"}
+          {tool.pending ? ` ${t("待确认")}` : tool.ok === true ? " ✓" : tool.ok === false ? " ✗" : " …"}
         </span>
       ))}
     </div>

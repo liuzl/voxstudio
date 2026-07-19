@@ -17,7 +17,7 @@ export interface TurnView {
   reopens: number;
   falseBargeIns: number;
   /** Tool invocations this turn: name, a short argument detail, and the outcome. */
-  tools: { name: string; detail?: string; ok?: boolean }[];
+  tools: { name: string; detail?: string; ok?: boolean; pending?: boolean }[];
   timing: Record<string, number> | undefined;
   endReason: string | undefined;
 }
@@ -188,6 +188,18 @@ export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sess
         })),
       };
     }
+    case "tool.pending": {
+      // An external tool held for spoken confirmation (docs/mcp-tools.md): the chip says
+      // so, and the tool.result that carries the pending payload must not flip it to ✓.
+      const detail = Object.values(event.arguments ?? {}).find(
+        (value): value is string | number => typeof value === "string" || typeof value === "number");
+      return {
+        turns: updateTurn(state.turns, event.turnId, turn => ({
+          ...turn,
+          tools: [...turn.tools, { name: event.name, pending: true, ...(detail === undefined ? {} : { detail: String(detail) }) }],
+        })),
+      };
+    }
     case "tool.result":
       return {
         turns: updateTurn(state.turns, event.turnId, turn => {
@@ -198,7 +210,8 @@ export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sess
           }
           if (index < 0) return turn;
           const tools = [...turn.tools];
-          tools[index] = { ...tools[index]!, ok: event.ok };
+          const chip = tools[index]!;
+          tools[index] = { ...chip, ok: event.ok };
           return { ...turn, tools };
         }),
       };
