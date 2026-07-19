@@ -18,7 +18,9 @@
     "measure:tools": "bun apps/realtime-gateway/tools/measure-tools.ts",
     "measure:openai": "bun apps/realtime-gateway/tools/measure-openai-adapter.ts",
     "measure:mcp": "bun apps/realtime-gateway/tools/measure-mcp.ts",
-    "measure:agent-voice": "bun apps/mcp/tools/measure-agent-voice.ts"
+    "measure:agent-voice": "bun apps/mcp/tools/measure-agent-voice.ts",
+    "measure:etiquette": "bun apps/realtime-gateway/tools/measure-etiquette.ts",
+    "measure:guardrails": "bun apps/realtime-gateway/tools/measure-guardrails.ts"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

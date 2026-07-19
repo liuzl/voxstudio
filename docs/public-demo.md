@@ -64,7 +64,8 @@ internal ops log, never here.
 1. **The three guardrails, flagged and tested.** Unit tests: the cap rejects the
    N+1th native start and the OpenAI dialect start while attach stays exempt; an
    expired session notices and stops while a fresh one does not; demo mode 403s
-   every registry write, keeps reads, and refuses to connect MCP. **Gate**: suite
+   every registry write, keeps reads, and refuses to connect MCP. **Gate** (`bun run
+   measure:guardrails`, promoted from the delivery-day probe): suite
    green; a live gateway started with all three flags behaves as configured
    against real clients.
    **Delivered 2026-07-19.** Four new tests green (cap refuse/reuse, ceiling

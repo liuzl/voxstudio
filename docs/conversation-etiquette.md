@@ -57,7 +57,8 @@ and free; a generated nudge needs its own measured gate), Web start-card fields
    enters history only when completed, and suppresses the mic in protected mode;
    the nudge fires once after synthetic silence, rearms only after the next
    exchange, and never fires disabled; pronunciations change what TTS receives
-   and nothing the captions see. **Gate**: the suite green, plus a live-stack
+   and nothing the captions see. **Gate** (`bun run measure:etiquette`, promoted
+   from the delivery-day probe): the suite green, plus a live-stack
    probe — a gateway session started with a welcome delivers reply audio before
    the client has sent a single frame, and a session with a short nudge window
    nudges exactly once through real engines.

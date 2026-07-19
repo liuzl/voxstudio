@@ -108,5 +108,6 @@ SSE legacy transport.
    (re-measured: cancel lands, the unrelated case still calls nothing). Safety
    never depended on it — nothing executes without `confirm_action` — but the
    deterministic acknowledgement does.
-2. **Later**: Web caption chips for `tool.pending`; multi-pending batches if real
-   usage demands them; the MCP server surface (`apps/mcp`) as its own design.
+2. **Later**: multi-pending batches if real usage demands them. *Delivered since
+   writing*: the Web caption chip for `tool.pending` (amber, 2026-07-19) and the
+   MCP server surface ([agent-voice-mcp.md](./agent-voice-mcp.md)).
