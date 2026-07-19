@@ -12,7 +12,12 @@ const gateway = process.env.VOX_GATEWAY_URL ?? "http://127.0.0.1:8790";
 const speech = await fetch(new URL("/v1/audio/speech", gateway), {
   method: "POST",
   headers: { "content-type": "application/json" },
-  body: JSON.stringify({ model: "kokoro", input: "现在几点了？", voice: "zf_001", response_format: "wav" }),
+  body: JSON.stringify({
+    model: "kokoro",
+    input: process.env.VOX_REPLAY_TEXT ?? "现在几点了？",
+    voice: "zf_001",
+    response_format: "wav",
+  }),
 });
 if (!speech.ok) throw new Error(`tts ${speech.status}`);
 const wav = readWav(await speech.arrayBuffer());
@@ -26,7 +31,7 @@ for (let index = 0; index < mic.length; index += 1) mic[index] = wav.samples[Mat
 // 3. Drive the protocol.
 const started = Date.now();
 const stamp = () => `+${String(Date.now() - started).padStart(5, " ")}ms`;
-const ws = new WebSocket("ws://127.0.0.1:8790/v1/realtime");
+const ws = new WebSocket(new URL("/v1/realtime", gateway).toString().replace(/^http/, "ws"));
 ws.binaryType = "arraybuffer";
 let audioBytes = 0;
 let audioChunks = 0;

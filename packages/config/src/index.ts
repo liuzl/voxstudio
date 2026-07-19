@@ -207,6 +207,14 @@ function chunkingFromRaw(value: unknown, env: Environment): ChunkConfig {
     trimFloorDb: number("trim_floor_db", "VOXSTUDIO_CHUNK_TRIM_FLOOR_DB", defaultChunking.trimFloorDb),
     edgePadMs: integer("edge_pad_ms", "VOXSTUDIO_CHUNK_EDGE_PAD_MS", defaultChunking.edgePadMs),
   };
+  const firstClause = env.VOXSTUDIO_CHUNK_FIRST_CLAUSE_SECONDS ?? raw.first_clause_seconds;
+  if (firstClause !== undefined) {
+    const value = numberValue(firstClause, 0);
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new ConfigError(`\`chunking.first_clause_seconds\` must be a positive number of seconds, not ${String(firstClause)}`);
+    }
+    chunking.firstClauseSeconds = value;
+  }
 
   for (const [name, value] of [
     ["max_seconds", chunking.maxSeconds],

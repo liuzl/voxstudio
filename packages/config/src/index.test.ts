@@ -85,3 +85,11 @@ describe("engine registry", () => {
     expect(parsed.engines.tts?.streamFormat).toBe("opus");
   });
 });
+
+describe("chunking first_clause_seconds", () => {
+  test("absent stays undefined; configured parses; junk rejects", () => {
+    expect(parseConfig({}).chunking.firstClauseSeconds).toBeUndefined();
+    expect(parseConfig({ chunking: { first_clause_seconds: 1.5 } }).chunking.firstClauseSeconds).toBe(1.5);
+    expect(() => parseConfig({ chunking: { first_clause_seconds: -1 } })).toThrow("first_clause_seconds");
+  });
+});

@@ -400,6 +400,10 @@ export async function runConversation(
             ...options.chunking,
             firstMaxSeconds: Math.min(options.chunking.firstMaxSeconds, 2.5),
             maxSeconds: Math.min(options.chunking.maxSeconds, 8),
+            // Conversation is latency-bound, so the clause fast path defaults on here
+            // (measured 2026-07-19: the first-sentence wait was 60–70% of first-audio
+            // latency); long-form reading keeps sentence seams unless configured.
+            firstClauseSeconds: options.chunking.firstClauseSeconds ?? 1.2,
           },
           ttsDefaults: options.ttsDefaults,
           voice,

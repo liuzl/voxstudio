@@ -220,6 +220,17 @@ export async function* streamReply(
         pending += sentence;
         yield* drain(false);
       }
+      // The first-chunk clause fast path (duplex doc §Turn timing): before anything has
+      // been emitted, waiting for the model to finish the first sentence is the largest
+      // slice of first-audio latency. Once the un-terminated text speaks long enough, it
+      // may end at clause punctuation; every later chunk keeps the sentence rule.
+      if (emitted === 0 && chunking.firstClauseSeconds !== undefined && !pending.trim()) {
+        const clause = assembler.takeClause(chunking.firstClauseSeconds);
+        if (clause !== undefined) {
+          pending += clause;
+          yield* drain(false);
+        }
+      }
       // The hold below exists only for the last-chunk flag. The moment any further text is
       // in flight — even half a sentence — the held chunk cannot be last, so release it now
       // rather than delaying its synthesis until the next full chunk forms.

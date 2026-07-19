@@ -230,6 +230,33 @@ export class SentenceAssembler {
     return this.buffer.trim().length > 0;
   }
 
+  /**
+   * The first-chunk clause fast path (duplex doc §Turn timing): cut the buffer at the
+   * earliest clause boundary whose prefix already speaks for `minSeconds` — the moment a
+   * listener would accept a seam, not a moment sooner. ASCII separators inside numbers
+   * ("1,000", "3:15") need one character of lookahead to be ruled out, so a trailing
+   * ASCII ender never cuts. Returns undefined when no boundary qualifies yet.
+   */
+  takeClause(minSeconds: number): string | undefined {
+    const chars = Array.from(this.buffer);
+    for (let index = 0; index < chars.length; index += 1) {
+      const char = chars[index] as string;
+      if (!clauseBreaks.has(char)) continue;
+      if (char === "," || char === ":" || char === ";") {
+        const next = chars[index + 1];
+        if (next === undefined || /[0-9]/.test(next)) continue;
+      }
+      // A closing quote or bracket right after the boundary belongs to this clause.
+      let end = index;
+      while (end + 1 < chars.length && closers.has(chars[end + 1] as string)) end += 1;
+      const prefix = chars.slice(0, end + 1).join("");
+      if (estSeconds(prefix) < minSeconds) continue;
+      this.buffer = chars.slice(end + 1).join("");
+      return prefix;
+    }
+    return undefined;
+  }
+
   /** Whatever never reached a terminator — the reply's unpunctuated tail. */
   flush(): string {
     const rest = this.buffer;

@@ -75,3 +75,10 @@ chunking:
 #     url: https://example.com/mcp      # streamable HTTP server
 #     token_env: WEATHER_TOKEN          # bearer token comes from the environment
 #     trust: true                       # operator's signature: skip confirmation
+
+# chunking.first_clause_seconds: once the reply's un-terminated first text speaks this
+# long, it may end at clause punctuation instead of waiting for the sentence ender —
+# the first-audio fast path. Unset here, the conversation loop defaults it to 1.2s;
+# long-form reading (vox say) keeps sentence seams unless configured.
+# chunking:
+#   first_clause_seconds: 1.2

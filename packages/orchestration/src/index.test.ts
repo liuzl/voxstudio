@@ -249,3 +249,42 @@ describe("long-text orchestration", () => {
     expect(calls).toHaveLength(1);
   });
 });
+
+describe("first-chunk clause fast path", () => {
+  const replyChunking: ChunkConfig = {
+    ...chunking, maxSeconds: 15, firstMaxSeconds: 8, firstClauseSeconds: 1.2,
+  };
+
+  async function* deltas(parts: string[]): AsyncGenerator<string> {
+    for (const part of parts) yield part;
+  }
+
+  async function drainReply(tts: SpeechEngine, parts: string[], chunkingOverride: ChunkConfig) {
+    const pieces: Float32Array[] = [];
+    for await (const piece of streamReply(tts, deltas(parts), { ...options, chunking: chunkingOverride })) {
+      pieces.push(piece.samples);
+    }
+    return pieces;
+  }
+
+  test("the first chunk may end at a clause boundary; later chunks keep the sentence rule", async () => {
+    const tts = new FakeTts();
+    await drainReply(tts, ["今天的天气非常不错，", "适合出去走走，", "或者去公园。"], replyChunking);
+    expect(tts.calls[0]?.input).toBe("今天的天气非常不错，");
+    // The rest waits for its sentence ender: the fast path is first-chunk-only.
+    expect(tts.calls.slice(1).map(call => call.input).join("")).toBe("适合出去走走，或者去公园。");
+  });
+
+  test("a clause still too short keeps waiting for the sentence", async () => {
+    const tts = new FakeTts();
+    await drainReply(tts, ["好的，", "我来帮你查一下今天的天气。"], replyChunking);
+    expect(tts.calls[0]?.input).toBe("好的，我来帮你查一下今天的天气。");
+  });
+
+  test("without firstClauseSeconds the sentence rule stands", async () => {
+    const tts = new FakeTts();
+    const { firstClauseSeconds: _unused, ...sentenceOnly } = replyChunking;
+    await drainReply(tts, ["今天的天气非常不错，", "适合出去走走。"], sentenceOnly);
+    expect(tts.calls[0]?.input).toBe("今天的天气非常不错，适合出去走走。");
+  });
+});

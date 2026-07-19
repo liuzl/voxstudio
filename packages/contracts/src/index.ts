@@ -42,6 +42,13 @@ export interface ChunkConfig {
   joinPauseMs: number;
   trimFloorDb: number;
   edgePadMs: number;
+  /**
+   * First-chunk clause fast path (duplex doc §Turn timing): once the un-terminated first
+   * text reaches this estimated speech duration, it may end at clause punctuation instead
+   * of waiting for a sentence ender. Undefined disables; the conversation loop defaults
+   * it on — first audio is latency-bound there, long-form reading is seam-bound.
+   */
+  firstClauseSeconds?: number;
 }
 
 export interface VoxConfig {
