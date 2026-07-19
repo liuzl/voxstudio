@@ -14,9 +14,10 @@
     "@voxstudio/audio": "workspace:*",
     "@voxstudio/clients": "workspace:*",
     "@voxstudio/config": "workspace:*",
-    "@voxstudio/conversation": "workspace:*",
     "@voxstudio/contracts": "workspace:*",
+    "@voxstudio/conversation": "workspace:*",
     "@voxstudio/duplex-session": "workspace:*",
+    "@voxstudio/mcp": "workspace:*",
     "@voxstudio/platform-bun": "workspace:*"
   },
   "devDependencies": {

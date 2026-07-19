@@ -4,6 +4,7 @@ import type { EngineKind, ResolvedEngineConfig, VoxConfig } from "@voxstudio/con
 import type { SpeechProbabilityModel } from "@voxstudio/duplex-session";
 import type { ServerWebSocket } from "bun";
 import type { ConversationTool } from "@voxstudio/conversation";
+import { connectMcpServers, type McpToolSource } from "@voxstudio/mcp";
 import { OpenAiRealtimeConnection } from "./openai-realtime";
 import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand } from "./protocol";
 import { builtinToolNames, GatewaySession, type EventSink } from "./session";
@@ -251,6 +252,12 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     return ws.data.sink;
   };
 
+  // MCP servers connect once per gateway process (docs/mcp-tools.md); sessions await the
+  // connection through the extraTools provider, so startup order costs nothing.
+  const mcpSource: Promise<McpToolSource> | undefined = options.config.mcpServers.length > 0
+    ? connectMcpServers(options.config.mcpServers, { log, reservedNames: builtinToolNames })
+    : undefined;
+
   const createSession = (extraTools: ConversationTool[] = []): GatewaySession => {
     const session = new GatewaySession({
       config: options.config,
@@ -259,7 +266,18 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // The session tools see the same sanitized surfaces the facade serves.
       listVoices: async () => (await collectVoices()).map(voice => ({ id: voice.id, engine: voice.engine })),
       engineStatus: collectEngines,
-      ...(extraTools.length === 0 ? {} : { extraTools }),
+      extraTools: async () => {
+        // MCP tools first, surface extras (OpenAI-adapter client tools) after; the
+        // built-ins always win and duplicates keep their first registration.
+        const taken = new Set<string>(builtinToolNames);
+        const composed: ConversationTool[] = [];
+        for (const tool of [...(mcpSource ? (await mcpSource).tools() : []), ...extraTools]) {
+          if (taken.has(tool.name)) continue;
+          taken.add(tool.name);
+          composed.push(tool);
+        }
+        return composed;
+      },
       loadSileroVad: options.loadSileroVad,
       ...(options.reconnectGraceMs === undefined ? {} : { reconnectGraceMs: options.reconnectGraceMs }),
       onClosed: closed => { sessions.delete(closed.id); },
@@ -436,6 +454,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     stop: async () => {
       for (const session of sessions.values()) session.stop();
       await Promise.allSettled([...sessions.values()].map(session => session.done));
+      if (mcpSource) await (await mcpSource).close().catch(() => {});
       await server.stop(true);
     },
   };

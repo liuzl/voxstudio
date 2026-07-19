@@ -16,6 +16,7 @@
     "@voxstudio/contracts": "workspace:*",
     "@voxstudio/conversation": "workspace:*",
     "@voxstudio/duplex-session": "workspace:*",
+    "@voxstudio/mcp": "workspace:*",
     "@voxstudio/orchestration": "workspace:*",
     "@voxstudio/platform-bun": "workspace:*",
     "@voxstudio/realtime-gateway": "workspace:*",

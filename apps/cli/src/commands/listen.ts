@@ -2,6 +2,7 @@ import { probeEngine, AsrClient, LlmClient, TtsClient, type Fetch } from "@voxst
 import { engine } from "@voxstudio/config";
 import { type ConversationTool, runConversation, type ConversationPlayer } from "@voxstudio/conversation";
 import type { VoxConfig } from "@voxstudio/contracts";
+import { connectMcpServers, type McpToolSource } from "@voxstudio/mcp";
 import {
   DuplexSession,
   EnergyVadSegmenter,
@@ -196,6 +197,7 @@ export async function runListen(
   const speakerHost = options.speakerDuplex ? await platform.startSpeakerDuplex?.() : undefined;
   const capture = speakerHost?.capture ?? await platform.capture(options.device);
   let stopping = false;
+  let mcpSource: McpToolSource | undefined;
 
   const stop = (): void => {
     if (stopping) return;
@@ -273,7 +275,15 @@ export async function runListen(
         },
       },
     ];
-    conversationOptions.tools = tools;
+    // MCP tools join through the same registration (docs/mcp-tools.md); a dead server
+    // is logged and skipped, and the built-in names stay reserved.
+    mcpSource = config.mcpServers.length > 0
+      ? await connectMcpServers(config.mcpServers, {
+        log: line => io.err(`listen: ${line}`),
+        reservedNames: tools.map(tool => tool.name),
+      })
+      : undefined;
+    conversationOptions.tools = [...tools, ...(mcpSource?.tools() ?? [])];
     let keytermCache: { at: number; terms: string[] } | undefined;
     conversationOptions.keyterms = async () => {
       if (keytermCache && Date.now() - keytermCache.at < 60_000) return keytermCache.terms;
@@ -296,6 +306,7 @@ export async function runListen(
       onKeytermCorrection: (from, to) => io.err(`keyterm: "${from}" -> "${to}"`),
       onToolCall: (name, args) => io.err(`tool: ${name} ${JSON.stringify(args)}`),
       onToolResult: (name, ok) => io.err(`tool: ${name} ${ok ? "ok" : "failed"}`),
+      onToolPending: (name, args) => io.err(`tool: ${name} ${JSON.stringify(args)} awaiting spoken confirmation`),
       ...(options.saveUtterances === undefined ? {} : {
         onUtterance: async (wav: Uint8Array, transcript: string) => {
           // An explicit opt-in per the privacy rules. The empty-transcript failures are the
@@ -312,6 +323,7 @@ export async function runListen(
   } finally {
     process.removeListener("SIGINT", stop);
     stop();
+    await mcpSource?.close();
     await speakerHost?.close();
   }
 }

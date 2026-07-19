@@ -2,6 +2,7 @@ import type {
   ChunkConfig,
   EngineConfig,
   EngineKind,
+  McpServerConfig,
   ResolvedEngineConfig,
   TtsDefaults,
   VoxConfig,
@@ -256,7 +257,47 @@ export function parseConfig(input: unknown = {}, env: Environment = {}): VoxConf
     engines, roles, ttsDefaults,
     chunking: chunkingFromRaw(raw.chunking, env),
     keyterms: (keyterms as string[] | undefined) ?? [],
+    mcpServers: mcpServersFromRaw(raw.mcp_servers),
   };
+}
+
+function mcpServersFromRaw(input: unknown): McpServerConfig[] {
+  if (input === undefined) return [];
+  const servers: McpServerConfig[] = [];
+  for (const [name, value] of Object.entries(record(input))) {
+    const entry = record(value);
+    const command = entry.command;
+    const url = entry.url;
+    if ((command === undefined) === (url === undefined)) {
+      throw new ConfigError(`mcp_servers.${name}: exactly one of \`command\` (stdio) or \`url\` (HTTP) is required`);
+    }
+    const args = entry.args;
+    if (args !== undefined && (!Array.isArray(args) || args.some(item => typeof item !== "string"))) {
+      throw new ConfigError(`mcp_servers.${name}: \`args\` must be a list of strings`);
+    }
+    const envMap = entry.env === undefined ? undefined : record(entry.env);
+    if (envMap !== undefined && Object.values(envMap).some(item => typeof item !== "string")) {
+      throw new ConfigError(`mcp_servers.${name}: \`env\` values must be strings`);
+    }
+    for (const [key, expected] of [["command", command], ["url", url], ["token_env", entry.token_env]] as const) {
+      if (expected !== undefined && typeof expected !== "string") {
+        throw new ConfigError(`mcp_servers.${name}: \`${key}\` must be a string`);
+      }
+    }
+    if (entry.trust !== undefined && typeof entry.trust !== "boolean") {
+      throw new ConfigError(`mcp_servers.${name}: \`trust\` must be a boolean`);
+    }
+    servers.push({
+      name,
+      ...(command === undefined ? {} : { command: command as string }),
+      ...(args === undefined ? {} : { args: args as string[] }),
+      ...(envMap === undefined ? {} : { env: envMap as Record<string, string> }),
+      ...(url === undefined ? {} : { url: url as string }),
+      ...(entry.token_env === undefined ? {} : { tokenEnv: entry.token_env as string }),
+      ...(entry.trust === undefined ? {} : { trust: entry.trust }),
+    });
+  }
+  return servers;
 }
 
 /**

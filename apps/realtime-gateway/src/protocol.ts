@@ -70,6 +70,7 @@ export type GatewayEventPayload =
   | { type: "session.snapshot"; state: DuplexState; currentTurnId?: string; lastSequence: number }
   | { type: "tool.call"; turnId: string; name: string; arguments: Record<string, unknown> }
   | { type: "tool.result"; turnId: string; name: string; ok: boolean; result?: unknown }
+  | { type: "tool.pending"; turnId: string; name: string; arguments: Record<string, unknown> }
   | { type: "session.notice"; message: string }
   | { type: "command.accepted"; commandType: GatewayCommandType; idempotencyKey: string }
   | { type: "command.duplicate"; commandType: GatewayCommandType; idempotencyKey: string }

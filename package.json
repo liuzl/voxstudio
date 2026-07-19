@@ -16,7 +16,8 @@
     "build:web": "bun run --cwd apps/web build && bun tools/ensure-web-assets.ts",
     "build:report": "bun tools/build-report.ts",
     "measure:tools": "bun apps/realtime-gateway/tools/measure-tools.ts",
-    "measure:openai": "bun apps/realtime-gateway/tools/measure-openai-adapter.ts"
+    "measure:openai": "bun apps/realtime-gateway/tools/measure-openai-adapter.ts",
+    "measure:mcp": "bun apps/realtime-gateway/tools/measure-mcp.ts"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

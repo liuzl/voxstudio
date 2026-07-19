@@ -32,11 +32,12 @@ export interface GatewaySessionOptions {
   /** Live engine health, for the get_engine_status tool. */
   engineStatus?: () => Promise<{ name: string; kind: string | null; healthy: boolean }[]>;
   /**
-   * Surface-injected tools appended after the built-in session tools — the OpenAI
-   * adapter registers client-declared functions here. Names must not collide with
-   * `builtinToolNames`; the injecting surface guards that.
+   * Surface-injected tools appended after the built-in session tools — MCP bridge
+   * tools and the OpenAI adapter's client-declared functions arrive here. A provider,
+   * awaited at session start, because the MCP connection races gateway startup. Names
+   * must not collide with `builtinToolNames`; the injecting surface guards that.
    */
-  extraTools?: ConversationTool[];
+  extraTools?: () => Promise<ConversationTool[]>;
   loadSileroVad?: (() => Promise<SpeechProbabilityModel>) | undefined;
   /** How long a detached session survives waiting for a reconnect. */
   reconnectGraceMs?: number;
@@ -202,7 +203,7 @@ export class GatewaySession {
         },
         currentEngine: () => ttsEngineName,
       }),
-      ...(this.options.extraTools ?? []),
+      ...(await this.options.extraTools?.() ?? []),
     ];
     this.conversation = runConversation({
       session: this.duplex,
@@ -234,6 +235,7 @@ export class GatewaySession {
       }),
       onToolCall: (name, args, turn) => this.emit({ type: "tool.call", turnId: turn.id, name, arguments: args }),
       onToolResult: (name, ok, result, turn) => this.emit({ type: "tool.result", turnId: turn.id, name, ok, result }),
+      onToolPending: (name, args, turn) => this.emit({ type: "tool.pending", turnId: turn.id, name, arguments: args }),
     });
     // The loop ending — frame source closed, session closed, or a crash — always tears the
     // session down; a gateway session with no loop behind it would accept audio into a void.

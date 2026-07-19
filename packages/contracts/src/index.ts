@@ -52,6 +52,21 @@ export interface VoxConfig {
   chunking: ChunkConfig;
   /** Product terms ASR tends to mishear; transcripts are conservatively corrected toward them. */
   keyterms: string[];
+  /** MCP servers whose tools join the conversation (docs/mcp-tools.md); config order is registration order. */
+  mcpServers: McpServerConfig[];
+}
+
+/** One entry under `mcp_servers:` — stdio (command) or streamable HTTP (url), never both. */
+export interface McpServerConfig {
+  name: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  /** Environment variable naming the bearer token for an HTTP server; secrets stay out of yaml. */
+  tokenEnv?: string;
+  /** Operator's signature: skip spoken confirmation — this server's tools run as `session` effects. */
+  trust?: boolean;
 }
 
 export interface Transcription {

@@ -63,3 +63,15 @@ chunking:
   join_pause_ms: 210              # the gap a listener should perceive at a seam
   trim_floor_db: 25.0             # gate this far below the speech level (not the peak)
   edge_pad_ms: 40                 # keep this much sub-gate audio; it holds the consonants
+
+# MCP servers whose tools join the voice conversation (docs/mcp-tools.md).
+# Tools with readOnlyHint execute immediately; everything else waits for the user's
+# spoken confirmation — unless the server is marked `trust: true`.
+# mcp_servers:
+#   memo:
+#     command: bun                      # stdio server: command + args (+ env)
+#     args: [packages/mcp/tools/memo-server.ts]
+#   weather:
+#     url: https://example.com/mcp      # streamable HTTP server
+#     token_env: WEATHER_TOKEN          # bearer token comes from the environment
+#     trust: true                       # operator's signature: skip confirmation
