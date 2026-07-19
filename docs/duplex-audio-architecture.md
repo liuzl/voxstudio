@@ -1,6 +1,10 @@
 # Duplex audio architecture
 
-Status: Accepted, 2026-07-12. Phase 1 session kernel implemented.
+Status: Accepted, 2026-07-12; a living architecture document since. Delivered so far:
+the session kernel, the shared conversation loop, the realtime gateway and Web Studio
+realtime, the OpenAI Realtime dialect ([openai-realtime-adapter.md](./openai-realtime-adapter.md)),
+and the first-chunk clause fast path (§Turn timing). LiveKit remote transport stays
+planned.
 
 ## Scope
 
@@ -415,7 +419,9 @@ session.stop             { }
 `SessionStartOptions` (all optional): `language`, `system`, `maxTokens`,
 `voice`, `bargeIn`, `turnTaking` (`conservative`|`speculative`), `reopenMs`,
 `vad` (`energy`|`silero`), `threshold`, `silenceMs`, `minSpeechMs`,
-`playbackAck`, and the engine-instance overrides `asrEngine`/`llmEngine`/
+`playbackAck`, the etiquette options `welcome` and `nudgeAfterSeconds`
+([conversation-etiquette.md](./conversation-etiquette.md)), and the
+engine-instance overrides `asrEngine`/`llmEngine`/
 `ttsEngine` (unset = the configured role default; an unknown name is a
 `400`/rejection, never a silent fallback). An unknown command type, wrong `v`,
 or missing `idempotencyKey` is rejected without touching session state.
@@ -434,6 +440,9 @@ turn.started|interrupted|completed|false_barge_in|reopened { turnId, ... }
 turn.timing         { turnId, endReason, offsetsMs: { vad_end, thinking,
                        asr_done, llm_first, speaking, tts_first_audio, playback_first } }
 audio.queue_overflow|discarded { turnId, queuedMs, maxQueuedMs }
+tool.call           { turnId, name, arguments }       # tool loop (tool-loop.md)
+tool.result         { turnId, name, ok, result? }
+tool.pending        { turnId, name, arguments }       # awaiting spoken confirmation (mcp-tools.md)
 session.snapshot    { state, currentTurnId?, lastSequence }
 session.notice      { message }
 command.accepted|duplicate|rejected { commandType, idempotencyKey, reason? }

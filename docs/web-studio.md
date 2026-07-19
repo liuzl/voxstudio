@@ -135,8 +135,20 @@ below rather than relitigated per feature.
    `index.html`. Known limit, stated in the command's usage: the compiled binary
    carries no ONNX runtime, so barge-in detection degrades loudly to the certified
    energy detector — WASM Silero (onnxruntime-web) is the open follow-up, shared
-   with the CLI's release packaging. The voxstudio.cc deployment itself remains.
-6. **v2**: effects chain, Stories editor, MCP management panel, public demo decision.
+   with the CLI's release packaging. The voxstudio.cc deployment itself remains;
+   its access model and gateway guardrails are designed and delivered in
+   [public-demo.md](./public-demo.md) — what remains is the ops half (tunnel +
+   Access configuration, internal repo).
+6. **v2**: effects chain, Stories editor, MCP management panel.
+
+**Shell updates, 2026-07-17…19** (delivered incrementally, each with its commit):
+Chinese/English i18n with the source string as the key; the start card reduced to
+one decision (the voice — the ASR hint is fixed to auto by measurement); tool
+caption chips, including the amber pending-confirmation chip
+([mcp-tools.md](./mcp-tools.md)); conversation-etiquette fields in Settings,
+persisted in localStorage ([conversation-etiquette.md](./conversation-etiquette.md));
+and every tab a URL over the History API — deep links and refresh land on the
+right panel through the gateway's existing SPA fallback.
 
 No phase creates empty directories; each is introduced with its first tested module
 (the same rule the duplex phases follow).

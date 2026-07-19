@@ -21,6 +21,12 @@ The repository has one product app and a small, tested orchestration core. Web, 
 desktop, and mobile apps have not started. Migrating after those apps exist would either
 duplicate orchestration in Python and TypeScript or require a larger coordinated rewrite.
 
+> *Update 2026-07-19*: the argument above carried — the migration happened while it was
+> still cheap, and the apps then arrived on the shared TypeScript core as planned: the
+> Web Studio ([web-studio.md](./web-studio.md)) and the MCP surface (`apps/mcp`,
+> [agent-voice-mcp.md](./agent-voice-mcp.md); stdio delivered, HTTP is its phase 2).
+> Desktop and mobile remain open. The rationale below is kept as written.
+
 The goal is not to put every platform behind one runtime. It is to share contracts and
 pure domain behavior while keeping recording, playback, files, credentials, and UI behind
 platform adapters.

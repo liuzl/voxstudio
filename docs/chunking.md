@@ -365,6 +365,17 @@ the pipe holds well under a second of audio. Writing to it from the synthesis lo
 generation wait for playback: measured end-to-end RTF went from 0.33 to 1.04, and the buffer
 was underrun at every seam. Pipe from a background thread (`sinks.PlayerSink` does).
 
+### Conversation only: the first chunk may end at a clause
+
+In a live reply the text is still being *generated* while the first chunk waits for its
+sentence ender — at ~59 chars/s that wait measured 60–70% of end-of-speech → first audio
+(2026-07-19). `first_clause_seconds` lets the *first* chunk (only) end at clause
+punctuation once its estimated speech duration passes the threshold; every later chunk
+keeps the sentence rule, so at most one seam falls mid-sentence, cushioned by the same
+`join_pause_ms`. Off by default here — long-form reading is seam-bound, not
+latency-bound — and defaulted to 1.2 s by the conversation loop, where it cut the
+dominant wait by 40% (measurement and the ear test: duplex doc §Turn timing).
+
 ## A note on `timesteps`
 
 Lowering `timesteps` below the default of 10 does not speed up the PyTorch backend. Fewer

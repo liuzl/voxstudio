@@ -59,8 +59,10 @@ degradation, and compound commands land both tools through the loop's rounds.
 3. **Side effects are declared, not guessed.** `effect: "read" | "session" |
    "external"`. `read` (status queries) and `session` (voice, speed, end_call —
    scoped to this session, trivially reversible) execute immediately. `external`
-   tools require a spoken confirmation flow whose design is deferred — but the
-   field exists from day one so the boundary is structural, not remembered.
+   tools require a spoken confirmation flow — deferred at writing, delivered
+   2026-07-19 with the first external tools ([mcp-tools.md](./mcp-tools.md)) —
+   and the field existed from day one so the boundary is structural, not
+   remembered.
 4. **The two spike rules are part of the certified prompt.** They ride with the
    loop's system prompt in `packages/conversation`, not per-surface improvisation;
    changing them means re-running the tool gate.

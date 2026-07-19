@@ -48,7 +48,7 @@ de-facto realtime-voice wire standard across vendors.
 | Voices | built-in + custom, pronunciation/keyterm tuning; cloning depth unknown | cloning + zero-shot design + **SHA-256 reproducibility auditing** |
 | Barge-in / turns | an interrupt toggle; quality not observable | certified gates with numbers (0 self-interruptions, 12/12 barge-ins, 574 ms p50 detection) |
 | Data boundary | audio on their infra; 30-day conversation retention | in-memory by default; retention only by explicit action |
-| Latency | unpublished (telephony path; needs measurement) | fully local p50 ≈ 2.1 s, every hop measurable |
+| Latency | unpublished (telephony path; needs measurement) | fully local, end of speech → first audio ≈ 1.0 s on long answers (clause fast path, 2026-07-19), every hop measurable |
 
 ## Positioning conclusions
 
