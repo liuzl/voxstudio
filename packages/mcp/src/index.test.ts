@@ -100,3 +100,24 @@ describe("mcp bridge", () => {
     await source.close();
   });
 });
+
+describe("mcp bridge connect timeout", () => {
+  test("a hung server is skipped within the ceiling instead of blocking the surface", async () => {
+    const hanging = {
+      start: () => new Promise<void>(() => {}),
+      send: async () => {},
+      close: async () => {},
+    };
+    const lines: string[] = [];
+    const started = Date.now();
+    const source = await connectMcpServers([{ name: "hung", command: "unused" }], {
+      log: line => lines.push(line),
+      connectTimeoutMs: 200,
+      transportFor: () => hanging as never,
+    });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(source.tools()).toEqual([]);
+    expect(lines.some(line => line.includes("hung unavailable"))).toBe(true);
+    await source.close();
+  });
+});

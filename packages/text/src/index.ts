@@ -244,11 +244,15 @@ export class SentenceAssembler {
       if (!clauseBreaks.has(char)) continue;
       if (char === "," || char === ":" || char === ";") {
         const next = chars[index + 1];
-        if (next === undefined || /[0-9]/.test(next)) continue;
+        if (next === undefined || /\p{Nd}/u.test(next)) continue;
       }
       // A closing quote or bracket right after the boundary belongs to this clause.
       let end = index;
       while (end + 1 < chars.length && closers.has(chars[end + 1] as string)) end += 1;
+      // Cut only when text already continues past the boundary: the remainder keeps the
+      // stream's one-chunk lookahead flowing (an empty buffer would park the cut chunk
+      // until the next delta), and a boundary at the very edge may yet grow a closer.
+      if (end + 1 >= chars.length) continue;
       const prefix = chars.slice(0, end + 1).join("");
       if (estSeconds(prefix) < minSeconds) continue;
       this.buffer = chars.slice(end + 1).join("");

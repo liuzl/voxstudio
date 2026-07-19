@@ -160,6 +160,9 @@ export class GatewaySession {
     this.sink = sink;
     this.playbackAck = start.playbackAck ?? false;
     const vad = await this.createVad(start);
+    // A socket that closed while the awaits above ran already stopped this session;
+    // starting the kernel now would revive a session the registry has forgotten.
+    if (this.stopped) return;
     const turnTaking = start.turnTaking ?? "speculative";
     const config = this.options.config;
     // Engine overrides are validated against the registry before the session runs; a
@@ -205,6 +208,7 @@ export class GatewaySession {
       }),
       ...(await this.options.extraTools?.() ?? []),
     ];
+    if (this.stopped) return;
     this.conversation = runConversation({
       session: this.duplex,
       vad,

@@ -310,3 +310,62 @@ describe("openai realtime adapter", () => {
     native.close();
   });
 });
+
+describe("openai adapter beside MCP tools", () => {
+  test("a client-declared function shadows a same-named MCP tool: the call routes to the client", async () => {
+    let chatRound = 0;
+    const mcpConfig = parseConfig({
+      engines: {
+        asr: { base_url: "http://asr.test" },
+        llm: { base_url: "http://llm.test" },
+        tts: { base_url: "http://tts.test" },
+      },
+      mcp_servers: { memo: { command: "bun", args: ["packages/mcp/tools/memo-server.ts"] } },
+    });
+    gateway = startGateway({
+      config: mcpConfig,
+      port: 0,
+      fetch: engineFetch({
+        "/v1/chat/completions": async () => {
+          chatRound += 1;
+          if (chatRound === 1) {
+            return Response.json({ choices: [{ message: { content: "", tool_calls: [
+              { id: "c1", type: "function", function: { name: "add_memo", arguments: "{\"content\":\"买牛奶\"}" } },
+            ] } }] });
+          }
+          return Response.json({ choices: [{ message: { content: "已记下。" } }] });
+        },
+      }),
+    });
+    const client = new OaiClient(gateway.url);
+    await client.ready();
+    client.send({
+      type: "session.update",
+      session: {
+        turn_detection: { type: "server_vad", silence_duration_ms: 30 },
+        tools: [{ type: "function", name: "add_memo", description: "客户端自己的备忘工具", parameters: { type: "object", properties: { content: { type: "string" } } } }],
+      },
+    });
+    await client.until(events => events.some(event => event.type === "session.updated"), "session.updated");
+    client.speak(25, 0.2);
+    client.speak(15, 0);
+
+    // The client's declaration wins: the call comes out as a function_call round-trip,
+    // never a silent server-side MCP execution.
+    await client.until(events => events.some(event => event.type === "response.function_call_arguments.done")
+      && events.some(event => event.type === "response.done"), "function call routed to the client", 15_000);
+    const call = client.ofType("response.function_call_arguments.done")[0] as { call_id?: string; name?: string };
+    expect(call.name).toBe("add_memo");
+    client.send({
+      type: "conversation.item.create",
+      item: { type: "function_call_output", call_id: call.call_id, output: "{\"ok\":true}" },
+    });
+    client.send({ type: "response.create" });
+    await client.until(events => events.filter(event => event.type === "response.done").length >= 2, "continuation", 15_000);
+    expect(client.ofType("error").length).toBe(0);
+    // Settle the close handshake before afterEach stops the gateway: stopping while the
+    // close is in flight trips the Bun force-stop hang the server now bounds.
+    client.close();
+    await client.closed;
+  }, 15_000);
+});

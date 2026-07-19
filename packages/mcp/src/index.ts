@@ -23,6 +23,12 @@ export interface ConnectOptions {
   log?: (line: string) => void;
   /** Per-call ceiling before an MCP server's silence becomes a structured tool error. */
   callTimeoutMs?: number;
+  /**
+   * Ceiling on connect + tool listing per server (default 5s). A hung server is skipped
+   * like a dead one — surfaces await this connection before their first conversation, so
+   * unbounded here means a session that never starts.
+   */
+  connectTimeoutMs?: number;
   /** Names already taken by built-in session tools; colliding MCP tools get the server prefix. */
   reservedNames?: readonly string[];
   /** Test seam: transports by server name, instead of spawning/dialing real ones. */
@@ -91,11 +97,22 @@ export async function connectMcpServers(
   const taken = new Set<string>(options.reservedNames ?? []);
 
   for (const server of servers) {
+    let client: Client | undefined;
     try {
-      const client = new Client({ name: "voxstudio", version: "1.0.0" });
+      client = new Client({ name: "voxstudio", version: "1.0.0" });
       const transport = options.transportFor?.(server) ?? transportFrom(server);
-      await client.connect(transport);
-      const listing = await client.listTools();
+      const connected = client;
+      const connecting = client.connect(transport).then(() => connected.listTools());
+      const timeoutMs = options.connectTimeoutMs ?? 5_000;
+      const listing = await Promise.race([
+        connecting,
+        new Promise<never>((_, reject) => {
+          setTimeout(() => { reject(new Error(`did not answer within ${timeoutMs}ms`)); }, timeoutMs);
+        }),
+      ]);
+      // A late arrival after the timeout lost the race: the rejection above already
+      // skipped the server, and this handler just keeps the loss from being unhandled.
+      connecting.catch(() => {});
       clients.push({ name: server.name, client });
       for (const entry of listing.tools) {
         // Raw names are what authors tuned their descriptions for; a collision with a
@@ -114,7 +131,7 @@ export async function connectMcpServers(
             effect,
             handler: async (args, signal) => {
               try {
-                const result = await client.callTool(
+                const result = await connected.callTool(
                   { name: entry.name, arguments: args },
                   undefined,
                   { signal, timeout: options.callTimeoutMs ?? defaultCallTimeoutMs },
@@ -130,6 +147,7 @@ export async function connectMcpServers(
       log(`mcp: ${server.name} connected, ${listing.tools.length} tools`);
     } catch (error) {
       log(`mcp: ${server.name} unavailable, skipped: ${error instanceof Error ? error.message : String(error)}`);
+      void client?.close().catch(() => {});
     }
   }
 

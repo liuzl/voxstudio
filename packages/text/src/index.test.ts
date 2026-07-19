@@ -108,3 +108,22 @@ describe("SentenceAssembler.takeClause", () => {
     expect(assembler.takeClause(1.2)).toBe("他说“稍等一下我马上到，”");
   });
 });
+
+describe("SentenceAssembler.takeClause boundary edges", () => {
+  test("a boundary at the buffer's edge waits for continuation", () => {
+    const assembler = new SentenceAssembler();
+    assembler.push("今天的天气非常不错，");
+    // Nothing follows yet: the cut would strand the chunk in the stream's lookahead hold.
+    expect(assembler.takeClause(1.2)).toBeUndefined();
+    assembler.push("适合");
+    expect(assembler.takeClause(1.2)).toBe("今天的天气非常不错，");
+  });
+
+  test("Unicode digits guard ASCII separators like ASCII digits do", () => {
+    const assembler = new SentenceAssembler();
+    assembler.push("المجموع ١٢,٣٤٥ ريال تقريبا يا صديقي,");
+    assembler.push(" وهذا كثير");
+    // "١٢," is inside a number; the clause comma later is the boundary.
+    expect(assembler.takeClause(0.5)).toBe("المجموع ١٢,٣٤٥ ريال تقريبا يا صديقي,");
+  });
+});

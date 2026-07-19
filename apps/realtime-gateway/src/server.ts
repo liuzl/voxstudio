@@ -267,11 +267,12 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       listVoices: async () => (await collectVoices()).map(voice => ({ id: voice.id, engine: voice.engine })),
       engineStatus: collectEngines,
       extraTools: async () => {
-        // MCP tools first, surface extras (OpenAI-adapter client tools) after; the
-        // built-ins always win and duplicates keep their first registration.
+        // Built-ins always win; then the surface's own tools (an OpenAI client owns the
+        // function names it declared — an ambient MCP tool must never absorb its calls);
+        // MCP tools last. Duplicates keep their first registration.
         const taken = new Set<string>(builtinToolNames);
         const composed: ConversationTool[] = [];
-        for (const tool of [...(mcpSource ? (await mcpSource).tools() : []), ...extraTools]) {
+        for (const tool of [...extraTools, ...(mcpSource ? (await mcpSource).tools() : [])]) {
           if (taken.has(tool.name)) continue;
           taken.add(tool.name);
           composed.push(tool);
@@ -455,7 +456,15 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       for (const session of sessions.values()) session.stop();
       await Promise.allSettled([...sessions.values()].map(session => session.done));
       if (mcpSource) await (await mcpSource).close().catch(() => {});
-      await server.stop(true);
+      // Bounded: Bun's force-stop has been observed to never resolve when a client's
+      // WebSocket close handshake is still in flight at stop time (reproduced 2026-07-19
+      // with an MCP-configured gateway). The sockets are already torn down above; a stop
+      // that will not say so must not wedge shutdown.
+      const finished = await Promise.race([
+        server.stop(true).then(() => true),
+        new Promise<false>(resolve => { setTimeout(() => { resolve(false); }, 2_000); }),
+      ]);
+      if (!finished) log("gateway stop: server.stop did not settle within 2s; proceeding with shutdown");
     },
   };
 }
