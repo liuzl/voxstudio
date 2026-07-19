@@ -20,6 +20,12 @@ export interface GatewayServerOptions {
   reconnectGraceMs?: number;
   /** OpenAI-dialect connections: how long a client may take to answer a function call. */
   openAiFunctionCallTimeoutMs?: number;
+  /** Demo guardrails (docs/public-demo.md): new conversations refused at this many live sessions. */
+  maxSessions?: number;
+  /** Every session notices and stops at this ceiling. */
+  maxSessionSeconds?: number;
+  /** Registry writes 403 and MCP servers stay unconnected, regardless of config. */
+  demoMode?: boolean;
   loadSileroVad?: () => Promise<SpeechProbabilityModel>;
   /** Decodes compressed (Opus) TTS streams from engines configured with stream_format. */
   pcmDecoder?: PcmStreamDecoder;
@@ -253,12 +259,25 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   };
 
   // MCP servers connect once per gateway process (docs/mcp-tools.md); sessions await the
-  // connection through the extraTools provider, so startup order costs nothing.
-  const mcpSource: Promise<McpToolSource> | undefined = options.config.mcpServers.length > 0
-    ? connectMcpServers(options.config.mcpServers, { log, reservedNames: builtinToolNames })
-    : undefined;
+  // connection through the extraTools provider, so startup order costs nothing. Demo mode
+  // leaves them unconnected regardless of config — external tools have no business there.
+  const mcpSource: Promise<McpToolSource> | undefined =
+    options.config.mcpServers.length > 0 && options.demoMode !== true
+      ? connectMcpServers(options.config.mcpServers, { log, reservedNames: builtinToolNames })
+      : undefined;
+
+  /** Thrown by createSession at the capacity guardrail; both dialects translate it. */
+  class CapacityError extends Error {
+    constructor() {
+      super("session_capacity");
+    }
+  }
 
   const createSession = (extraTools: ConversationTool[] = []): GatewaySession => {
+    if (options.maxSessions !== undefined && sessions.size >= options.maxSessions) {
+      log(`session refused: at the ${options.maxSessions}-session capacity`);
+      throw new CapacityError();
+    }
     const session = new GatewaySession({
       config: options.config,
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
@@ -281,6 +300,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       },
       loadSileroVad: options.loadSileroVad,
       ...(options.reconnectGraceMs === undefined ? {} : { reconnectGraceMs: options.reconnectGraceMs }),
+      ...(options.maxSessionSeconds === undefined ? {} : { maxSessionSeconds: options.maxSessionSeconds }),
       onClosed: closed => { sessions.delete(closed.id); },
       ...(options.log === undefined ? {} : { log: options.log }),
     });
@@ -291,7 +311,13 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   const handleFirstCommand = (ws: ServerWebSocket<SocketData>, command: GatewayCommand): void => {
     const sink = sinkFor(ws);
     if (command.type === "session.start") {
-      const session = createSession();
+      let session: GatewaySession;
+      try {
+        session = createSession();
+      } catch (error) {
+        sink.send(rejection("", error instanceof CapacityError ? "session_capacity" : "session_unavailable", command));
+        return;
+      }
       ws.data.session = session;
       session.recordCommand(command);
       void session.start(command.options ?? {}, sink)
@@ -364,8 +390,15 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
         return engineList();
       }
+      // Demo mode (docs/public-demo.md): the registry is read-only — picking voices is
+      // the demo, minting or deleting them is not.
+      const demoRefusal = (): Response => Response.json(
+        { error: { message: "registry writes are disabled in demo mode", code: "demo_mode" } },
+        { status: 403 },
+      );
       if (url.pathname === "/v1/design-profiles") {
         if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+        if (options.demoMode === true) return demoRefusal();
         // Zero-shot voice design is an engine capability, not a given.
         const selected = selectEngine(url, "tts", "tts", "design");
         if (selected instanceof Response) return selected;
@@ -374,6 +407,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       if (url.pathname === "/v1/voices") {
         if (request.method === "GET") return aggregatedVoices();
         if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+        if (options.demoMode === true) return demoRefusal();
         // Registration needs a registry: route to the clone-capable instance by default.
         const selected = selectEngine(url, "tts", "tts", "clone");
         if (selected instanceof Response) return selected;
@@ -381,6 +415,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       }
       if (voiceEntryPattern.test(url.pathname)) {
         if (!["GET", "DELETE"].includes(request.method)) return new Response("method not allowed", { status: 405 });
+        if (request.method === "DELETE" && options.demoMode === true) return demoRefusal();
         const selected = selectEngine(url, "tts", "tts", "clone");
         if (selected instanceof Response) return selected;
         return proxy(request, selected[1], url.pathname, selected[0]);

@@ -551,3 +551,84 @@ describe("realtime gateway", () => {
     expect((await fetch(gateway.url, { method: "POST" })).status).toBe(401);
   });
 });
+
+describe("public demo guardrails", () => {
+  test("the session cap refuses the N+1th conversation and frees on close", async () => {
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0, maxSessions: 1 });
+    const first = new TestClient(gateway.url);
+    await first.ready();
+    first.command({ type: "session.start", idempotencyKey: "cap-1", options: startOptions });
+    await first.until(events => events.some(event => event.type === "session.snapshot"), "first session up");
+
+    const second = new TestClient(gateway.url);
+    await second.ready();
+    second.command({ type: "session.start", idempotencyKey: "cap-2", options: startOptions });
+    await second.until(events => events.some(event =>
+      event.type === "command.rejected" && "reason" in event && event.reason === "session_capacity"), "capacity rejection");
+
+    // A freed slot admits the next conversation: the cap gates concurrency, not totals.
+    first.command({ type: "session.stop", idempotencyKey: "cap-3" });
+    await first.until(events => events.some(event => event.type === "session.state" && "state" in event && event.state === "closed"), "closed");
+    const third = new TestClient(gateway.url);
+    await third.ready();
+    third.command({ type: "session.start", idempotencyKey: "cap-4", options: startOptions });
+    await third.until(events => events.some(event => event.type === "session.snapshot"), "slot reused");
+    first.close(); second.close(); third.close();
+  });
+
+  test("a session notices and stops at the duration ceiling", async () => {
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0, maxSessionSeconds: 0.3 });
+    const client = new TestClient(gateway.url);
+    await client.ready();
+    client.command({ type: "session.start", idempotencyKey: "ttl-1", options: startOptions });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "session up");
+    await client.until(events => events.some(event =>
+      event.type === "session.notice" && "message" in event && String(event.message).includes("demo ceiling")), "ceiling notice");
+    await client.until(events => events.some(event =>
+      event.type === "session.state" && "state" in event && event.state === "closed"), "stopped");
+    client.close();
+  });
+
+  test("demo mode: registry writes 403, reads stay, MCP stays unconnected", async () => {
+    const mcpConfig = parseConfig({
+      engines: {
+        asr: { base_url: "http://asr.test" },
+        llm: { base_url: "http://llm.test" },
+        tts: { base_url: "http://tts.test", api_key: "sk-engine-secret" },
+      },
+      mcp_servers: { memo: { command: "bun", args: ["packages/mcp/tools/memo-server.ts"] } },
+    });
+    const lines: string[] = [];
+    gateway = startGateway({ config: mcpConfig, fetch: engineFetch(), port: 0, demoMode: true, log: line => lines.push(line) });
+
+    const voicesPost = await fetch(new URL("/v1/voices", gateway.url), { method: "POST", body: "{}" });
+    expect(voicesPost.status).toBe(403);
+    const profilePost = await fetch(new URL("/v1/design-profiles", gateway.url), { method: "POST", body: "{}" });
+    expect(profilePost.status).toBe(403);
+    const voiceDelete = await fetch(new URL("/v1/voices/alice", gateway.url), { method: "DELETE" });
+    expect(voiceDelete.status).toBe(403);
+    expect((await voicesPost.json() as { error: { code: string } }).error.code).toBe("demo_mode");
+
+    const voicesGet = await fetch(new URL("/v1/voices", gateway.url));
+    expect(voicesGet.status).toBe(200);
+    expect(lines.some(line => line.includes("mcp:"))).toBe(false);
+  });
+});
+
+describe("guardrail parse hardening", () => {
+  test("a stopped session's socket close does not re-arm the reconnect grace", async () => {
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0, reconnectGraceMs: 60_000 });
+    const client = new TestClient(gateway.url);
+    await client.ready();
+    client.command({ type: "session.start", idempotencyKey: "g-1", options: startOptions });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "up");
+    client.command({ type: "session.stop", idempotencyKey: "g-2" });
+    await client.until(events => events.some(event =>
+      event.type === "session.state" && "state" in event && event.state === "closed"), "stopped");
+    // Closing the socket after the stop must not retain the dead session behind a timer;
+    // the registry forgetting it is the observable proxy.
+    client.close();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(gateway.sessionCount()).toBe(0);
+  });
+});

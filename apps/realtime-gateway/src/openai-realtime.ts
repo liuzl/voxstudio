@@ -304,7 +304,16 @@ export class OpenAiRealtimeConnection {
 
   private ensureStarted(): Promise<void> {
     if (this.starting) return this.starting;
-    const session = this.options.createSession(this.clientTools.map(tool => this.bridgeTool(tool)));
+    let session: GatewaySession;
+    try {
+      session = this.options.createSession(this.clientTools.map(tool => this.bridgeTool(tool)));
+    } catch (error) {
+      // The capacity guardrail (docs/public-demo.md), in this dialect's vocabulary.
+      this.sendError("session_capacity", error instanceof Error ? error.message : String(error));
+      this.starting = Promise.resolve();
+      this.options.close();
+      return this.starting;
+    }
     this.session = session;
     const start: SessionStartOptions = {
       language: "auto",

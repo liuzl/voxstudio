@@ -41,6 +41,8 @@ export interface GatewaySessionOptions {
   loadSileroVad?: (() => Promise<SpeechProbabilityModel>) | undefined;
   /** How long a detached session survives waiting for a reconnect. */
   reconnectGraceMs?: number;
+  /** Demo guardrail (docs/public-demo.md): the session notices and stops at this ceiling. */
+  maxSessionSeconds?: number;
   /** Called when the session ends for any reason, so the registry can forget it. */
   onClosed?: (session: GatewaySession) => void;
   /** Operational logging (session lifecycle, turn milestones, errors). No transcript text. */
@@ -123,6 +125,7 @@ export class GatewaySession {
   private sequence = 0;
   private sink: EventSink | undefined;
   private graceTimer: ReturnType<typeof setTimeout> | undefined;
+  private lifetimeTimer: ReturnType<typeof setTimeout> | undefined;
   private conversation: Promise<void> | undefined;
   private stopped = false;
   private playbackAck = false;
@@ -163,6 +166,13 @@ export class GatewaySession {
     // A socket that closed while the awaits above ran already stopped this session;
     // starting the kernel now would revive a session the registry has forgotten.
     if (this.stopped) return;
+    if (this.options.maxSessionSeconds !== undefined) {
+      // A demo conversation ends; a forgotten tab does not hold a slot forever.
+      this.lifetimeTimer = setTimeout(() => {
+        this.emit({ type: "session.notice", message: `session reached the ${this.options.maxSessionSeconds}s demo ceiling` });
+        this.stop();
+      }, this.options.maxSessionSeconds * 1_000);
+    }
     const turnTaking = start.turnTaking ?? "speculative";
     const config = this.options.config;
     // Engine overrides are validated against the registry before the session runs; a
@@ -270,6 +280,9 @@ export class GatewaySession {
   }
 
   detach(sink: EventSink): void {
+    // A stopped session must not re-arm a reconnect grace: the timer would keep the dead
+    // object referenced for 30s per start/stop/close cycle (adversarial review 2026-07-19).
+    if (this.stopped) return;
     if (this.sink !== sink) return;
     this.sink = undefined;
     const grace = this.options.reconnectGraceMs ?? 30_000;
@@ -460,6 +473,10 @@ export class GatewaySession {
     if (this.graceTimer !== undefined) {
       clearTimeout(this.graceTimer);
       this.graceTimer = undefined;
+    }
+    if (this.lifetimeTimer !== undefined) {
+      clearTimeout(this.lifetimeTimer);
+      this.lifetimeTimer = undefined;
     }
     this.frames.end();
     this.duplex.close();

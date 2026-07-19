@@ -369,3 +369,16 @@ describe("openai adapter beside MCP tools", () => {
     await client.closed;
   }, 15_000);
 });
+
+describe("openai adapter capacity guardrail", () => {
+  test("a start over capacity answers a structured error and closes", async () => {
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0, maxSessions: 0 });
+    const client = new OaiClient(gateway.url);
+    await client.ready();
+    client.speak(1, 0.2);
+    await client.until(events => events.some(event => event.type === "error"), "capacity error");
+    const error = client.ofType("error")[0] as { error?: { code?: string } };
+    expect(error.error?.code).toBe("session_capacity");
+    await client.closed;
+  });
+});
