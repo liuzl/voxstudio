@@ -11,13 +11,14 @@
     "build:cli": "bun run build:web && bun run --cwd apps/cli build",
     "measure:aec": "./platforms/macos-audio/build.sh && bun run platforms/macos-audio/aec-measure.ts",
     "test:macos-audio": "./platforms/macos-audio/build.sh && bun run platforms/macos-audio/smoke-test.ts",
-    "test:ts": "bun tools/ensure-web-assets.ts && bun test packages platforms apps/cli/src apps/realtime-gateway/src apps/web/src",
+    "test:ts": "bun tools/ensure-web-assets.ts && bun test packages platforms apps/cli/src apps/realtime-gateway/src apps/mcp/src apps/web/src",
     "typecheck": "bun tools/ensure-web-assets.ts && tsc --noEmit && tsc -p apps/web/tsconfig.json --noEmit",
     "build:web": "bun run --cwd apps/web build && bun tools/ensure-web-assets.ts",
     "build:report": "bun tools/build-report.ts",
     "measure:tools": "bun apps/realtime-gateway/tools/measure-tools.ts",
     "measure:openai": "bun apps/realtime-gateway/tools/measure-openai-adapter.ts",
-    "measure:mcp": "bun apps/realtime-gateway/tools/measure-mcp.ts"
+    "measure:mcp": "bun apps/realtime-gateway/tools/measure-mcp.ts",
+    "measure:agent-voice": "bun apps/mcp/tools/measure-agent-voice.ts"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",
