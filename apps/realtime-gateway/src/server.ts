@@ -460,6 +460,13 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
             { status: 404 },
           );
         }
+        // The shutdown window: close() is draining in-flight work; new work must not race it.
+        if (library.isClosed) {
+          return Response.json(
+            { error: { message: "the capture library is shutting down", code: "library_closing" } },
+            { status: 503 },
+          );
+        }
         const notFound = (): Response => Response.json(
           { error: { message: "no such capture", code: "unknown_capture" } },
           { status: 404 },
@@ -483,46 +490,59 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
             headers: { "content-type": "audio/wav", "cache-control": "no-cache" },
           });
         }
+        // A mutation queued when close() flips rejects; that is the shutdown window again.
+        const closing = (): Response => Response.json(
+          { error: { message: "the capture library is shutting down", code: "library_closing" } },
+          { status: 503 },
+        );
         if (sub === "/promote") {
           if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
           return (async (): Promise<Response> => {
-            const capture = library.get(captureId);
-            if (!capture) return notFound();
             const body = await request.json().catch(() => ({})) as { voice_id?: unknown };
             const voiceId = typeof body.voice_id === "string" ? body.voice_id.trim() : "";
             if (!voiceIdPattern.test(voiceId)) {
               return Response.json({ error: { message: "voice_id must match [A-Za-z0-9._-]{1,64}", code: "bad_voice_id" } }, { status: 400 });
             }
-            // A voice sample needs its verbatim text; the correction is the reference.
-            const text = (capture.corrected ?? capture.transcript).trim();
-            if (text === "") {
-              return Response.json(
-                { error: { message: "the capture has no transcript; correct it before promoting", code: "empty_transcript" } },
-                { status: 400 },
-              );
-            }
-            const selected = selectEngine(url, "tts", "tts", "clone");
-            if (selected instanceof Response) return selected;
-            const [engineName, target] = selected;
-            const form = new FormData();
-            form.set("id", voiceId);
-            form.set("text", text);
-            form.set("audio", new File([await Bun.file(library.audioPath(captureId)).bytes()], `${captureId}.wav`, { type: "audio/wav" }));
-            const headers = new Headers();
-            if (target.apiKey) headers.set("authorization", `Bearer ${target.apiKey}`);
-            let upstream: Response;
-            try {
-              upstream = await fetchImpl(new URL("/v1/voices", target.baseUrl), { method: "POST", headers, body: form });
-            } catch (error) {
-              log(`library: promote to ${engineName} unreachable: ${error instanceof Error ? error.message : String(error)}`);
-              return Response.json({ error: { message: `${engineName} engine unreachable`, code: "engine_unreachable" } }, { status: 502 });
-            }
-            if (!upstream.ok) {
-              return new Response(upstream.body, { status: upstream.status, headers: { "content-type": upstream.headers.get("content-type") ?? "application/json" } });
-            }
-            await upstream.body?.cancel().catch(() => {});
-            const updated = library.markPromoted(captureId, voiceId);
-            return Response.json({ capture: updated, engine: engineName });
+            // The whole flow — validate, engine round-trip, mark — holds the capture's
+            // mutation lock: a concurrent delete waits its turn instead of leaving the
+            // clone engine holding a voice the library no longer records.
+            return library.runExclusive(captureId, async (): Promise<Response> => {
+              const capture = library.get(captureId);
+              if (!capture) return notFound();
+              // A voice sample needs its verbatim text; the correction is the reference.
+              const text = (capture.corrected ?? capture.transcript).trim();
+              if (text === "") {
+                return Response.json(
+                  { error: { message: "the capture has no transcript; correct it before promoting", code: "empty_transcript" } },
+                  { status: 400 },
+                );
+              }
+              const selected = selectEngine(url, "tts", "tts", "clone");
+              if (selected instanceof Response) return selected;
+              const [engineName, target] = selected;
+              const form = new FormData();
+              form.set("id", voiceId);
+              form.set("text", text);
+              form.set("audio", new File([await Bun.file(library.audioPath(captureId)).bytes()], `${captureId}.wav`, { type: "audio/wav" }));
+              const headers = new Headers();
+              if (target.apiKey) headers.set("authorization", `Bearer ${target.apiKey}`);
+              let upstream: Response;
+              try {
+                upstream = await fetchImpl(new URL("/v1/voices", target.baseUrl), { method: "POST", headers, body: form });
+              } catch (error) {
+                log(`library: promote to ${engineName} unreachable: ${error instanceof Error ? error.message : String(error)}`);
+                return Response.json({ error: { message: `${engineName} engine unreachable`, code: "engine_unreachable" } }, { status: 502 });
+              }
+              if (!upstream.ok) {
+                return new Response(upstream.body, { status: upstream.status, headers: { "content-type": upstream.headers.get("content-type") ?? "application/json" } });
+              }
+              await upstream.body?.cancel().catch(() => {});
+              const updated = library.markPromoted(captureId, voiceId);
+              return Response.json({ capture: updated, engine: engineName });
+            }).catch((error: unknown) => {
+              if (error instanceof Error && error.message.includes("closed")) return closing();
+              throw error;
+            });
           })();
         }
         if (request.method === "PATCH") {
@@ -531,12 +551,24 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
             if (body.corrected !== null && typeof body.corrected !== "string") {
               return Response.json({ error: { message: "corrected must be a string or null", code: "bad_correction" } }, { status: 400 });
             }
-            const updated = await library.correct(captureId, body.corrected as string | null);
-            return updated ? Response.json(updated) : notFound();
+            try {
+              const updated = await library.correct(captureId, body.corrected as string | null);
+              return updated ? Response.json(updated) : notFound();
+            } catch (error) {
+              if (error instanceof Error && error.message.includes("closed")) return closing();
+              throw error;
+            }
           })();
         }
         if (request.method === "DELETE") {
-          return (async (): Promise<Response> => (await library.remove(captureId)) ? Response.json({ deleted: true }) : notFound())();
+          return (async (): Promise<Response> => {
+            try {
+              return (await library.remove(captureId)) ? Response.json({ deleted: true }) : notFound();
+            } catch (error) {
+              if (error instanceof Error && error.message.includes("closed")) return closing();
+              throw error;
+            }
+          })();
         }
         if (request.method === "GET") {
           const capture = library.get(captureId);
@@ -615,7 +647,9 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       for (const session of sessions.values()) session.stop();
       await Promise.allSettled([...sessions.values()].map(session => session.done));
       if (mcpSource) await (await mcpSource).close().catch(() => {});
-      library?.close();
+      // Draining: in-flight library work (a promote awaiting its engine) finishes
+      // against an open database; only then does the store close.
+      if (library) await library.close();
       // Bounded: Bun's force-stop has been observed to never resolve when a client's
       // WebSocket close handshake is still in flight at stop time (reproduced 2026-07-19
       // with an MCP-configured gateway). The sockets are already torn down above; a stop

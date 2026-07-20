@@ -507,6 +507,16 @@ describe("realtime gateway", () => {
       headers: { authorization: "Bearer gw-secret" },
     });
     expect(allowed.status).toBe(200);
+
+    // The library routes sit behind the same gate (this gateway has no library, so an
+    // authorized request gets the structured 404, never a bare one).
+    expect((await fetch(new URL("/v1/library", gateway.url))).status).toBe(401);
+    expect((await fetch(new URL("/v1/library/x/promote", gateway.url), { method: "POST" })).status).toBe(401);
+    const authorizedLibrary = await fetch(new URL("/v1/library", gateway.url), {
+      headers: { authorization: "Bearer gw-secret" },
+    });
+    expect(authorizedLibrary.status).toBe(404);
+    expect((await authorizedLibrary.json() as { error: { code: string } }).error.code).toBe("library_disabled");
     // Health stays reachable for probes, and reports no session details.
     const health = await fetch(new URL("/healthz", gateway.url));
     expect(health.status).toBe(200);
@@ -737,6 +747,104 @@ describe("capture library", () => {
     expect(refused.status).toBe(400);
     expect((await refused.json() as { error: { code: string } }).error.code).toBe("empty_transcript");
 
+    await Bun.$`rm -rf ${dir}`.quiet().nothrow();
+  });
+
+  test("a delete during a promote's engine round-trip waits its turn", async () => {
+    const dir = tempDir();
+    let releaseEngine!: () => void;
+    const engineGate = new Promise<void>(resolve => { releaseEngine = resolve; });
+    gateway = startGateway({
+      config,
+      port: 0,
+      libraryDir: dir,
+      fetch: engineFetch({
+        "/v1/voices": async request => {
+          if (request.method === "POST") {
+            await engineGate;
+            return Response.json({ id: "race-voice" }, { status: 201 });
+          }
+          return Response.json({ voices: [] });
+        },
+      }),
+    });
+    const client = new TestClient(gateway.url);
+    await client.ready();
+    client.command({ type: "session.start", idempotencyKey: "race-1", options: startOptions });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "session up");
+    client.sendPcm(2, 0.2);
+    client.sendPcm(2, 0);
+    await client.until(events => events.some(event => event.type === "turn.completed"), "turn.completed");
+    client.close();
+    const capture = ((await (await fetch(new URL("/v1/library", gateway.url))).json()) as { captures: { id: string }[] }).captures[0]!;
+
+    // Promote parks on the (held) clone engine; the delete queues behind its lock.
+    const promoting = fetch(new URL(`/v1/library/${capture.id}/promote`, gateway.url), {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ voice_id: "race-voice" }),
+    });
+    await Bun.sleep(50);
+    const deleting = fetch(new URL(`/v1/library/${capture.id}`, gateway.url), { method: "DELETE" });
+    await Bun.sleep(50);
+    releaseEngine();
+
+    const [promoted, deleted] = await Promise.all([promoting, deleting]);
+    // The promote completed and was recorded before the delete ran — never a 200 with
+    // an undefined capture and an untracked voice on the engine.
+    expect(promoted.status).toBe(200);
+    expect(((await promoted.json()) as { capture: { promoted_voice_id: string } }).capture.promoted_voice_id).toBe("race-voice");
+    expect(deleted.status).toBe(200);
+    expect(((await (await fetch(new URL("/v1/library", gateway.url))).json()) as { total: number }).total).toBe(0);
+    await Bun.$`rm -rf ${dir}`.quiet().nothrow();
+  });
+
+  test("shutdown drains an in-flight promote instead of closing the store under it", async () => {
+    const dir = tempDir();
+    let releaseEngine!: () => void;
+    const engineGate = new Promise<void>(resolve => { releaseEngine = resolve; });
+    gateway = startGateway({
+      config,
+      port: 0,
+      libraryDir: dir,
+      fetch: engineFetch({
+        "/v1/voices": async request => {
+          if (request.method === "POST") {
+            await engineGate;
+            return Response.json({ id: "drain-voice" }, { status: 201 });
+          }
+          return Response.json({ voices: [] });
+        },
+      }),
+    });
+    const client = new TestClient(gateway.url);
+    await client.ready();
+    client.command({ type: "session.start", idempotencyKey: "drain-1", options: startOptions });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "session up");
+    client.sendPcm(2, 0.2);
+    client.sendPcm(2, 0);
+    await client.until(events => events.some(event => event.type === "turn.completed"), "turn.completed");
+    client.close();
+    await client.closed;
+    const capture = ((await (await fetch(new URL("/v1/library", gateway.url))).json()) as { captures: { id: string }[] }).captures[0]!;
+
+    const promoting = fetch(new URL(`/v1/library/${capture.id}/promote`, gateway.url), {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ voice_id: "drain-voice" }),
+    }).then(response => response.status, () => "connection-lost" as const);
+    await Bun.sleep(50);
+    const stopping = gateway.stop();
+    await Bun.sleep(50);
+    releaseEngine();
+    // The observable contract: stop() settles (no wedge, no crash on a closed database);
+    // the response itself may be lost to the force-closed socket.
+    await stopping;
+    const outcome = await promoting;
+    expect([200, 503, "connection-lost"]).toContain(outcome);
+
+    // The drained write reached the store before it closed.
+    const { CaptureLibrary } = await import("./library");
+    const reopened = new CaptureLibrary(dir);
+    expect(reopened.get(capture.id)?.promoted_voice_id).toBe("drain-voice");
+    await reopened.close();
+    gateway = undefined;
     await Bun.$`rm -rf ${dir}`.quiet().nothrow();
   });
 

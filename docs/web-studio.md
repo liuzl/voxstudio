@@ -133,6 +133,16 @@ below rather than relitigated per feature.
    rewritten — the correction lives beside it), promotes with the corrected text as
    the reference transcript, and deletes. Gate passed against the live stack the same
    day; the empty-transcript refusal, demo-off, and capacity paths are unit-tested.
+   A same-day adversarial review (codex) added three hardenings, each with its race
+   test: per-capture mutation serialization (a delete queues behind a promote's engine
+   round-trip instead of leaving the clone engine holding a voice the library no longer
+   records, and can no longer resurrect a deleted capture's `.ref.txt`), a draining
+   close (shutdown finishes in-flight library work against an open database, then
+   closes; late arrivals get a structured 503), and atomic ingest (tmp-file writes
+   with the row insert as commit point, plus startup reconciliation that drops
+   audio-less rows and sweeps unowned files). **Later**: a retention quota/eviction
+   policy — an enabled library currently grows without bound, which is fine for an
+   operator's own machine and wrong for anything long-running or shared.
 5. **Settings & hosting**: health surface; voxstudio.cc deployment behind Access.
    **Single-binary packaging delivered 2026-07-16**: `vox studio` serves the browser
    app, the realtime WebSocket, and the credential-hiding REST facade from the one
