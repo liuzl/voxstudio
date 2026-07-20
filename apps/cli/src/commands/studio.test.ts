@@ -54,4 +54,26 @@ describe("vox studio", () => {
     await expect(runStudio(["--serve"], config, io, () => fakeGateway(), false))
       .rejects.toThrow("unknown option");
   });
+
+  test("the retention quota reaches the gateway parsed; typos and a quota without a library fail closed", async () => {
+    const io = collectingIo();
+    let seen: GatewayServerOptions | undefined;
+    const code = await runStudio(
+      ["--library", "/tmp/vox-library", "--library-max-bytes", "512M"],
+      config,
+      io,
+      options => {
+        seen = options;
+        return fakeGateway();
+      },
+      false,
+    );
+    expect(code).toBe(0);
+    expect(seen?.libraryMaxBytes).toBe(512 * 1024 * 1024);
+
+    await expect(runStudio(["--library", "/tmp/x", "--library-max-bytes", "lots"], config, io, () => fakeGateway(), false))
+      .rejects.toThrow("positive byte size");
+    await expect(runStudio(["--library-max-bytes", "512M"], config, io, () => fakeGateway(), false))
+      .rejects.toThrow("requires --library");
+  });
 });

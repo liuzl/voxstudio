@@ -23,6 +23,18 @@ function formatWhen(at: number): string {
   return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
 }
 
+/** Binary units, matching the gateway's K/M/G quota flag. */
+function formatBytes(count: number): string {
+  let value = count;
+  let unit = "B";
+  for (const next of ["KB", "MB", "GB"]) {
+    if (value < 1024) break;
+    value /= 1024;
+    unit = next;
+  }
+  return `${unit === "B" || value >= 100 ? Math.round(value) : value.toFixed(1)} ${unit}`;
+}
+
 /**
  * 素材库 (docs/web-studio.md Phase 4): every retained utterance with its raw ASR text,
  * playable in place; a correction editor that writes the human reference (the ASR
@@ -34,6 +46,8 @@ export function LibraryPanel() {
   const [enabled, setEnabled] = useState<boolean | undefined>(undefined);
   const [captures, setCaptures] = useState<CaptureEntry[]>([]);
   const [total, setTotal] = useState(0);
+  const [bytes, setBytes] = useState(0);
+  const [maxBytes, setMaxBytes] = useState<number | null>(null);
   const [busy, setBusy] = useState("");
   const [editingId, setEditingId] = useState("");
   const [draft, setDraft] = useState("");
@@ -50,6 +64,8 @@ export function LibraryPanel() {
       setEnabled(page.enabled);
       setCaptures(page.captures);
       setTotal(page.total);
+      setBytes(page.bytes);
+      setMaxBytes(page.maxBytes);
     } catch (failure) {
       report(failure);
     }
@@ -62,6 +78,8 @@ export function LibraryPanel() {
       const page = await listCaptures(pageSize, captures.length);
       setCaptures(current => [...current, ...page.captures]);
       setTotal(page.total);
+      setBytes(page.bytes);
+      setMaxBytes(page.maxBytes);
     } catch (failure) {
       report(failure);
     }
@@ -138,7 +156,12 @@ export function LibraryPanel() {
     <div className="mx-auto max-w-6xl space-y-6 px-4 py-6 md:px-8 md:py-10">
       <div className="flex items-center gap-3">
         <h1 className="text-2xl font-semibold">{t("素材库")}</h1>
-        {enabled === true && <span className="text-xs text-ink-500">{t("共 {n} 条", { n: total })}</span>}
+        {enabled === true && (
+          <span className="text-xs text-ink-500">
+            {t("共 {n} 条", { n: total })}
+            {maxBytes !== null && ` · ${t("已用 {used} / {max}", { used: formatBytes(bytes), max: formatBytes(maxBytes) })}`}
+          </span>
+        )}
         <div className="flex-1" />
         <button
           onClick={() => void refresh()}

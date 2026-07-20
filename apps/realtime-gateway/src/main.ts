@@ -1,4 +1,5 @@
 import { ffmpegPcmDecoder, loadConfig, loadSileroVadModel } from "@voxstudio/platform-bun";
+import { parseByteSize } from "./library";
 import { startGateway } from "./server";
 
 const usage = `usage: vox-gateway [--config CONFIG] [--host HOST] [--port PORT] [--token TOKEN]
@@ -12,7 +13,10 @@ Environment: VOX_GATEWAY_HOST, VOX_GATEWAY_PORT, VOX_GATEWAY_TOKEN. Demo guardra
 VOX_GATEWAY_MAX_SESSIONS, VOX_GATEWAY_MAX_SESSION_SECONDS, VOX_GATEWAY_DEMO=1).
 --library DIR (or VOX_GATEWAY_LIBRARY) retains every finalized utterance — WAV +
 transcript in DIR, served at /v1/library for the Web Studio 素材库 panel. Off by
-default; demo mode keeps it off regardless.`;
+default; demo mode keeps it off regardless. --library-max-bytes SIZE (or
+VOX_GATEWAY_LIBRARY_MAX_BYTES; plain bytes or K/M/G, e.g. 512M) bounds retained
+audio: oldest uncorrected/unpromoted captures are evicted first, corrected or
+promoted ones never — ingest is refused instead once they alone fill the quota.`;
 
 async function main(args: string[]): Promise<number> {
   let explicit: string | undefined;
@@ -23,6 +27,7 @@ async function main(args: string[]): Promise<number> {
   let maxSessionSeconds = process.env.VOX_GATEWAY_MAX_SESSION_SECONDS;
   let demoMode = process.env.VOX_GATEWAY_DEMO === "1";
   let libraryDir = process.env.VOX_GATEWAY_LIBRARY;
+  let libraryMaxBytes = process.env.VOX_GATEWAY_LIBRARY_MAX_BYTES;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
     const value = (): string => {
@@ -41,6 +46,7 @@ async function main(args: string[]): Promise<number> {
     else if (arg === "--max-session-seconds") maxSessionSeconds = value();
     else if (arg === "--demo") demoMode = true;
     else if (arg === "--library") libraryDir = value();
+    else if (arg === "--library-max-bytes") libraryMaxBytes = value();
     else throw new TypeError(`vox-gateway: unknown option ${arg}`);
   }
   const config = explicit === undefined ? await loadConfig() : await loadConfig({ explicit });
@@ -59,6 +65,14 @@ async function main(args: string[]): Promise<number> {
   };
   const cappedSessions = positive(maxSessions, "--max-sessions", true);
   const cappedSeconds = positive(maxSessionSeconds, "--max-session-seconds");
+  const hasLibrary = libraryDir !== undefined && libraryDir !== "";
+  const quotaBytes = libraryMaxBytes === undefined || libraryMaxBytes === ""
+    ? undefined
+    : parseByteSize(libraryMaxBytes, "vox-gateway: --library-max-bytes");
+  // A quota with no library is a config mistake; failing closed beats silently ignoring it.
+  if (quotaBytes !== undefined && !hasLibrary) {
+    throw new TypeError("vox-gateway: --library-max-bytes requires --library");
+  }
   const decoder = ffmpegPcmDecoder();
   const gateway = startGateway({
     config,
@@ -68,7 +82,8 @@ async function main(args: string[]): Promise<number> {
     ...(cappedSessions === undefined ? {} : { maxSessions: cappedSessions }),
     ...(cappedSeconds === undefined ? {} : { maxSessionSeconds: cappedSeconds }),
     ...(demoMode ? { demoMode } : {}),
-    ...(libraryDir === undefined || libraryDir === "" ? {} : { libraryDir }),
+    ...(hasLibrary ? { libraryDir: libraryDir as string } : {}),
+    ...(quotaBytes === undefined ? {} : { libraryMaxBytes: quotaBytes }),
     loadSileroVad: loadSileroVadModel,
     ...(decoder === undefined ? {} : { pcmDecoder: decoder }),
     log: line => console.error(line),

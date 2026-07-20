@@ -204,7 +204,9 @@ the voice bank (file upload or in-browser recording, plus design-profile create 
 verify against the engine runtime), the captures library (`vox studio --library DIR`, an
 explicit retention opt-in: every finalized utterance archived with its raw transcript —
 play, re-transcribe, correct inline into a `.ref.txt` the ASR reference workflow scores
-directly, promote to a clone voice sample), and engine settings with live health. Its real-browser
+directly, promote to a clone voice sample; `--library-max-bytes 512M` bounds retained
+audio by evicting the oldest uncorrected, unpromoted captures — curated work is never
+auto-deleted), and engine settings with live health. Its real-browser
 double-talk/barge-in gate, route-change handling, and release packaging of the helper and
 the ONNX runtime remain separate measured delivery phases.
 

@@ -147,6 +147,10 @@ export interface CapturePage {
   enabled: boolean;
   captures: CaptureEntry[];
   total: number;
+  /** Audio bytes currently retained across the whole library. */
+  bytes: number;
+  /** The retention quota, or null when the library is unbounded. */
+  maxBytes: number | null;
 }
 
 interface CaptureWire {
@@ -186,13 +190,15 @@ async function libraryDisabled(response: Response): Promise<boolean> {
 
 export async function listCaptures(limit = 50, offset = 0): Promise<CapturePage> {
   const response = await fetch(`/v1/library?limit=${limit}&offset=${offset}`);
-  if (await libraryDisabled(response)) return { enabled: false, captures: [], total: 0 };
+  if (await libraryDisabled(response)) return { enabled: false, captures: [], total: 0, bytes: 0, maxBytes: null };
   if (!response.ok) await fail(response, "获取素材库");
-  const payload = await response.json() as { captures?: CaptureWire[]; total?: number };
+  const payload = await response.json() as { captures?: CaptureWire[]; total?: number; bytes?: number; max_bytes?: number | null };
   return {
     enabled: true,
     captures: (payload.captures ?? []).map(captureFromWire).filter(entry => entry.id !== ""),
     total: payload.total ?? 0,
+    bytes: payload.bytes ?? 0,
+    maxBytes: payload.max_bytes ?? null,
   };
 }
 

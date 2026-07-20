@@ -23,6 +23,7 @@ const en = {
   "探测中": "Probing",
   // Library panel
   "共 {n} 条": "{n} total",
+  "已用 {used} / {max}": "{used} of {max} used",
   "获取素材库": "Loading the library",
   "素材库未启用。以 --library 目录 启动网关（vox studio --library DIR）后，对话中的每句话会连同转写自动归档到这里——留存是显式的部署决定。":
     "The library is not enabled. Start the gateway with a library directory (vox studio --library DIR) and every utterance you speak in a conversation is archived here with its transcript — retention is an explicit deployment decision.",

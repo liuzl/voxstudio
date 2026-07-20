@@ -34,6 +34,13 @@ export interface GatewayServerOptions {
    * anonymous-ish demo must not retain visitor audio.
    */
   libraryDir?: string;
+  /**
+   * Retention quota over the library's audio bytes: oldest unpinned captures are
+   * evicted to stay under it; corrected/promoted captures are never auto-deleted
+   * (docs/web-studio.md Phase 4). Unbounded when absent — fine for an operator's
+   * own machine, wrong for anything long-running or shared.
+   */
+  libraryMaxBytes?: number;
   loadSileroVad?: () => Promise<SpeechProbabilityModel>;
   /** Decodes compressed (Opus) TTS streams from engines configured with stream_format. */
   pcmDecoder?: PcmStreamDecoder;
@@ -105,7 +112,10 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     log("demo mode: the capture library stays off — a demo must not retain visitor audio");
   }
   const library = options.libraryDir !== undefined && options.demoMode !== true
-    ? new CaptureLibrary(options.libraryDir)
+    ? new CaptureLibrary(options.libraryDir, {
+        ...(options.libraryMaxBytes === undefined ? {} : { maxBytes: options.libraryMaxBytes }),
+        log,
+      })
     : undefined;
 
   const assets = options.staticAssets && Object.keys(options.staticAssets).length > 0

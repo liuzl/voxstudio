@@ -140,9 +140,18 @@ below rather than relitigated per feature.
    close (shutdown finishes in-flight library work against an open database, then
    closes; late arrivals get a structured 503), and atomic ingest (tmp-file writes
    with the row insert as commit point, plus startup reconciliation that drops
-   audio-less rows and sweeps unowned files). **Later**: a retention quota/eviction
-   policy — an enabled library currently grows without bound, which is fine for an
-   operator's own machine and wrong for anything long-running or shared.
+   audio-less rows and sweeps unowned files). **Retention quota delivered 2026-07-21**:
+   `--library-max-bytes SIZE` / `VOX_GATEWAY_LIBRARY_MAX_BYTES` (plain bytes or binary
+   K/M/G; typos fail closed, a quota without `--library` is refused) bounds retained
+   audio. Over quota, the oldest *unpinned* captures are evicted — a capture with a
+   human correction or a promotion is curated work and is never auto-deleted; once
+   pinned captures alone fill the quota, new ingests are refused with a logged reason,
+   so disk stays bounded without touching human work. Enforced at ingest (each victim
+   removed through its own mutation queue — an eviction queues behind an in-flight
+   promote and re-checks pinnedness under that lock) and again on open, where a
+   lowered quota takes effect and pre-quota databases gain a backfilled `bytes`
+   column. `/v1/library` reports `bytes`/`max_bytes` and the 素材库 panel shows usage
+   in the header. All paths unit-tested, including the promote/evict race.
 5. **Settings & hosting**: health surface; voxstudio.cc deployment behind Access.
    **Single-binary packaging delivered 2026-07-16**: `vox studio` serves the browser
    app, the realtime WebSocket, and the credential-hiding REST facade from the one

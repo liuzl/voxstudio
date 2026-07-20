@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { writeWav } from "@voxstudio/audio";
-import { CaptureLibrary } from "./library";
+import { CaptureLibrary, parseByteSize, type CaptureLibraryOptions } from "./library";
 
 const dirs: string[] = [];
 
-function tempLibrary(): CaptureLibrary {
+function tempLibrary(options?: CaptureLibraryOptions): CaptureLibrary {
   const dir = `${import.meta.dir}/../node_modules/.test-library-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   dirs.push(dir);
-  return new CaptureLibrary(dir);
+  return new CaptureLibrary(dir, options);
 }
 
 afterEach(async () => {
@@ -143,5 +144,132 @@ describe("capture library", () => {
     expect(await Bun.file(`${capturesDir}/${kept.id}.wav.tmp`).exists()).toBe(false);
     expect(await Bun.file(library.audioPath(kept.id)).exists()).toBe(true);
     await reopened.close();
+  });
+});
+
+describe("parseByteSize", () => {
+  test("accepts plain bytes and binary K/M/G suffixes, with or without a trailing B", () => {
+    expect(parseByteSize("32044", "quota")).toBe(32_044);
+    expect(parseByteSize("64k", "quota")).toBe(64 * 1024);
+    expect(parseByteSize("512M", "quota")).toBe(512 * 1024 * 1024);
+    expect(parseByteSize("2GB", "quota")).toBe(2 * 1024 ** 3);
+    expect(parseByteSize(" 100 KB ", "quota")).toBe(100 * 1024);
+  });
+
+  test("a typo fails closed instead of running unbounded", () => {
+    for (const bad of ["", "0", "-1", "1.5M", "512X", "lots", "M", "1e6"]) {
+      expect(() => parseByteSize(bad, "quota")).toThrow("positive byte size");
+    }
+  });
+});
+
+describe("retention quota", () => {
+  const wavBytes = wav().byteLength;
+
+  test("over quota, the oldest unpinned capture is evicted; corrected and promoted are pinned", async () => {
+    const evictions: string[] = [];
+    // Room for two captures.
+    const library = tempLibrary({ maxBytes: wavBytes * 2, log: line => evictions.push(line) });
+    const oldest = await library.ingest(wav(), "最旧", "session-a");
+    const middle = await library.ingest(wav(), "中间", "session-a");
+    const newest = await library.ingest(wav(), "最新", "session-a");
+
+    // Plain FIFO first: the oldest goes, its files with it.
+    expect(library.get(oldest.id)).toBeUndefined();
+    expect(await Bun.file(library.audioPath(oldest.id)).exists()).toBe(false);
+    expect(evictions.join("\n")).toContain(oldest.id);
+
+    // Pin the survivor by correcting it: the next ingest must step over it and
+    // evict the younger unpinned capture instead.
+    await library.correct(middle.id, "中间（校正）");
+    const fourth = await library.ingest(wav(), "第四", "session-a");
+    expect(library.get(middle.id)?.corrected).toBe("中间（校正）");
+    expect(library.get(newest.id)).toBeUndefined();
+    expect(library.get(fourth.id)).toBeDefined();
+
+    const page = library.list();
+    expect(page.total).toBe(2);
+    expect(page.bytes).toBe(wavBytes * 2);
+    expect(page.max_bytes).toBe(wavBytes * 2);
+    await library.close();
+  });
+
+  test("once pinned captures alone fill the quota, ingest is refused — curated work is never deleted", async () => {
+    const library = tempLibrary({ maxBytes: wavBytes + Math.floor(wavBytes / 2) });
+    const pinned = await library.ingest(wav(), "钉住", "session-a");
+    await library.correct(pinned.id, "钉住（校正）");
+
+    await expect(library.ingest(wav(), "挤不下", "session-a")).rejects.toThrow("retention quota");
+    // The refusal left no debris behind.
+    expect(library.list().total).toBe(1);
+    expect(library.get(pinned.id)?.corrected).toBe("钉住（校正）");
+    await library.close();
+  });
+
+  test("a lowered quota is enforced on open, still sparing pinned captures", async () => {
+    const unbounded = tempLibrary();
+    const corrected = await unbounded.ingest(wav(), "留下", "session-a");
+    await unbounded.correct(corrected.id, "留下（校正）");
+    const raw1 = await unbounded.ingest(wav(), "生料一", "session-a");
+    const raw2 = await unbounded.ingest(wav(), "生料二", "session-a");
+    await unbounded.close();
+
+    const lines: string[] = [];
+    const reopened = new CaptureLibrary(unbounded.dir, { maxBytes: wavBytes * 2, log: line => lines.push(line) });
+    expect(reopened.get(corrected.id)).toBeDefined();
+    // Oldest unpinned goes; the younger raw capture fits.
+    expect(reopened.get(raw1.id)).toBeUndefined();
+    expect(reopened.get(raw2.id)).toBeDefined();
+    await reopened.close();
+
+    // Quota below what pinned work alone holds: nothing curated is deleted, the
+    // operator is told out loud.
+    const squeezed = new CaptureLibrary(unbounded.dir, { maxBytes: Math.floor(wavBytes / 2), log: line => lines.push(line) });
+    expect(squeezed.get(corrected.id)).toBeDefined();
+    expect(squeezed.get(raw2.id)).toBeUndefined();
+    expect(lines.join("\n")).toContain("never auto-deleted");
+    await squeezed.close();
+  });
+
+  test("a pre-quota database gains the bytes column and backfills it from the files", async () => {
+    const library = tempLibrary();
+    const record = await library.ingest(wav(), "老库", "session-a");
+    await library.close();
+
+    // Rewind the schema to the pre-quota shape.
+    const db = new Database(`${library.dir}/library.db`);
+    db.run("ALTER TABLE captures DROP COLUMN bytes");
+    db.close();
+
+    const reopened = new CaptureLibrary(library.dir);
+    expect(reopened.get(record.id)?.bytes).toBe(wavBytes);
+    expect(reopened.list().bytes).toBe(wavBytes);
+    await reopened.close();
+  });
+
+  test("eviction queues behind an in-flight promote and then spares the freshly promoted capture", async () => {
+    const library = tempLibrary({ maxBytes: wavBytes });
+    const victim = await library.ingest(wav(), "候选", "session-a");
+
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    // The promote shape: a long engine round-trip, then the row is marked.
+    const promoting = library.runExclusive(victim.id, async () => {
+      await gate;
+      return library.markPromoted(victim.id, "laok-3");
+    });
+    // Pushes the total over quota; the only candidate is mid-promotion.
+    const ingesting = library.ingest(wav(), "新料", "session-a");
+    await Bun.sleep(20);
+    release();
+    const [promoted, fresh] = await Promise.all([promoting, ingesting]);
+
+    // The eviction waited its turn, re-checked, and stepped back: a promoted
+    // capture is pinned even when the pin landed while the eviction was queued.
+    expect(promoted?.promoted_voice_id).toBe("laok-3");
+    expect(library.get(victim.id)?.promoted_voice_id).toBe("laok-3");
+    expect(await Bun.file(library.audioPath(victim.id)).exists()).toBe(true);
+    expect(library.get(fresh.id)).toBeDefined();
+    await library.close();
   });
 });
