@@ -40,7 +40,9 @@ feature — priced only when the need is real.
      `POST /v1/design-profiles` answer 403 `demo_mode`; the voice bank stays
      readable — picking voices *is* the demo;
    - MCP servers are not connected regardless of config: external tools have no
-     business in an anonymous-ish demo, and `trust` least of all.
+     business in an anonymous-ish demo, and `trust` least of all;
+   - the capture library stays off regardless of `--library` (docs/web-studio.md
+     Phase 4): a demo must not retain visitor audio.
 
 Defaults: all three off. Hardening is a deployment decision, exactly like
 binding beyond loopback.

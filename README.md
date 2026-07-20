@@ -49,7 +49,7 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | `core/` | Transitional Python parity implementation and research-facing core |
 | `apps/cli/` | Compiled TypeScript `vox` CLI plus the transitional Python fallback |
 | `apps/realtime-gateway/` | Web Studio server: the duplex session protocol over WebSocket plus a credential-hiding REST facade |
-| `apps/web/` | The browser studio (React + Tailwind + Zustand): conversation, generation, voice bank + design profiles, and engine settings panels |
+| `apps/web/` | The browser studio (React + Tailwind + Zustand): conversation, generation, voice bank + design profiles, captures library, and engine settings panels |
 | `apps/mcp/` | `vox-mcp` — voxstudio's voice I/O as an MCP server (speak / transcribe / list_voices) for any agent |
 | `docs/` | Product design docs |
 
@@ -197,11 +197,14 @@ tags, per-request pinning). The whole studio also ships inside the compiled `vox
 `vox studio` embeds the built web app and serves it around the guarded API from one file
 (barge-in detection degrades loudly to the certified energy detector there — the binary
 carries no ONNX runtime). Remote TTS engines can stream Ogg/Opus (`stream_format: opus`,
-~12KB/s vs raw PCM's 187.5KB/s) for slow WAN links, decoded gateway-side via ffmpeg. The browser studio (`apps/web`) ships four panels on top of it:
+~12KB/s vs raw PCM's 187.5KB/s) for slow WAN links, decoded gateway-side via ffmpeg. The browser studio (`apps/web`) ships five panels on top of it:
 live conversation (worklet microphone capture, gapless streamed playback, captions with turn
 state and per-turn timing, the negotiated AEC capability snapshot), generation with takes,
 the voice bank (file upload or in-browser recording, plus design-profile create / audit /
-verify against the engine runtime), and engine settings with live health. Its real-browser
+verify against the engine runtime), the captures library (`vox studio --library DIR`, an
+explicit retention opt-in: every finalized utterance archived with its raw transcript —
+play, re-transcribe, correct inline into a `.ref.txt` the ASR reference workflow scores
+directly, promote to a clone voice sample), and engine settings with live health. Its real-browser
 double-talk/barge-in gate, route-change handling, and release packaging of the helper and
 the ONNX runtime remain separate measured delivery phases.
 
