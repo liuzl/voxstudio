@@ -148,7 +148,10 @@ below rather than relitigated per feature.
    pinned captures alone fill the quota, new ingests are refused with a logged reason,
    so disk stays bounded without touching human work. Enforced at ingest (each victim
    removed through its own mutation queue — an eviction queues behind an in-flight
-   promote and re-checks pinnedness under that lock) and again on open, where a
+   promote and re-checks pinnedness under that lock; if the last candidate got
+   pinned while the eviction waited, the newcomer itself is rolled back and refused,
+   so the bound is hard even under that race — a codex adversarial-review finding,
+   2026-07-21) and again on open, where a
    lowered quota takes effect and pre-quota databases gain a backfilled `bytes`
    column. `/v1/library` reports `bytes`/`max_bytes` and the 素材库 panel shows usage
    in the header. All paths unit-tested, including the promote/evict race.

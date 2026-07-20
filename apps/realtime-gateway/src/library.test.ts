@@ -247,7 +247,7 @@ describe("retention quota", () => {
     await reopened.close();
   });
 
-  test("eviction queues behind an in-flight promote and then spares the freshly promoted capture", async () => {
+  test("a candidate pinned mid-eviction is spared and the newcomer is rolled back — the bound holds", async () => {
     const library = tempLibrary({ maxBytes: wavBytes });
     const victim = await library.ingest(wav(), "候选", "session-a");
 
@@ -260,16 +260,48 @@ describe("retention quota", () => {
     });
     // Pushes the total over quota; the only candidate is mid-promotion.
     const ingesting = library.ingest(wav(), "新料", "session-a");
-    await Bun.sleep(20);
+    // Deterministic barrier: the row insert is the last step of the ingest's own
+    // lock, and from there the eviction enqueues within microtasks — once the row
+    // is visible, one drained tick means the eviction is queued behind the promote.
+    while (library.list().total < 2) await Bun.sleep(1);
+    await Bun.sleep(0);
     release();
-    const [promoted, fresh] = await Promise.all([promoting, ingesting]);
 
+    const promoted = await promoting;
     // The eviction waited its turn, re-checked, and stepped back: a promoted
     // capture is pinned even when the pin landed while the eviction was queued.
+    // With the only candidate spared, the newcomer cannot fit — it is rolled
+    // back and refused, exactly what admission would have chosen against the
+    // new pinned set. The advertised bound survives the race.
+    await expect(ingesting).rejects.toThrow("retention quota");
     expect(promoted?.promoted_voice_id).toBe("laok-3");
     expect(library.get(victim.id)?.promoted_voice_id).toBe("laok-3");
     expect(await Bun.file(library.audioPath(victim.id)).exists()).toBe(true);
-    expect(library.get(fresh.id)).toBeDefined();
+
+    const page = library.list();
+    expect(page.total).toBe(1);
+    expect(page.bytes).toBeLessThanOrEqual(page.max_bytes as number);
+    // The rollback left no orphan files for the next open to sweep.
+    expect(new Set((await Array.fromAsync(new Bun.Glob("*.wav").scan({ cwd: `${library.dir}/captures` })))))
+      .toEqual(new Set([`${victim.id}.wav`]));
     await library.close();
+  });
+
+  test("a nullable bytes column left by a foreign migration is backfilled and counted", async () => {
+    const library = tempLibrary();
+    const record = await library.ingest(wav(), "外来迁移", "session-a");
+    await library.close();
+
+    // A bytes column added nullable (not our DEFAULT-0 shape): rows sit at NULL,
+    // which SUM() would silently ignore.
+    const db = new Database(`${library.dir}/library.db`);
+    db.run("ALTER TABLE captures DROP COLUMN bytes");
+    db.run("ALTER TABLE captures ADD COLUMN bytes INTEGER");
+    db.close();
+
+    const reopened = new CaptureLibrary(library.dir);
+    expect(reopened.get(record.id)?.bytes).toBe(wavBytes);
+    expect(reopened.list().bytes).toBe(wavBytes);
+    await reopened.close();
   });
 });

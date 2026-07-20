@@ -111,10 +111,11 @@ export class CaptureLibrary {
    * no surviving row owns, so stray sidecars never contaminate the reference set.
    */
   private reconcile(): void {
-    for (const row of this.db.query<{ id: string; bytes: number }, []>("SELECT id, bytes FROM captures").all()) {
+    for (const row of this.db.query<{ id: string; bytes: number | null }, []>("SELECT id, bytes FROM captures").all()) {
       if (!existsSync(this.audioPath(row.id))) this.db.run("DELETE FROM captures WHERE id = ?", [row.id]);
-      else if (row.bytes === 0) {
-        // Pre-quota row (or an interrupted migration): charge it what the file weighs.
+      else if (!row.bytes) {
+        // Pre-quota row: 0 from our own DEFAULT, NULL if the column was ever added
+        // nullable — either way SUM() would undercount; charge it what the file weighs.
         this.db.run("UPDATE captures SET bytes = ? WHERE id = ?", [statSync(this.audioPath(row.id)).size, row.id]);
       }
     }
@@ -269,6 +270,18 @@ export class CaptureLibrary {
     });
     // Outside the new capture's lock: each victim is taken through its own queue.
     await this.evictUntilUnderQuota(id);
+    // A candidate can be pinned while the eviction waited its turn (a promote's
+    // engine round-trip finishing under the ingest). If that left the bound broken,
+    // the coherent outcome is the one admission would have chosen against the new
+    // pinned set: this capture is rolled back and refused — the quota is a hard
+    // bound, not a target. A close() racing in skips the rollback; the next open's
+    // enforcement clears the excess.
+    if (this.maxBytes !== null && !this.closed && this.totalBytes() > this.maxBytes) {
+      await this.remove(id).catch(() => {});
+      throw new Error(
+        `retention quota: corrected/promoted captures filled the quota while this capture was being retained — rolled back (${this.pinnedBytes()} of ${this.maxBytes} bytes pinned)`,
+      );
+    }
     return record;
   }
 
