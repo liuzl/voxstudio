@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ConversationPanel } from "./panels/ConversationPanel";
 import { GeneratePanel } from "./panels/GeneratePanel";
-import { PlaceholderPanel } from "./panels/PlaceholderPanel";
+import { LibraryPanel } from "./panels/LibraryPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { VoicesPanel } from "./panels/VoicesPanel";
 import { useStudio, type ToastView } from "./store";
@@ -13,8 +13,7 @@ const tabs: { id: Tab; label: MessageKey; icon: string; hint?: MessageKey }[] = 
   { id: "conversation", label: "对话", icon: "🎙" },
   { id: "generate", label: "生成", icon: "✍️" },
   { id: "voices", label: "音色", icon: "🎭" },
-  // A planned phase keeps its door labeled, not silently dead.
-  { id: "library", label: "素材库", icon: "🗂", hint: "规划中" },
+  { id: "library", label: "素材库", icon: "🗂" },
   { id: "settings", label: "设置", icon: "⚙️" },
 ];
 
@@ -140,13 +139,7 @@ export function App() {
       {tab === "conversation" && <ConversationPanel />}
       {tab === "generate" && <GeneratePanel />}
       {tab === "voices" && <VoicesPanel />}
-      {tab === "library" && (
-        <PlaceholderPanel
-          title={t("素材库")}
-          phase="Web Studio Phase 4"
-          description={t("每条录音/话语与其转写配对：重转写、行内修正（回馈 ASR 参考集工作流）、一键升级为音色样本。落库为网关侧 SQLite。")}
-        />
-      )}
+      {tab === "library" && <LibraryPanel />}
       {tab === "settings" && <SettingsPanel />}
     </>
   );

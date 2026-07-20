@@ -6,6 +6,7 @@ import type { ServerWebSocket } from "bun";
 import type { ConversationTool } from "@voxstudio/conversation";
 import { connectMcpServers, type McpToolSource } from "@voxstudio/mcp";
 import { OpenAiRealtimeConnection } from "./openai-realtime";
+import { CaptureLibrary } from "./library";
 import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand } from "./protocol";
 import { builtinToolNames, GatewaySession, type EventSink } from "./session";
 
@@ -26,6 +27,13 @@ export interface GatewayServerOptions {
   maxSessionSeconds?: number;
   /** Registry writes 403 and MCP servers stay unconnected, regardless of config. */
   demoMode?: boolean;
+  /**
+   * The capture library (docs/web-studio.md 素材库): every finalized utterance persists
+   * here as WAV + SQLite metadata, served at /v1/library. Off by default — retention is
+   * an explicit deployment decision, and demo mode keeps it off regardless: an
+   * anonymous-ish demo must not retain visitor audio.
+   */
+  libraryDir?: string;
   loadSileroVad?: () => Promise<SpeechProbabilityModel>;
   /** Decodes compressed (Opus) TTS streams from engines configured with stream_format. */
   pcmDecoder?: PcmStreamDecoder;
@@ -66,6 +74,10 @@ const facadeRoutes: Record<string, { kind: EngineKind; role: string; methods: st
 /** Voice registry entries: /v1/voices/{id} on the TTS engine (list/create live above). */
 const voiceEntryPattern = /^\/v1\/voices\/[A-Za-z0-9._-]{1,64}$/;
 
+/** Library entries: gateway-minted UUIDs, plus the audio and promote sub-resources. */
+const libraryEntryPattern = /^\/v1\/library\/([A-Za-z0-9-]{1,64})(\/audio|\/promote)?$/;
+const voiceIdPattern = /^[A-Za-z0-9._-]{1,64}$/;
+
 function badEngine(reason: string): Response {
   return Response.json({ error: { message: reason, code: "unknown_engine" } }, { status: 400 });
 }
@@ -86,6 +98,15 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const log = options.log ?? (() => {});
   const sessions = new Map<string, GatewaySession>();
+
+  // Demo mode wins over a configured library: hardening a deployment must never quietly
+  // start retaining its visitors' audio.
+  if (options.libraryDir !== undefined && options.demoMode === true) {
+    log("demo mode: the capture library stays off — a demo must not retain visitor audio");
+  }
+  const library = options.libraryDir !== undefined && options.demoMode !== true
+    ? new CaptureLibrary(options.libraryDir)
+    : undefined;
 
   const assets = options.staticAssets && Object.keys(options.staticAssets).length > 0
     ? options.staticAssets
@@ -298,6 +319,16 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         }
         return composed;
       },
+      ...(library === undefined ? {} : {
+        // A failed ingest must never cost the turn — capture is an observer, not a stage.
+        onUtterance: async (wav: Uint8Array, transcript: string) => {
+          try {
+            await library.ingest(wav, transcript, session.id);
+          } catch (error) {
+            log(`library: ingest failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        },
+      }),
       loadSileroVad: options.loadSileroVad,
       ...(options.reconnectGraceMs === undefined ? {} : { reconnectGraceMs: options.reconnectGraceMs }),
       ...(options.maxSessionSeconds === undefined ? {} : { maxSessionSeconds: options.maxSessionSeconds }),
@@ -420,6 +451,99 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         if (selected instanceof Response) return selected;
         return proxy(request, selected[1], url.pathname, selected[0]);
       }
+      if (url.pathname === "/v1/library" || url.pathname.startsWith("/v1/library/")) {
+        // Absent library = the deployment never opted into retention; the panel reads the
+        // structured code and explains instead of erroring.
+        if (!library) {
+          return Response.json(
+            { error: { message: "the capture library is not enabled on this gateway (start with --library DIR)", code: "library_disabled" } },
+            { status: 404 },
+          );
+        }
+        const notFound = (): Response => Response.json(
+          { error: { message: "no such capture", code: "unknown_capture" } },
+          { status: 404 },
+        );
+        if (url.pathname === "/v1/library") {
+          if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
+          const bounded = (name: string, fallback: number, max: number): number => {
+            const parsed = Number(url.searchParams.get(name) ?? fallback);
+            return Number.isInteger(parsed) && parsed >= 0 ? Math.min(parsed, max) : fallback;
+          };
+          return Response.json(library.list(bounded("limit", 50, 200), bounded("offset", 0, Number.MAX_SAFE_INTEGER)));
+        }
+        const entry = libraryEntryPattern.exec(url.pathname);
+        if (!entry) return new Response("not found", { status: 404 });
+        const captureId = entry[1] as string;
+        const sub = entry[2];
+        if (sub === "/audio") {
+          if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
+          if (!library.get(captureId)) return notFound();
+          return new Response(Bun.file(library.audioPath(captureId)), {
+            headers: { "content-type": "audio/wav", "cache-control": "no-cache" },
+          });
+        }
+        if (sub === "/promote") {
+          if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+          return (async (): Promise<Response> => {
+            const capture = library.get(captureId);
+            if (!capture) return notFound();
+            const body = await request.json().catch(() => ({})) as { voice_id?: unknown };
+            const voiceId = typeof body.voice_id === "string" ? body.voice_id.trim() : "";
+            if (!voiceIdPattern.test(voiceId)) {
+              return Response.json({ error: { message: "voice_id must match [A-Za-z0-9._-]{1,64}", code: "bad_voice_id" } }, { status: 400 });
+            }
+            // A voice sample needs its verbatim text; the correction is the reference.
+            const text = (capture.corrected ?? capture.transcript).trim();
+            if (text === "") {
+              return Response.json(
+                { error: { message: "the capture has no transcript; correct it before promoting", code: "empty_transcript" } },
+                { status: 400 },
+              );
+            }
+            const selected = selectEngine(url, "tts", "tts", "clone");
+            if (selected instanceof Response) return selected;
+            const [engineName, target] = selected;
+            const form = new FormData();
+            form.set("id", voiceId);
+            form.set("text", text);
+            form.set("audio", new File([await Bun.file(library.audioPath(captureId)).bytes()], `${captureId}.wav`, { type: "audio/wav" }));
+            const headers = new Headers();
+            if (target.apiKey) headers.set("authorization", `Bearer ${target.apiKey}`);
+            let upstream: Response;
+            try {
+              upstream = await fetchImpl(new URL("/v1/voices", target.baseUrl), { method: "POST", headers, body: form });
+            } catch (error) {
+              log(`library: promote to ${engineName} unreachable: ${error instanceof Error ? error.message : String(error)}`);
+              return Response.json({ error: { message: `${engineName} engine unreachable`, code: "engine_unreachable" } }, { status: 502 });
+            }
+            if (!upstream.ok) {
+              return new Response(upstream.body, { status: upstream.status, headers: { "content-type": upstream.headers.get("content-type") ?? "application/json" } });
+            }
+            await upstream.body?.cancel().catch(() => {});
+            const updated = library.markPromoted(captureId, voiceId);
+            return Response.json({ capture: updated, engine: engineName });
+          })();
+        }
+        if (request.method === "PATCH") {
+          return (async (): Promise<Response> => {
+            const body = await request.json().catch(() => ({})) as { corrected?: unknown };
+            if (body.corrected !== null && typeof body.corrected !== "string") {
+              return Response.json({ error: { message: "corrected must be a string or null", code: "bad_correction" } }, { status: 400 });
+            }
+            const updated = await library.correct(captureId, body.corrected as string | null);
+            return updated ? Response.json(updated) : notFound();
+          })();
+        }
+        if (request.method === "DELETE") {
+          return (async (): Promise<Response> => (await library.remove(captureId)) ? Response.json({ deleted: true }) : notFound())();
+        }
+        if (request.method === "GET") {
+          const capture = library.get(captureId);
+          return capture ? Response.json(capture) : notFound();
+        }
+        return new Response("method not allowed", { status: 405 });
+      }
       const route = facadeRoutes[url.pathname];
       if (route) {
         if (!route.methods.includes(request.method)) return new Response("method not allowed", { status: 405 });
@@ -491,6 +615,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       for (const session of sessions.values()) session.stop();
       await Promise.allSettled([...sessions.values()].map(session => session.done));
       if (mcpSource) await (await mcpSource).close().catch(() => {});
+      library?.close();
       // Bounded: Bun's force-stop has been observed to never resolve when a client's
       // WebSocket close handshake is still in flight at stop time (reproduced 2026-07-19
       // with an MCP-configured gateway). The sockets are already torn down above; a stop

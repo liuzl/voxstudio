@@ -130,6 +130,104 @@ export async function transcribe(audio: File, language = "auto"): Promise<string
   return (payload.text ?? "").trim();
 }
 
+export interface CaptureEntry {
+  id: string;
+  createdAt: number;
+  sessionId: string;
+  /** The raw ASR text — never rewritten; the correction lives beside it. */
+  transcript: string;
+  corrected: string | null;
+  durationMs: number;
+  sampleRate: number;
+  promotedVoiceId: string | null;
+}
+
+export interface CapturePage {
+  /** False when the gateway was started without --library: retention never opted in. */
+  enabled: boolean;
+  captures: CaptureEntry[];
+  total: number;
+}
+
+interface CaptureWire {
+  id?: string;
+  created_at?: number;
+  session_id?: string;
+  transcript?: string;
+  corrected?: string | null;
+  duration_ms?: number;
+  sample_rate?: number;
+  promoted_voice_id?: string | null;
+}
+
+function captureFromWire(wire: CaptureWire): CaptureEntry {
+  return {
+    id: wire.id ?? "",
+    createdAt: wire.created_at ?? 0,
+    sessionId: wire.session_id ?? "",
+    transcript: wire.transcript ?? "",
+    corrected: wire.corrected ?? null,
+    durationMs: wire.duration_ms ?? 0,
+    sampleRate: wire.sample_rate ?? 0,
+    promotedVoiceId: wire.promoted_voice_id ?? null,
+  };
+}
+
+/** A disabled library is a state, not an error: the panel explains the opt-in. */
+async function libraryDisabled(response: Response): Promise<boolean> {
+  if (response.status !== 404) return false;
+  try {
+    const body = await response.clone().json() as { error?: { code?: string } };
+    return body.error?.code === "library_disabled";
+  } catch {
+    return false;
+  }
+}
+
+export async function listCaptures(limit = 50, offset = 0): Promise<CapturePage> {
+  const response = await fetch(`/v1/library?limit=${limit}&offset=${offset}`);
+  if (await libraryDisabled(response)) return { enabled: false, captures: [], total: 0 };
+  if (!response.ok) await fail(response, "获取素材库");
+  const payload = await response.json() as { captures?: CaptureWire[]; total?: number };
+  return {
+    enabled: true,
+    captures: (payload.captures ?? []).map(captureFromWire).filter(entry => entry.id !== ""),
+    total: payload.total ?? 0,
+  };
+}
+
+export function captureAudioUrl(id: string): string {
+  return `/v1/library/${encodeURIComponent(id)}/audio`;
+}
+
+/** Set (or with an empty string, clear) the human reference transcript. */
+export async function correctCapture(id: string, corrected: string): Promise<CaptureEntry> {
+  const response = await fetch(`/v1/library/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ corrected }),
+  });
+  if (!response.ok) await fail(response, "保存校正");
+  return captureFromWire(await response.json() as CaptureWire);
+}
+
+export async function deleteCapture(id: string): Promise<void> {
+  const response = await fetch(`/v1/library/${encodeURIComponent(id)}`, { method: "DELETE" });
+  if (!response.ok) await fail(response, "删除素材");
+}
+
+/** Register the capture as a voice sample on the clone-capable engine. */
+export async function promoteCapture(id: string, voiceId: string): Promise<CaptureEntry> {
+  const response = await fetch(`/v1/library/${encodeURIComponent(id)}/promote`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ voice_id: voiceId }),
+  });
+  if (!response.ok) await fail(response, "升级为音色");
+  const payload = await response.json() as { capture?: CaptureWire };
+  return captureFromWire(payload.capture ?? {});
+}
+
 export interface SynthesisParams {
   input: string;
   voice: string;

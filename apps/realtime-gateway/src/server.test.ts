@@ -615,6 +615,152 @@ describe("public demo guardrails", () => {
   });
 });
 
+describe("capture library", () => {
+  const tempDir = (): string => `${import.meta.dir}/../node_modules/.test-capture-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
+  test("a conversation turn ingests a capture; the REST workflow corrects, promotes, deletes", async () => {
+    const dir = tempDir();
+    const registrations: { id: string; text: string; audioBytes: number }[] = [];
+    gateway = startGateway({
+      config,
+      port: 0,
+      libraryDir: dir,
+      fetch: engineFetch({
+        "/v1/voices": async request => {
+          if (request.method === "POST") {
+            const form = await request.formData();
+            registrations.push({
+              id: String(form.get("id")),
+              text: String(form.get("text")),
+              audioBytes: (form.get("audio") as File).size,
+            });
+            return Response.json({ id: form.get("id") }, { status: 201 });
+          }
+          return Response.json({ voices: [] });
+        },
+      }),
+    });
+    const client = new TestClient(gateway.url);
+    await client.ready();
+    client.command({ type: "session.start", idempotencyKey: "lib-1", options: startOptions });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "session up");
+    client.sendPcm(2, 0.2);
+    client.sendPcm(2, 0);
+    await client.until(events => events.some(event => event.type === "turn.completed"), "turn.completed");
+    client.close();
+
+    // The utterance was retained with its raw ASR text and the owning session.
+    const listed = await (await fetch(new URL("/v1/library", gateway.url))).json() as {
+      captures: { id: string; transcript: string; corrected: string | null; session_id: string; duration_ms: number }[];
+      total: number;
+    };
+    expect(listed.total).toBe(1);
+    const capture = listed.captures[0]!;
+    expect(capture.transcript).toBe("你好");
+    expect(capture.corrected).toBeNull();
+    expect(capture.session_id).not.toBe("");
+    expect(capture.duration_ms).toBeGreaterThan(0);
+
+    // The audio round-trips as a WAV.
+    const audio = await fetch(new URL(`/v1/library/${capture.id}/audio`, gateway.url));
+    expect(audio.status).toBe(200);
+    expect(audio.headers.get("content-type")).toBe("audio/wav");
+    const bytes = new Uint8Array(await audio.arrayBuffer());
+    expect(new TextDecoder().decode(bytes.slice(0, 4))).toBe("RIFF");
+
+    // Inline correction: the reference lands next to the untouched raw transcript.
+    const corrected = await fetch(new URL(`/v1/library/${capture.id}`, gateway.url), {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ corrected: "你好。" }),
+    });
+    expect(corrected.status).toBe(200);
+    expect(await corrected.json()).toMatchObject({ transcript: "你好", corrected: "你好。" });
+
+    // Promote registers the capture as a voice sample with the corrected text.
+    const promoted = await fetch(new URL(`/v1/library/${capture.id}/promote`, gateway.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ voice_id: "lib-sample" }),
+    });
+    expect(promoted.status).toBe(200);
+    expect(await promoted.json()).toMatchObject({ engine: "tts", capture: { promoted_voice_id: "lib-sample" } });
+    expect(registrations).toEqual([{ id: "lib-sample", text: "你好。", audioBytes: bytes.byteLength }]);
+
+    // Bad promotes are refused before any engine sees them.
+    const badVoice = await fetch(new URL(`/v1/library/${capture.id}/promote`, gateway.url), {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ voice_id: "../evil" }),
+    });
+    expect(badVoice.status).toBe(400);
+
+    const deleted = await fetch(new URL(`/v1/library/${capture.id}`, gateway.url), { method: "DELETE" });
+    expect(deleted.status).toBe(200);
+    expect(((await (await fetch(new URL("/v1/library", gateway.url))).json()) as { total: number }).total).toBe(0);
+    expect((await fetch(new URL(`/v1/library/${capture.id}/audio`, gateway.url))).status).toBe(404);
+
+    await Bun.$`rm -rf ${dir}`.quiet().nothrow();
+  });
+
+  test("an empty-transcript capture is kept but refuses to promote until corrected", async () => {
+    const dir = tempDir();
+    gateway = startGateway({
+      config,
+      port: 0,
+      libraryDir: dir,
+      fetch: engineFetch({
+        "/v1/audio/transcriptions": async () => Response.json({ text: "" }),
+      }),
+    });
+    const client = new TestClient(gateway.url);
+    await client.ready();
+    client.command({ type: "session.start", idempotencyKey: "lib-2", options: startOptions });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "session up");
+    client.sendPcm(2, 0.2);
+    client.sendPcm(2, 0);
+    // An empty transcript cancels the turn, but the sample is already retained.
+    await client.until(events => events.some(event => event.type === "error"), "asr_empty error");
+    client.close();
+
+    const deadline = Date.now() + 2_000;
+    let captures: { id: string; transcript: string }[] = [];
+    while (Date.now() < deadline) {
+      captures = ((await (await fetch(new URL("/v1/library", gateway.url))).json()) as { captures: typeof captures }).captures;
+      if (captures.length > 0) break;
+      await Bun.sleep(20);
+    }
+    expect(captures).toHaveLength(1);
+    expect(captures[0]!.transcript).toBe("");
+
+    const refused = await fetch(new URL(`/v1/library/${captures[0]!.id}/promote`, gateway.url), {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ voice_id: "nope" }),
+    });
+    expect(refused.status).toBe(400);
+    expect((await refused.json() as { error: { code: string } }).error.code).toBe("empty_transcript");
+
+    await Bun.$`rm -rf ${dir}`.quiet().nothrow();
+  });
+
+  test("without a library the routes answer a structured library_disabled", async () => {
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0 });
+    const listed = await fetch(new URL("/v1/library", gateway.url));
+    expect(listed.status).toBe(404);
+    expect((await listed.json() as { error: { code: string } }).error.code).toBe("library_disabled");
+  });
+
+  test("demo mode keeps the library off even when a directory is configured", async () => {
+    const dir = tempDir();
+    const lines: string[] = [];
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0, libraryDir: dir, demoMode: true, log: line => lines.push(line) });
+    const listed = await fetch(new URL("/v1/library", gateway.url));
+    expect(listed.status).toBe(404);
+    expect((await listed.json() as { error: { code: string } }).error.code).toBe("library_disabled");
+    expect(lines.some(line => line.includes("capture library stays off"))).toBe(true);
+    // No store was created: nothing to retain into.
+    expect(await Bun.file(`${dir}/library.db`).exists()).toBe(false);
+    await Bun.$`rm -rf ${dir}`.quiet().nothrow();
+  });
+});
+
 describe("guardrail parse hardening", () => {
   test("a stopped session's socket close does not re-arm the reconnect grace", async () => {
     gateway = startGateway({ config, fetch: engineFetch(), port: 0, reconnectGraceMs: 60_000 });

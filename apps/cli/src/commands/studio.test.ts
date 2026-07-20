@@ -27,7 +27,7 @@ describe("vox studio", () => {
     const io = collectingIo();
     let seen: GatewayServerOptions | undefined;
     const code = await runStudio(
-      ["--host", "0.0.0.0", "--port", "9999", "--token", "sesame"],
+      ["--host", "0.0.0.0", "--port", "9999", "--token", "sesame", "--library", "/tmp/vox-library"],
       config,
       io,
       options => {
@@ -40,6 +40,8 @@ describe("vox studio", () => {
     expect(seen?.hostname).toBe("0.0.0.0");
     expect(seen?.port).toBe(9999);
     expect(seen?.token).toBe("sesame");
+    // The retention opt-in reaches the gateway; the gateway itself creates the store.
+    expect(seen?.libraryDir).toBe("/tmp/vox-library");
     // The manifest object is handed to the gateway verbatim (empty stub in tests).
     expect(seen?.staticAssets).toBeDefined();
     expect(io.outs.join("\n")).toContain("http://127.0.0.1:9999/");

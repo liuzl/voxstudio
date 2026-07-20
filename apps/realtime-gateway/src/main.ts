@@ -9,7 +9,10 @@ reaching it from a browser is a deployment decision (a tunnel in front, Access a
 door). TOKEN, when set, is required as a Bearer header or ?token= query parameter.
 Environment: VOX_GATEWAY_HOST, VOX_GATEWAY_PORT, VOX_GATEWAY_TOKEN. Demo guardrails
 (docs/public-demo.md): --max-sessions N, --max-session-seconds N, --demo (or
-VOX_GATEWAY_MAX_SESSIONS, VOX_GATEWAY_MAX_SESSION_SECONDS, VOX_GATEWAY_DEMO=1).`;
+VOX_GATEWAY_MAX_SESSIONS, VOX_GATEWAY_MAX_SESSION_SECONDS, VOX_GATEWAY_DEMO=1).
+--library DIR (or VOX_GATEWAY_LIBRARY) retains every finalized utterance — WAV +
+transcript in DIR, served at /v1/library for the Web Studio 素材库 panel. Off by
+default; demo mode keeps it off regardless.`;
 
 async function main(args: string[]): Promise<number> {
   let explicit: string | undefined;
@@ -19,6 +22,7 @@ async function main(args: string[]): Promise<number> {
   let maxSessions = process.env.VOX_GATEWAY_MAX_SESSIONS;
   let maxSessionSeconds = process.env.VOX_GATEWAY_MAX_SESSION_SECONDS;
   let demoMode = process.env.VOX_GATEWAY_DEMO === "1";
+  let libraryDir = process.env.VOX_GATEWAY_LIBRARY;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
     const value = (): string => {
@@ -36,6 +40,7 @@ async function main(args: string[]): Promise<number> {
     else if (arg === "--max-sessions") maxSessions = value();
     else if (arg === "--max-session-seconds") maxSessionSeconds = value();
     else if (arg === "--demo") demoMode = true;
+    else if (arg === "--library") libraryDir = value();
     else throw new TypeError(`vox-gateway: unknown option ${arg}`);
   }
   const config = explicit === undefined ? await loadConfig() : await loadConfig({ explicit });
@@ -63,6 +68,7 @@ async function main(args: string[]): Promise<number> {
     ...(cappedSessions === undefined ? {} : { maxSessions: cappedSessions }),
     ...(cappedSeconds === undefined ? {} : { maxSessionSeconds: cappedSeconds }),
     ...(demoMode ? { demoMode } : {}),
+    ...(libraryDir === undefined || libraryDir === "" ? {} : { libraryDir }),
     loadSileroVad: loadSileroVadModel,
     ...(decoder === undefined ? {} : { pcmDecoder: decoder }),
     log: line => console.error(line),

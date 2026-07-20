@@ -13,7 +13,6 @@ const en = {
   "音色": "Voices",
   "素材库": "Library",
   "设置": "Settings",
-  "规划中": "planned",
   "主导航": "Main navigation",
   "点击关闭": "Click to dismiss",
   "连接中": "Connecting",
@@ -22,10 +21,29 @@ const en = {
   "就绪": "Ready",
   "网关离线": "Gateway offline",
   "探测中": "Probing",
-  "每条录音/话语与其转写配对：重转写、行内修正（回馈 ASR 参考集工作流）、一键升级为音色样本。落库为网关侧 SQLite。":
-    "Every recording/utterance paired with its transcript: re-transcribe, correct inline (feeding the ASR reference-set workflow), promote to a voice sample in one click. Persisted in gateway-side SQLite.",
-
-  "分期与验收门见 docs/web-studio.md。": "Phases and acceptance gates: docs/web-studio.md.",
+  // Library panel
+  "共 {n} 条": "{n} total",
+  "获取素材库": "Loading the library",
+  "素材库未启用。以 --library 目录 启动网关（vox studio --library DIR）后，对话中的每句话会连同转写自动归档到这里——留存是显式的部署决定。":
+    "The library is not enabled. Start the gateway with a library directory (vox studio --library DIR) and every utterance you speak in a conversation is archived here with its transcript — retention is an explicit deployment decision.",
+  "还没有素材。开始一段对话，你说的每句话会自动出现在这里。":
+    "No captures yet. Start a conversation and every utterance you speak will appear here.",
+  "已注册音色": "voice",
+  "（识别为空）": "(nothing transcribed)",
+  "听音频，把这句话的正确文本写在这里": "Listen to the audio and write the correct text here",
+  "校正": "Correct",
+  "保存校正": "Save correction",
+  "已保存校正": "Correction saved",
+  "清除校正": "Clear correction",
+  "已清除校正": "Correction cleared",
+  "重转写": "Re-transcribe",
+  "升级为音色": "Promote to voice",
+  "先校正出文本才能注册为音色": "Correct the transcript before registering it as a voice",
+  "音色 ID": "Voice ID",
+  "以校正后的文本作为参考逐字稿，注册到克隆引擎。": "Registers on the clone engine with the corrected text as the reference transcript.",
+  "已注册为音色 {id}": "Registered as voice {id}",
+  "删除素材": "Deleting the capture",
+  "加载更多（{n} 条未显示）": "Load more ({n} not shown)",
 
   // Conversation panel — session states
   "未开始": "Not started",

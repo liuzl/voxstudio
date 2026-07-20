@@ -38,6 +38,11 @@ export interface GatewaySessionOptions {
    * must not collide with `builtinToolNames`; the injecting surface guards that.
    */
   extraTools?: () => Promise<ConversationTool[]>;
+  /**
+   * The retention opt-in (docs/web-studio.md 素材库): every finalized utterance's WAV and
+   * raw ASR text. Absent, nothing is kept — the conversation loop's own privacy rule.
+   */
+  onUtterance?: (wav: Uint8Array, transcript: string) => void | Promise<void>;
   loadSileroVad?: (() => Promise<SpeechProbabilityModel>) | undefined;
   /** How long a detached session survives waiting for a reconnect. */
   reconnectGraceMs?: number;
@@ -253,6 +258,7 @@ export class GatewaySession {
       onToolCall: (name, args, turn) => this.emit({ type: "tool.call", turnId: turn.id, name, arguments: args }),
       onToolResult: (name, ok, result, turn) => this.emit({ type: "tool.result", turnId: turn.id, name, ok, result }),
       onToolPending: (name, args, turn) => this.emit({ type: "tool.pending", turnId: turn.id, name, arguments: args }),
+      ...(this.options.onUtterance === undefined ? {} : { onUtterance: this.options.onUtterance }),
     });
     // The loop ending — frame source closed, session closed, or a crash — always tears the
     // session down; a gateway session with no loop behind it would accept audio into a void.

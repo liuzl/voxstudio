@@ -119,7 +119,20 @@ below rather than relitigated per feature.
    **Fingerprint-parity gate passed**: a CLI-created profile (`design-calm-clear`)
    reproduced byte-identically through the web path against the live engine.
 4. **Library panel**: SQLite persistence, capture ingest from gateway sessions,
-   promote-to-sample. Gate: the ASR reference-correction workflow runs end-to-end in UI.
+   promote-to-sample. Gate (`bun run measure:library`): the ASR reference-correction
+   workflow runs end-to-end — a live spoken turn is retained, re-transcribes through
+   the facade, corrects, and promotes to a clone voice sample.
+   **Delivered 2026-07-20.** The gateway grew a capture store (`bun:sqlite` metadata,
+   WAV + `.txt`/`.ref.txt` sidecars on disk — the exact pairing `tools/compare_asr.py`
+   scores, so corrected captures feed the ASR reference set with no export step) behind
+   an explicit retention opt-in: `vox studio --library DIR` / `VOX_GATEWAY_LIBRARY`,
+   off by default, and demo mode keeps it off regardless — a public demo must not
+   retain visitor audio. Every finalized utterance (the conversation package's
+   `onUtterance`, raw ASR text by design) lands in `/v1/library`; the 素材库 panel
+   lists, plays, re-transcribes, corrects inline (the raw transcript is never
+   rewritten — the correction lives beside it), promotes with the corrected text as
+   the reference transcript, and deletes. Gate passed against the live stack the same
+   day; the empty-transcript refusal, demo-off, and capacity paths are unit-tested.
 5. **Settings & hosting**: health surface; voxstudio.cc deployment behind Access.
    **Single-binary packaging delivered 2026-07-16**: `vox studio` serves the browser
    app, the realtime WebSocket, and the credential-hiding REST facade from the one

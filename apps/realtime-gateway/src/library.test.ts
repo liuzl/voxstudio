@@ -1,0 +1,85 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { writeWav } from "@voxstudio/audio";
+import { CaptureLibrary } from "./library";
+
+const dirs: string[] = [];
+
+function tempLibrary(): CaptureLibrary {
+  const dir = `${import.meta.dir}/../node_modules/.test-library-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  dirs.push(dir);
+  return new CaptureLibrary(dir);
+}
+
+afterEach(async () => {
+  for (const dir of dirs.splice(0)) {
+    await Bun.$`rm -rf ${dir}`.quiet().nothrow();
+  }
+});
+
+/** One second of quiet 16kHz audio — the shape a gateway utterance arrives in. */
+const wav = (): Uint8Array => new Uint8Array(writeWav(new Float32Array(16_000).fill(0.05), 16_000));
+
+describe("capture library", () => {
+  test("ingest persists audio, sidecar, and metadata; list returns newest first", async () => {
+    const library = tempLibrary();
+    const first = await library.ingest(wav(), "你好", "session-a");
+    const second = await library.ingest(wav(), "", "session-a");
+
+    expect(first.duration_ms).toBe(1_000);
+    expect(first.sample_rate).toBe(16_000);
+    expect(first.corrected).toBeNull();
+    // The empty-transcript failure is kept — it is the most valuable sample.
+    expect(second.transcript).toBe("");
+
+    const { captures, total } = library.list();
+    expect(total).toBe(2);
+    expect(captures.map(capture => capture.id)).toEqual([second.id, first.id]);
+    expect(await Bun.file(library.audioPath(first.id)).exists()).toBe(true);
+    expect((await Bun.file(library.audioPath(first.id).replace(/\.wav$/, ".txt")).text()).trim()).toBe("你好");
+    library.close();
+  });
+
+  test("survives a reopen: rows and audio outlive the process object", async () => {
+    const library = tempLibrary();
+    const record = await library.ingest(wav(), "重启前", "session-a");
+    library.close();
+
+    const reopened = new CaptureLibrary(library.dir);
+    expect(reopened.get(record.id)?.transcript).toBe("重启前");
+    reopened.close();
+  });
+
+  test("correct sets and clears the reference, mirroring the .ref.txt sidecar", async () => {
+    const library = tempLibrary();
+    const record = await library.ingest(wav(), "作力测试", "session-a");
+    const refPath = library.audioPath(record.id).replace(/\.wav$/, ".ref.txt");
+
+    const corrected = await library.correct(record.id, " 压力测试 ");
+    expect(corrected?.corrected).toBe("压力测试");
+    // The raw ASR transcript is never rewritten by a correction.
+    expect(corrected?.transcript).toBe("作力测试");
+    expect((await Bun.file(refPath).text()).trim()).toBe("压力测试");
+
+    const cleared = await library.correct(record.id, "");
+    expect(cleared?.corrected).toBeNull();
+    expect(await Bun.file(refPath).exists()).toBe(false);
+
+    expect(await library.correct("no-such-id", "x")).toBeUndefined();
+    library.close();
+  });
+
+  test("markPromoted records the voice id; remove deletes row and files", async () => {
+    const library = tempLibrary();
+    const record = await library.ingest(wav(), "升级我", "session-a");
+    await library.correct(record.id, "升级我");
+
+    expect(library.markPromoted(record.id, "laok-2")?.promoted_voice_id).toBe("laok-2");
+
+    expect(await library.remove(record.id)).toBe(true);
+    expect(library.get(record.id)).toBeUndefined();
+    expect(await Bun.file(library.audioPath(record.id)).exists()).toBe(false);
+    expect(await Bun.file(library.audioPath(record.id).replace(/\.wav$/, ".ref.txt")).exists()).toBe(false);
+    expect(await library.remove(record.id)).toBe(false);
+    library.close();
+  });
+});

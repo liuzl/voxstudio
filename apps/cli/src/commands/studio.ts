@@ -5,7 +5,7 @@ import { webAssets } from "../generated/web-assets";
 import type { CliIo } from "../io";
 
 export const studioUsage = `usage: vox studio [--host HOST] [--port PORT] [--token TOKEN]
-                 [--max-sessions N] [--max-session-seconds N] [--demo]
+                 [--library DIR] [--max-sessions N] [--max-session-seconds N] [--demo]
 
 Serve the Web Studio: the browser app, the realtime WebSocket (/v1/realtime), and the
 credential-hiding REST facade in one process. Binds loopback by default; reaching it
@@ -18,6 +18,9 @@ options:
   --host HOST    bind address (default 127.0.0.1)
   --port PORT    listen port (default 8790)
   --token TOKEN  bearer token required on /v1 requests and the realtime socket
+  --library DIR  retain every finalized utterance (WAV + transcript) in DIR and serve
+                 the 素材库 panel at /v1/library; off by default (an explicit retention
+                 opt-in; VOX_GATEWAY_LIBRARY), and demo mode keeps it off regardless
 
 Demo guardrails (docs/public-demo.md), all off by default; environment fallbacks
 VOX_GATEWAY_MAX_SESSIONS, VOX_GATEWAY_MAX_SESSION_SECONDS, VOX_GATEWAY_DEMO=1:
@@ -53,6 +56,7 @@ export async function runStudio(
   let maxSessions = positiveEnv("VOX_GATEWAY_MAX_SESSIONS", true);
   let maxSessionSeconds = positiveEnv("VOX_GATEWAY_MAX_SESSION_SECONDS");
   let demoMode = process.env.VOX_GATEWAY_DEMO === "1";
+  let libraryDir = process.env.VOX_GATEWAY_LIBRARY;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
     const value = (): string => {
@@ -71,6 +75,7 @@ export async function runStudio(
     else if (arg === "--max-sessions") maxSessions = positiveNumber(value(), arg, true);
     else if (arg === "--max-session-seconds") maxSessionSeconds = positiveNumber(value(), arg);
     else if (arg === "--demo") demoMode = true;
+    else if (arg === "--library") libraryDir = value();
     else throw new TypeError(`studio: unknown option ${arg}`);
   }
   // The manifest is baked at build time; an API-only binary is a build outcome worth
@@ -90,6 +95,7 @@ export async function runStudio(
     ...(maxSessions === undefined ? {} : { maxSessions }),
     ...(maxSessionSeconds === undefined ? {} : { maxSessionSeconds }),
     ...(demoMode ? { demoMode } : {}),
+    ...(libraryDir === undefined || libraryDir === "" ? {} : { libraryDir }),
     loadSileroVad: loadSileroVadModel,
     log: line => io.err(line),
   });
