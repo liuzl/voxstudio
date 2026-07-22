@@ -184,11 +184,14 @@ headphones or a headset. `--speaker-duplex` uses the macOS voice-processing help
 real-hardware measurement harness (`bun run measure:aec`, see `platforms/macos-audio/`). The
 gate passed on built-in MacBook speakers with real speech: zero confirmed self-interruptions
 and 12/12 operator barge-ins heard. The Silero ONNX VAD (v5.1.2, pinned by SHA-256, fetched
-into a verified local cache on first use) passed the same gate with faster detection and is
+into a verified local cache on first use; release builds embed the same verified bytes, so
+the compiled binary needs no network) passed the same gate with faster detection and is
 the default everywhere — the native ONNX runtime in the workspace, an embedded
-onnxruntime-web WASM backend (same model, outputs identical to 2.4e-7, 0.2ms/frame) inside
-the compiled binary; `listen` falls back loudly to the certified energy detector only if
-both fail. The conversation loop is shared: `packages/conversation` drives
+onnxruntime-web WASM backend (same model, outputs identical to 2.4e-7, 0.2ms/frame,
+WebAssembly SIMD required) inside the compiled binary. One process-shared inference
+session serves every stream (per-stream state is 320 floats — session churn allocates
+nothing on the ONNX side); `listen` falls back loudly to the certified energy detector
+only if both runtimes fail. The conversation loop is shared: `packages/conversation` drives
 both `vox listen` and the realtime gateway, so the certified turn-taking and barge-in
 lifecycle has one implementation. The gateway (`apps/realtime-gateway`, Web Studio Phase 1)
 speaks the versioned session protocol over WebSocket — binary PCM media, snapshot reconnect,

@@ -30,4 +30,5 @@ voxstudio.yaml
 voxstudio.*.yaml
 *.bun-build
 apps/cli/src/generated/
+platforms/bun/src/generated/
 docs/technical-report.html

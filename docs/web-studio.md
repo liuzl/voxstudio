@@ -174,7 +174,17 @@ below rather than relitigated per feature.
    WASM in the binary, chosen at load with a logged fallback. Probe-measured before
    adoption: outputs identical to the native runtime within 2.4e-7 on shared frames,
    0.2ms per 32ms window. The energy detector remains only as the both-runtimes-failed
-   loud fallback. The voxstudio.cc deployment itself remains;
+   loud fallback. A same-day adversarial review (codex) reshaped the loader: one
+   process-shared inference session (Silero's recurrence rides in caller-owned
+   tensors, so per-stream cost is 320 floats — measured: RSS flat across 4000
+   session churns after heap warmup, where the per-session-session design leaked);
+   each backend is attempted whole, so a native binding that imports but cannot
+   create a session hands over to WASM instead of failing outright; release builds
+   embed the SHA-verified model via `tools/ensure-silero-model.ts` (gate re-run
+   with an empty cache: full turn, no network, cache untouched — the model never
+   enters the repo, matching the public-repo rules); and WebAssembly SIMD is the
+   stated hard prerequisite of the WASM path (onnxruntime-web ships only the SIMD
+   build; every Bun target qualifies). The voxstudio.cc deployment itself remains;
    its access model and gateway guardrails are designed and delivered in
    [public-demo.md](./public-demo.md) — what remains is the ops half (tunnel +
    Access configuration, internal repo).
