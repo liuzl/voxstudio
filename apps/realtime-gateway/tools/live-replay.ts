@@ -65,7 +65,12 @@ ws.addEventListener("message", event => {
 ws.addEventListener("open", () => {
   ws.send(JSON.stringify({
     v: 1, type: "session.start", idempotencyKey: crypto.randomUUID(),
-    options: { language: "zh", bargeIn: true, playbackAck: true, turnTaking: "speculative", voice: "zf_001" },
+    options: {
+      language: "zh", bargeIn: true, playbackAck: true, turnTaking: "speculative", voice: "zf_001",
+      // VOX_REPLAY_VAD=silero makes an unavailable silero a loud failure instead of a
+      // silent energy fallback — the compiled-binary VAD gate leans on this.
+      ...(process.env.VOX_REPLAY_VAD ? { vad: process.env.VOX_REPLAY_VAD } : {}),
+    },
   }));
   // Stream the utterance in 20ms frames like the mic worklet, then 2s of near-silence
   // frames so the VAD sees the stream continue (a real mic never stops sending).

@@ -84,7 +84,7 @@ async function main(args: string[]): Promise<number> {
     ...(demoMode ? { demoMode } : {}),
     ...(hasLibrary ? { libraryDir: libraryDir as string } : {}),
     ...(quotaBytes === undefined ? {} : { libraryMaxBytes: quotaBytes }),
-    loadSileroVad: loadSileroVadModel,
+    loadSileroVad: () => loadSileroVadModel(line => console.error(line)),
     ...(decoder === undefined ? {} : { pcmDecoder: decoder }),
     log: line => console.error(line),
   });

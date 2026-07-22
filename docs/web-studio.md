@@ -167,10 +167,14 @@ below rather than relitigated per feature.
    loads without the bearer token (a page load cannot carry a header, and the shell
    holds no secrets) while every `/v1` route stays gated; hashed `/assets/*` are
    immutable-cached, the SPA entry revalidates, unknown non-API paths fall back to
-   `index.html`. Known limit, stated in the command's usage: the compiled binary
-   carries no ONNX runtime, so barge-in detection degrades loudly to the certified
-   energy detector — WASM Silero (onnxruntime-web) is the open follow-up, shared
-   with the CLI's release packaging. The voxstudio.cc deployment itself remains;
+   `index.html`. **WASM Silero delivered 2026-07-22**, closing the known limit: the
+   compiled binary embeds onnxruntime-web's WASM backend (the `.wasm` and its loader
+   as file assets, the same mechanism as the web shell), so barge-in detection runs
+   the certified Silero model everywhere — native ONNX runtime in the workspace,
+   WASM in the binary, chosen at load with a logged fallback. Probe-measured before
+   adoption: outputs identical to the native runtime within 2.4e-7 on shared frames,
+   0.2ms per 32ms window. The energy detector remains only as the both-runtimes-failed
+   loud fallback. The voxstudio.cc deployment itself remains;
    its access model and gateway guardrails are designed and delivered in
    [public-demo.md](./public-demo.md) — what remains is the ops half (tunnel +
    Access configuration, internal repo).

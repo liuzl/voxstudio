@@ -12,8 +12,9 @@ Serve the Web Studio: the browser app, the realtime WebSocket (/v1/realtime), an
 credential-hiding REST facade in one process. Binds loopback by default; reaching it
 from another machine is a deployment decision (a tunnel, Access at the door). TOKEN,
 when set, guards every /v1 request and the WebSocket upgrade; the app shell itself is
-served without it. The compiled binary carries no ONNX runtime, so barge-in detection
-degrades loudly to the certified energy detector.
+served without it. Barge-in detection runs the certified Silero VAD everywhere: the
+native ONNX runtime in the workspace, an embedded WASM backend (same model, same
+numbers) inside the compiled binary.
 
 options:
   --host HOST    bind address (default 127.0.0.1)
@@ -114,7 +115,7 @@ export async function runStudio(
     ...(demoMode ? { demoMode } : {}),
     ...(libraryDir === undefined || libraryDir === "" ? {} : { libraryDir }),
     ...(libraryMaxBytes === undefined ? {} : { libraryMaxBytes }),
-    loadSileroVad: loadSileroVadModel,
+    loadSileroVad: () => loadSileroVadModel(line => io.err(line)),
     log: line => io.err(line),
   });
   io.out(`Web Studio at ${gateway.url}`);

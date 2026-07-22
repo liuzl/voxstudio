@@ -24,8 +24,9 @@ Run a continuous voice conversation. Press Ctrl-C to stop.
 Without --barge-in, microphone input is suppressed while the agent speaks so external speakers
 cannot interrupt playback. Use --barge-in only with headphones or a headset. --speaker-duplex uses
 the macOS Voice Processing helper for external-speaker AEC. --vad silero uses the Silero ONNX
-model (fetched into a verified local cache on first use) and is the default where the ONNX
-runtime is available; otherwise listen says so and uses the energy detector. --threshold is the
+model (fetched into a verified local cache on first use) and is the default everywhere: the
+native ONNX runtime in the workspace, an embedded WASM backend (same model, same numbers) in
+the compiled binary. If neither loads, listen says so and uses the energy detector. --threshold is the
 energy VAD's RMS threshold; under silero it sets the level pre-gate that keeps residual echo
 below notice (both default 0.01). --timing
 prints each turn's latency profile (VAD end, ASR, reply, first audio) to stderr. Turn-taking is
@@ -74,7 +75,7 @@ const defaultPlatform: ListenPlatform = {
   capture: device => capturePcm(device),
   createPlayer: () => new FfplaySink(),
   startSpeakerDuplex: startMacosAudioHost,
-  loadSileroVad: loadSileroVadModel,
+  loadSileroVad: () => loadSileroVadModel(line => console.error(line)),
 };
 
 function required(args: string[], index: number, option: string): string {
@@ -189,9 +190,10 @@ export async function runListen(
     try {
       vad = await sileroVad();
     } catch (error) {
-      // Silero is the certified default, but it needs the ONNX runtime, which the compiled
-      // standalone binary cannot carry. Asked-for silero fails loudly; the default degrades
-      // loudly to the energy detector, which passed the same gate.
+      // Silero is the certified default and carries its own WASM fallback for the compiled
+      // binary, so reaching here means both runtimes failed (or the model fetch did).
+      // Asked-for silero fails loudly; the default degrades loudly to the energy
+      // detector, which passed the same gate.
       if (options.vadExplicit) throw error;
       io.err(`listen: silero VAD unavailable (${error instanceof Error ? error.message : String(error)}); using the energy detector`);
       vad = energyVad();

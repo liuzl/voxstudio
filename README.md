@@ -185,8 +185,10 @@ real-hardware measurement harness (`bun run measure:aec`, see `platforms/macos-a
 gate passed on built-in MacBook speakers with real speech: zero confirmed self-interruptions
 and 12/12 operator barge-ins heard. The Silero ONNX VAD (v5.1.2, pinned by SHA-256, fetched
 into a verified local cache on first use) passed the same gate with faster detection and is
-the default where the ONNX runtime is available; `listen` falls back loudly to the certified
-energy detector otherwise. The conversation loop is shared: `packages/conversation` drives
+the default everywhere — the native ONNX runtime in the workspace, an embedded
+onnxruntime-web WASM backend (same model, outputs identical to 2.4e-7, 0.2ms/frame) inside
+the compiled binary; `listen` falls back loudly to the certified energy detector only if
+both fail. The conversation loop is shared: `packages/conversation` drives
 both `vox listen` and the realtime gateway, so the certified turn-taking and barge-in
 lifecycle has one implementation. The gateway (`apps/realtime-gateway`, Web Studio Phase 1)
 speaks the versioned session protocol over WebSocket — binary PCM media, snapshot reconnect,
@@ -194,9 +196,9 @@ idempotent commands, an endpoint-owned audible-playback clock — plus a REST fa
 keeps engine addresses and credentials server-side, aggregates voices across engines, and
 routes requests through the engine registry (named instances, role defaults, capability
 tags, per-request pinning). The whole studio also ships inside the compiled `vox` binary:
-`vox studio` embeds the built web app and serves it around the guarded API from one file
-(barge-in detection degrades loudly to the certified energy detector there — the binary
-carries no ONNX runtime). Remote TTS engines can stream Ogg/Opus (`stream_format: opus`,
+`vox studio` embeds the built web app and serves it around the guarded API from one file,
+barge-in detection included (the Silero WASM backend rides along — no native ONNX runtime
+needed). Remote TTS engines can stream Ogg/Opus (`stream_format: opus`,
 ~12KB/s vs raw PCM's 187.5KB/s) for slow WAN links, decoded gateway-side via ffmpeg. The browser studio (`apps/web`) ships five panels on top of it:
 live conversation (worklet microphone capture, gapless streamed playback, captions with turn
 state and per-turn timing, the negotiated AEC capability snapshot), generation with takes,
@@ -207,8 +209,8 @@ play, re-transcribe, correct inline into a `.ref.txt` the ASR reference workflow
 directly, promote to a clone voice sample; `--library-max-bytes 512M` bounds retained
 audio by evicting the oldest uncorrected, unpromoted captures — curated work is never
 auto-deleted), and engine settings with live health. Its real-browser
-double-talk/barge-in gate, route-change handling, and release packaging of the helper and
-the ONNX runtime remain separate measured delivery phases.
+double-talk/barge-in gate and route-change handling remain separate measured delivery
+phases.
 
 ## Related
 
