@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { EnergyVadSegmenter, SileroVadSegmenter, type VadSegmenter } from "@voxstudio/duplex-session";
+import { clickTrain, frameSamples, hum, sampleRate, steadyNoise } from "../tools/vad-corpus";
 import { loadSileroVadModel } from "./silero";
 
 // These tests exercise the real ONNX model from the verified local cache. On a
@@ -57,6 +59,36 @@ describe.skipIf(!haveModel)("silero VAD shared backend", () => {
     const again: number[] = [];
     for (let i = 0; i < 4; i += 1) again.push(await model.process(frame(2, i)));
     expect(again).toEqual(first);
+  });
+
+  test("silero rejects the non-speech negatives the energy detector confirms", async () => {
+    // The 2026-07-22 A/B, kept as a regression: over the deterministic negative
+    // corpus — all above the shared 0.01 RMS level floor — the energy detector
+    // confirms "speech" repeatedly (its indifference to speech-likeness is why it
+    // is only the fallback) while silero confirms nothing. If silero ever starts
+    // confirming these, the default detector got worse than its fallback.
+    const negatives = [clickTrain(30, 0.3), steadyNoise(30, 0.05), hum(30, 0.05)];
+    const confirmsOf = async (segmenter: VadSegmenter, samples: Float32Array): Promise<number> => {
+      segmenter.reset();
+      let confirmed = 0;
+      for (let offset = 0; offset < samples.length; offset += frameSamples) {
+        const events = await segmenter.push(samples.subarray(offset, Math.min(offset + frameSamples, samples.length)), 1_000 * offset / sampleRate);
+        for (const event of events) if (event.type === "speech.confirmed") confirmed += 1;
+      }
+      return confirmed;
+    };
+    const energy = new EnergyVadSegmenter({ sampleRate });
+    const silero = new SileroVadSegmenter({ model: await loadSileroVadModel() });
+    let energyTotal = 0;
+    let sileroTotal = 0;
+    for (const clip of negatives) {
+      energyTotal += await confirmsOf(energy, clip);
+      sileroTotal += await confirmsOf(silero, clip);
+    }
+    expect(sileroTotal).toBe(0);
+    // The corpus is loud enough to fool a level threshold — that being true is
+    // part of what the test asserts (otherwise "silero confirms nothing" is vacuous).
+    expect(energyTotal).toBeGreaterThan(0);
   });
 
   test("session churn allocates per-stream state only — a hundred loads stay cheap", async () => {

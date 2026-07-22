@@ -21,7 +21,8 @@
     "measure:agent-voice": "bun apps/mcp/tools/measure-agent-voice.ts",
     "measure:etiquette": "bun apps/realtime-gateway/tools/measure-etiquette.ts",
     "measure:guardrails": "bun apps/realtime-gateway/tools/measure-guardrails.ts",
-    "measure:library": "bun apps/realtime-gateway/tools/measure-library.ts"
+    "measure:library": "bun apps/realtime-gateway/tools/measure-library.ts",
+    "measure:vad": "bun platforms/bun/tools/measure-vad.ts"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

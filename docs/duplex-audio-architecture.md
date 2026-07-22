@@ -329,6 +329,23 @@ conversation): the seam was judged not noticeable.
 It exists for diagnostics, deterministic fixtures, and operation where a model
 artifact cannot be loaded; it is not the production-default quality target.
 
+**The default's advantage, quantified** (`bun run measure:vad`, promoted from the
+2026-07-22 A/B probe): through the product segmentation path at default options,
+the two detectors have *identical* sensitivity (the shared 0.01 RMS level floor —
+silero's echo pre-gate — makes silero's trigger set a subset of energy's, so both
+hit every audible positive and both miss below the floor by design) and
+equivalent confirm latency (medians within ~15 ms either way across runs). The
+difference is specificity: over deterministic non-speech negatives above the
+floor — keyboard-like click trains, fan-level broadband noise, appliance hum —
+the energy detector confirms "speech" at **3–4/min** while silero confirms
+**zero**. A confirmed false barge-in kills the playing reply, so this is the
+user-facing meaning of "silero is better": typing next to the microphone
+interrupts an energy-detector conversation and does not interrupt a silero one.
+The gate fails if silero ever misses an audible positive, confirms a negative,
+confirms below the floor (the floor moving must be a decision, not drift), or
+falls more than 50 ms behind energy's confirm latency; the zero-false-confirm
+contrast is also a standing regression test in `platforms/bun/src/silero.test.ts`.
+
 The production VAD target is the 16 kHz ONNX Silero VAD model. It is chosen for
 low CPU latency, multilingual use, permissive licensing, and deployment through
 native ONNX Runtime or ONNX Runtime Web. The model artifact is fetched into a
