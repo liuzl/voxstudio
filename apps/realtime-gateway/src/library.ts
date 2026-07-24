@@ -120,10 +120,13 @@ export class CaptureLibrary {
       }
     }
     const known = new Set(this.db.query<{ id: string }, []>("SELECT id FROM captures").all().map(row => row.id));
-    for (const name of readdirSync(this.capturesDir)) {
-      const owner = /^(.+?)\.(wav|txt|ref\.txt)$/.exec(name)?.[1];
-      if (name.endsWith(".tmp") || (owner !== undefined && !known.has(owner))) {
-        rmSync(join(this.capturesDir, name), { force: true });
+    // Files only: a stray subdirectory is not ours to delete, and a non-recursive rm
+    // on one would throw and take the whole open down with it.
+    for (const entry of readdirSync(this.capturesDir, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const owner = /^(.+?)\.(wav|txt|ref\.txt)$/.exec(entry.name)?.[1];
+      if (entry.name.endsWith(".tmp") || (owner !== undefined && !known.has(owner))) {
+        rmSync(join(this.capturesDir, entry.name), { force: true });
       }
     }
   }

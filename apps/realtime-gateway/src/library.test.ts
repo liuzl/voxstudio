@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { join } from "node:path";
 import { writeWav } from "@voxstudio/audio";
 import { CaptureLibrary, parseByteSize, type CaptureLibraryOptions } from "./library";
 
@@ -129,7 +130,10 @@ describe("capture library", () => {
     await library.correct(doomed.id, "有 sidecar");
     await library.close();
 
-    const capturesDir = library.audioPath("x").replace(/\/x\.wav$/, "");
+    // join(), not string surgery on audioPath(): the old forward-slash regex never
+    // matched Windows separators, leaving `x.wav` in the path — Bun.write then created
+    // x.wav as a directory and reconcile crashed trying to rm it (CI, Windows only).
+    const capturesDir = join(library.dir, "captures");
     await Bun.file(library.audioPath(doomed.id)).delete();
     await Bun.write(`${capturesDir}/orphan.wav`, wav());
     await Bun.write(`${capturesDir}/${kept.id}.wav.tmp`, "interrupted");
