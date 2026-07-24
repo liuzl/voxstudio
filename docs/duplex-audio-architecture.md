@@ -372,14 +372,16 @@ run on 2026-07-14 (same route, real TTS far-end, 12 operator cues) certified
 the gated detector: 0 confirmed self-interruptions (5.6/min raw model starts
 absorbed), 12/12 barge-ins heard with none missed or false, and detection
 latency p50 574 ms — 69 ms faster than the energy detector's certified run.
-Silero is therefore the CLI default where the ONNX runtime is available;
-`listen` degrades loudly to the equally-certified energy detector otherwise
-(the compiled standalone binary cannot carry the runtime), and `--vad` selects
-one explicitly. The
-model is pinned by version and SHA-256 (Silero VAD v5.1.2, MIT) and fetched into
-`~/.cache/voxstudio/` on first use; a hash mismatch refuses to load. Inference
-runs through onnxruntime-node at a fraction of a millisecond per 32 ms window.
-Release packaging still owns embedding a runtime for the standalone binary.
+Silero is therefore the default everywhere (2026-07-22): the native ONNX
+runtime in the workspace, an embedded onnxruntime-web WASM backend inside the
+compiled binary (same model, outputs identical to 2.4e-7, 0.2 ms per window;
+one process-shared inference session serves every stream), with release
+builds embedding the SHA-verified model itself so the standalone binary needs
+no first-use network. `listen` degrades loudly to the equally-certified
+energy detector only if both runtimes fail, and `--vad` selects one
+explicitly. The model is pinned by version and SHA-256 (Silero VAD v5.1.2,
+MIT) and fetched into `~/.cache/voxstudio/` on first use where not embedded;
+a hash mismatch refuses to load.
 
 ## Realtime gateway and events
 
