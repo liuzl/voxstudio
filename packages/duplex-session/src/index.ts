@@ -155,7 +155,7 @@ export interface VadSegmenter {
  * this lifecycle — the part the barge-in policy and the AEC gate certify — must not fork
  * per detector.
  */
-export class VadSegmentAssembler {
+class VadSegmentAssembler {
   private readonly minSpeechSamples: number;
   private readonly silenceSamples: number;
   private readonly maxSpeechSamples: number;

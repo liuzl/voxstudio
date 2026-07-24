@@ -114,6 +114,25 @@ export function createBuiltinTools(deps: BuiltinToolDeps): ConversationTool[] {
   ];
 }
 
+/**
+ * The keyterm provider shared by both surfaces: config terms plus the live voice-bank
+ * ids, cached briefly so the ASR correction pass does not refetch the bank every turn.
+ * A failed bank fetch degrades to the config terms rather than failing the turn.
+ */
+export function createKeytermProvider(options: {
+  configTerms: readonly string[];
+  listVoices: () => Promise<BuiltinVoice[]>;
+  cacheMs?: number;
+}): () => Promise<string[]> {
+  let cache: { at: number; terms: string[] } | undefined;
+  return async () => {
+    if (cache && Date.now() - cache.at < (options.cacheMs ?? 60_000)) return cache.terms;
+    const bank = await options.listVoices().catch(() => []);
+    cache = { at: Date.now(), terms: [...options.configTerms, ...bank.map(voice => voice.id)] };
+    return cache.terms;
+  };
+}
+
 export interface CreateVadOptions {
   /** Explicit detector choice; undefined prefers silero and degrades loudly to energy. */
   choice?: "energy" | "silero";

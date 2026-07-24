@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { EnergyVadSegmenter, SileroVadSegmenter, type SpeechProbabilityModel } from "@voxstudio/duplex-session";
-import { createBuiltinTools, createSessionVad, type BuiltinToolDeps } from "./builtin";
+import { createBuiltinTools, createKeytermProvider, createSessionVad, type BuiltinToolDeps } from "./builtin";
 
 function deps(overrides: Partial<BuiltinToolDeps> = {}): BuiltinToolDeps & { calls: Record<string, unknown[]> } {
   const calls: Record<string, unknown[]> = { setVoice: [], setSpeed: [], endCall: [], onVoiceAccepted: [] };
@@ -139,5 +139,37 @@ describe("createSessionVad", () => {
     const vad = await createSessionVad({ onFallback: message => messages.push(message) });
     expect(vad).toBeInstanceOf(EnergyVadSegmenter);
     expect(messages).toHaveLength(1);
+  });
+});
+
+describe("createKeytermProvider", () => {
+  test("merges config terms with voice ids and caches the bank fetch", async () => {
+    let fetches = 0;
+    const provider = createKeytermProvider({
+      configTerms: ["voxstudio"],
+      listVoices: async () => { fetches += 1; return [{ id: "alice" }]; },
+    });
+    expect(await provider()).toEqual(["voxstudio", "alice"]);
+    expect(await provider()).toEqual(["voxstudio", "alice"]);
+    expect(fetches).toBe(1);
+  });
+
+  test("a failed bank fetch degrades to the config terms, not a failed turn", async () => {
+    const provider = createKeytermProvider({
+      configTerms: ["voxstudio"],
+      listVoices: () => Promise.reject(new Error("engine down")),
+    });
+    expect(await provider()).toEqual(["voxstudio"]);
+  });
+
+  test("the cache expires after cacheMs", async () => {
+    let fetches = 0;
+    const provider = createKeytermProvider({
+      configTerms: [],
+      listVoices: async () => { fetches += 1; return [{ id: `v${fetches}` }]; },
+      cacheMs: 0,
+    });
+    expect(await provider()).toEqual(["v1"]);
+    expect(await provider()).toEqual(["v2"]);
   });
 });

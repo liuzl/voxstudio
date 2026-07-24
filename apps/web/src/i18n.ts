@@ -54,7 +54,6 @@ const en = {
   "断句中": "Finalizing",
   "思考中": "Thinking",
   "回答中": "Speaking",
-  "重配置": "Reconfiguring",
   "已结束": "Ended",
 
   // Conversation panel — timing chips

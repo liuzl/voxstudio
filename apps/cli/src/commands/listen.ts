@@ -1,6 +1,6 @@
 import { probeEngine, AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
 import { engine } from "@voxstudio/config";
-import { createBuiltinTools, createSessionVad, runConversation, type ConversationPlayer, type ConversationTool } from "@voxstudio/conversation";
+import { createBuiltinTools, createKeytermProvider, createSessionVad, runConversation, type ConversationPlayer, type ConversationTool } from "@voxstudio/conversation";
 import type { VoxConfig } from "@voxstudio/contracts";
 import { connectMcpServers, type McpToolSource } from "@voxstudio/mcp";
 import {
@@ -232,13 +232,10 @@ export async function runListen(
       })
       : undefined;
     conversationOptions.tools = [...tools, ...(mcpSource?.tools() ?? [])];
-    let keytermCache: { at: number; terms: string[] } | undefined;
-    conversationOptions.keyterms = async () => {
-      if (keytermCache && Date.now() - keytermCache.at < 60_000) return keytermCache.terms;
-      const bank = await tts.listVoices().catch(() => []);
-      keytermCache = { at: Date.now(), terms: [...config.keyterms, ...bank.map(entry => entry.id)] };
-      return keytermCache.terms;
-    };
+    conversationOptions.keyterms = createKeytermProvider({
+      configTerms: config.keyterms,
+      listVoices: () => tts.listVoices(),
+    });
     await runConversation({
       session,
       vad,

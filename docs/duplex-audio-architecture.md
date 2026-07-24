@@ -60,7 +60,7 @@ flowchart LR
   end
   GW["realtime-gateway<br/>WS: JSON control + binary PCM"]
   CONV["conversation loop<br/>(packages/conversation)"]
-  DS["DuplexSession<br/>turns · cancellation · bounded queues"]
+  DS["DuplexSession<br/>turns · cancellation · events"]
   PIPE["VAD → ASR → LLM → sentence TTS → playback"]
   MAC -->|"PCM/event IPC"| CONV
   HEADSET -->|"PCM/event IPC"| CONV
@@ -94,8 +94,9 @@ interface PlaybackHandle {
 ```
 
 Frames include a monotonic capture/render timestamp, sample rate, channel
-count, and `sessionId`/`turnId` where applicable. Platform adapters must use
-bounded queues and report overflow; silently accumulating audio is forbidden.
+count, and `sessionId`/`turnId` where applicable. Platform adapters must bound
+their audio buffering (the gateway drops buffered input oldest-first past a
+ceiling, so the VAD sees a gap); silently accumulating audio is forbidden.
 
 The initial codec inside a local endpoint is PCM16 mono at 16 kHz for ASR and
 PCM16 or float PCM at the TTS sample rate for playback. Resampling happens at
@@ -604,8 +605,7 @@ Required measurements per supported endpoint:
 - capture-to-local-mute latency after a confirmed barge-in;
 - VAD end to ASR final, first LLM token, first TTS audio, and audible first
   playback latency (p50/p95);
-- queue overflow, device-route change, permission-denied, and cancellation
-  recovery tests.
+- device-route change, permission-denied, and cancellation recovery tests.
 - negotiated AEC/NS/AGC capability coverage by browser, operating system, and
   audio route, with the chosen fallback recorded.
 
@@ -616,8 +616,8 @@ supported macOS hardware. Browser and CLI metrics are reported separately.
 ## Delivery phases
 
 1. **Session contract and test harness**: `packages/duplex-session` now owns
-   strict turn transitions, per-turn `AbortSignal`, sequence-numbered events,
-   and bounded playback queues, with focused unit tests. The reconnect and
+   strict turn transitions, per-turn `AbortSignal`, and sequence-numbered
+   events, with focused unit tests. The reconnect and
    idempotency transport tests now run against the realtime gateway (2026-07-15):
    simulated duplex turns over a real WebSocket, snapshot resync after a
    dropped socket, duplicate-command acknowledgement, and stale-interrupt

@@ -42,7 +42,7 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | `engines/funasr/` | Realtime-slot ASR server (SenseVoice-Small / Paraformer, OpenAI-compatible) |
 | `engines/kokoro/` | Local CPU TTS server — the conversation fast lane (fixed voice bank, ~0.2s first audio) |
 | `packages/` | Shared TypeScript contracts, clients, configuration, text, audio, and orchestration |
-| `packages/duplex-session/` | Platform-neutral realtime turn state, cancellation, events, and bounded playback queue |
+| `packages/duplex-session/` | Platform-neutral realtime turn state, cancellation, and events |
 | `packages/conversation/` | The shared conversation loop (VAD turns, barge-in policy, speculative turn-taking, streaming replies, typed tools with a spoken confirmation flow) behind `vox listen` and the gateway |
 | `packages/mcp/` | The MCP client bridge: configured servers' tools join the conversation with annotation-derived effects |
 | `platforms/bun/` | Filesystem, process, recording, and playback adapters for Bun apps |

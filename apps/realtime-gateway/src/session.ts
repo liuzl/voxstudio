@@ -3,6 +3,7 @@ import { engine, enginesOfKind, roleInstance } from "@voxstudio/config";
 import {
   builtinToolNames,
   createBuiltinTools,
+  createKeytermProvider,
   createSessionVad,
   runConversation,
   type ConversationFrame,
@@ -145,9 +146,6 @@ export class GatewaySession {
   private readonly sawDelta = new Set<string>();
   /** Set by the end_call tool: hang up after the current turn finishes audibly. */
   private endAfterTurn = false;
-  /** The keyterm list (config terms + live voice ids), cached briefly per session. */
-  private keytermCache: { at: number; terms: string[] } | undefined;
-
   constructor(options: GatewaySessionOptions) {
     this.options = options;
     this.duplex = new DuplexSession({
@@ -216,12 +214,10 @@ export class GatewaySession {
       ...(start.nudgeAfterSeconds === undefined ? {} : { nudgeAfterSeconds: start.nudgeAfterSeconds }),
       ...(Object.keys(config.pronunciations).length === 0 ? {} : { pronunciations: config.pronunciations }),
     } as Parameters<typeof runConversation>[1];
-    conversationOptions.keyterms = async () => {
-      if (this.keytermCache && Date.now() - this.keytermCache.at < 60_000) return this.keytermCache.terms;
-      const bank = await this.options.listVoices?.().catch(() => []) ?? [];
-      this.keytermCache = { at: Date.now(), terms: [...config.keyterms, ...bank.map(voice => voice.id)] };
-      return this.keytermCache.terms;
-    };
+    conversationOptions.keyterms = createKeytermProvider({
+      configTerms: config.keyterms,
+      listVoices: async () => await this.options.listVoices?.() ?? [],
+    });
     // The shared phase-1 session tools (docs/tool-loop.md), wired to this session's
     // capabilities: the union voice bank with cross-engine retargeting, the registry's
     // live health, and the hang-up flag. Handlers mutate the live conversation options —

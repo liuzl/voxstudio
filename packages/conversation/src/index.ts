@@ -636,6 +636,7 @@ export async function runConversation(
 export {
   builtinToolNames,
   createBuiltinTools,
+  createKeytermProvider,
   createSessionVad,
   type BuiltinToolDeps,
   type BuiltinVoice,

@@ -86,7 +86,6 @@ interface StudioState {
   setVoice(voice: string, engine?: string): void;
   setWelcome(welcome: string): void;
   setNudgeAfterSeconds(seconds: number): void;
-  notice(kind: NoticeView["kind"], text: string): void;
   toasts: ToastView[];
   toast(kind: ToastView["kind"], text: string): void;
   dismissToast(id: number): void;
@@ -300,8 +299,6 @@ export const useStudio = create<StudioState>((set, get) => ({
   clearHistory: () => set({ turns: [], notices: [] }),
   setCapability: capability => set({ capability }),
   setVoice: (voice, engine) => set({ voice, voiceEngine: engine ?? "" }),
-  notice: (kind, text) =>
-    set(state => ({ notices: [...state.notices, { at: Date.now(), kind, text }].slice(-maxNotices) })),
   toasts: [],
   toast: (kind, text) =>
     set(state => ({ toasts: [...state.toasts, { id: nextToastId++, kind, text }].slice(-maxToasts) })),
