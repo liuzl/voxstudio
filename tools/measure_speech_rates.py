@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Fit `voxcore.text._CPS` -- the per-script speech rate table -- against a live engine.
+"""Fit the per-script speech rate table -- `charsPerSecond` in `packages/text` -- against a live engine.
 
 Run this when you change the default reference voice. Speaking rate is a property of the
 voice as much as of the script, and every chunk-duration estimate is downstream of it.
@@ -49,9 +49,7 @@ import sys
 import time
 from pathlib import Path
 
-from voxcore import load_config, read_wav, trim_edge_silence
-from voxcore.clients.tts import TTSClient
-from voxcore.text import _script_of  # the table this script fits is keyed on it
+from voxkit import TtsClient, est_seconds, read_wav, script_of, trim_edge_silence
 
 # Three paragraphs per script; the third is held out for validation. Ordinary prose, of
 # roughly a full chunk's length. Replace these if you have text closer to your own domain
@@ -128,7 +126,7 @@ PARAGRAPHS: dict[str, list[str]] = {
 }
 
 
-def spoken_seconds(tts: TTSClient, text: str, attempts: int = 3) -> float:
+def spoken_seconds(tts: TtsClient, text: str, attempts: int = 3) -> float:
     """Synthesize once and return the duration of the speech, edge silence removed.
 
     A full fit is over a hundred generations and a quarter of an hour. The engine will
@@ -158,7 +156,7 @@ def script_counts(text: str) -> dict[str, int]:
     current: str | None = None
     leading = 0
     for ch in " ".join(text.split()):
-        script = _script_of(ch)
+        script = script_of(ch)
         if script is None:
             if current is None:
                 leading += 1
@@ -192,10 +190,9 @@ def main() -> None:
         print("warning: fewer than 3 repeats cannot see past the engine's own spread\n",
               file=sys.stderr)
 
-    cfg = load_config()
     runs: dict[str, list[dict]] = {}
 
-    with TTSClient(cfg.engine("tts"), cfg.tts_defaults) as tts:
+    with TtsClient() as tts:
         for script in wanted:
             runs[script] = []
             for i, para in enumerate(PARAGRAPHS[script]):
@@ -231,11 +228,10 @@ def main() -> None:
     print("The `spread` column is the engine's own run-to-run variation on that very "
           "paragraph.\nAn error inside it says nothing about the rate table.")
 
-    print("\nPaste into core/voxcore/text.py:\n")
-    print("_CPS = {")
+    print("\nPaste into `charsPerSecond` in packages/text/src/index.ts, and keep the")
+    print("`CPS` mirror in tools/voxkit.py identical:\n")
     for script, cps in sorted(rates.items(), key=lambda kv: -kv[1]):
-        print(f'    "{script}": {cps:.1f},')
-    print("}")
+        print(f"  {script}: {cps:.1f},")
 
 
 def _fit(wanted: list[str], runs: dict[str, list[dict]]) -> dict[str, float]:
@@ -270,19 +266,13 @@ def _spread(samples: list[float]) -> float:
 
 
 def _est_with(rates: dict[str, float], text: str) -> float:
-    """`est_seconds` under a candidate table, by running the real one over it.
+    """`est_seconds` under a candidate table.
 
-    Swapping the module's table rather than reimplementing the estimate means the
-    validation exercises the code that production will run, inheritance rules and all.
+    voxkit's estimator is pinned to the same `fixtures/text/` cases as the production
+    `estSeconds` in packages/text, so pricing under it exercises the same inheritance
+    rules production will run.
     """
-    from voxcore import text as textmod
-
-    saved_cps, saved_default = textmod._CPS, textmod._DEFAULT_CPS
-    textmod._CPS, textmod._DEFAULT_CPS = rates, min(rates.values())
-    try:
-        return textmod.est_seconds(text)
-    finally:
-        textmod._CPS, textmod._DEFAULT_CPS = saved_cps, saved_default
+    return est_seconds(text, rates)
 
 
 if __name__ == "__main__":

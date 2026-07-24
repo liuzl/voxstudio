@@ -47,8 +47,7 @@ import time
 
 import numpy as np
 
-from voxcore import chunk_text, load_config, read_wav, trim_edge_silence
-from voxcore.clients.tts import TTSClient
+from voxkit import TtsClient, chunk_text, read_wav, trim_edge_silence
 
 WINDOW_S = 6.0
 
@@ -109,7 +108,7 @@ def windows(samples: np.ndarray, rate: int):
         yield start / rate, piece
 
 
-def synth(tts: TTSClient, text: str, voice: str, attempts: int = 3):
+def synth(tts: TtsClient, text: str, voice: str, attempts: int = 3):
     """A 500 on the unchunked arm is expected, not exceptional. See the module docstring."""
     for attempt in range(1, attempts + 1):
         try:
@@ -193,9 +192,8 @@ def main() -> None:
         reference = reference.mean(axis=1)
     ref = encoder(reference, ref_rate)
 
-    cfg = load_config()
     done = already_measured(args.out)
-    with TTSClient(cfg.engine("tts"), cfg.tts_defaults) as tts, \
+    with TtsClient() as tts, \
             open(args.out, "a", encoding="utf-8") as out:
         for arm in arms:
             for rep in range(args.repeats):

@@ -28,8 +28,7 @@ where such runs are dense, and a chunk dense in acronyms is a short chunk: a 25%
 on 2.8 seconds drifts nothing. A 30s chunk dilutes them.
 """
 
-from voxcore import est_seconds, load_config, read_wav, trim_edge_silence
-from voxcore.clients.tts import TTSClient
+from voxkit import TtsClient, est_seconds, read_wav, trim_edge_silence
 
 CARRIER = "这是{}的测试。"
 
@@ -46,14 +45,13 @@ PROBES = (
 )
 
 
-def spoken_seconds(tts: TTSClient, text: str) -> float:
+def spoken_seconds(tts: TtsClient, text: str) -> float:
     samples, rate = read_wav(tts.speech(text))
     return len(trim_edge_silence(samples, rate)) / rate
 
 
 def main() -> None:
-    cfg = load_config()
-    with TTSClient(cfg.engine("tts"), cfg.tts_defaults) as tts:
+    with TtsClient() as tts:
         baseline = spoken_seconds(tts, CARRIER.format(""))
         print(f"empty carrier {CARRIER.format('')!r}: {baseline:.2f}s")
         print(f"\n{'probe':10} {'chars':>5} {'probe_s':>8} {'s/char':>7} {'est_s/char':>11}")

@@ -94,8 +94,10 @@ the package graph exists.
 upstream model package. The measurement programs remain Python because their speaker
 encoders and numerical tooling already live in that ecosystem.
 
-The Python `core/` and `apps/cli/` are transitional. They receive correctness fixes while
-the replacement is incomplete, but new product surfaces are implemented in TypeScript.
+The transitional Python `core/` and `voxcli` fallback served as the migration's parity
+oracle and were retired in 2026-07 once the TypeScript side had moved past them.
+`tools/voxkit.py` keeps the minimal mirror the measurement scripts need, pinned to the
+shared `fixtures/text/` contract.
 
 ## Why not Rust now
 

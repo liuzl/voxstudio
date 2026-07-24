@@ -1,12 +1,18 @@
 # tools
 
 Measurement scripts. They talk to a **live TTS engine** and take minutes to run, so they
-are not tests — nothing in CI touches them. They exist so the constants in `core/` can be
-re-derived rather than trusted.
+are not tests — nothing in CI touches them. They exist so the constants in `packages/`
+can be re-derived rather than trusted.
+
+The scripts are Python (their instruments are numpy, soundfile, speechbrain);
+production is TypeScript. `voxkit.py` carries the minimal mirror they measure
+against — `est_seconds`/`chunk_text` from `packages/text`, the trim semantics from
+`packages/audio` — pinned to the shared `fixtures/text/` cases by
+`tests/test_voxkit.py`, so a drift between the mirror and production fails in CI.
 
 | script | fits | re-run when |
 |---|---|---|
-| `measure_speech_rates.py` | `voxcore.text._CPS`, the per-script chars/sec table | you change the default reference voice, or the TTS model |
+| `measure_speech_rates.py` | `charsPerSecond` in `packages/text` (mirrored as `voxkit.CPS`) | you change the default reference voice, or the TTS model |
 | `measure_timbre_drift.py` | `chunking.max_seconds` — how fast the voice drifts within one generation | same |
 | `probe_spelled_out.py` | nothing — it documents a rule deliberately left unimplemented | same, if you want to re-check that decision |
 | `benchmark_longform_asr.py` | private long-form ASR quality/performance report | before promoting or changing MOSS |
@@ -22,7 +28,7 @@ uv run python tools/probe_spelled_out.py               # ~30 seconds
 ```
 
 `measure_timbre_drift.py` is the odd one out: it needs a speaker-verification encoder,
-which the workspace lock does not carry. Run it in a throwaway environment, **on the engine
+which the project lock does not carry. Run it in a throwaway environment, **on the engine
 host** — it moves half an hour of audio, and there is no reason to pull that across a
 network. Give the encoder the CPU; the GPU is holding the TTS model.
 
@@ -72,8 +78,9 @@ and the next identical request failed until a restart. `engines/voxcpm2-server` 
 `docs/chunking.md`), which holds the peak flat. Against an engine without those, expect the
 500 — every window is appended as it is measured, so a re-run resumes.
 
-`measure_speech_rates.py` prints a `_CPS = {...}` literal to paste into
-`core/voxcore/text.py`, and, before it, the error against a held-out paragraph per script
+`measure_speech_rates.py` prints the fitted rates to paste into `charsPerSecond` in
+`packages/text/src/index.ts` (keeping the `voxkit.CPS` mirror identical), and, before
+it, the error against a held-out paragraph per script
 that fitted nothing, beside the engine's own spread on that same paragraph. **Read both
 before pasting.** An error smaller than the spread beside it says nothing at all.
 

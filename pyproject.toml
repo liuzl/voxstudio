@@ -1,13 +1,25 @@
-[tool.uv.workspace]
-members = ["core", "apps/cli"]
-# engines/ stay out of the workspace on purpose. voxcpm2-server pins a CUDA torch
+[project]
+name = "voxstudio-tools"
+version = "0.1.0"
+description = "Measurement and calibration scripts for voxstudio (tools/); production code is TypeScript"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27",
+    "numpy>=1.24",
+    "soundfile>=0.12",
+    "pyyaml>=6",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+# engines/ keep their own locks on purpose. voxcpm2-server pins a CUDA torch
 # build and resolves for x86_64 linux only; a shared lock would have to satisfy
 # that and a laptop at once, collapsing both to the lowest common denominator.
-exclude = ["engines/*"]
 
-[tool.uv.sources]
-voxcore = { workspace = true }
+[tool.uv]
+package = false
 
 [tool.pytest.ini_options]
-testpaths = ["core/tests", "apps/cli/tests", "tools/tests"]
-pythonpath = ["."]
+testpaths = ["tools/tests"]
+pythonpath = [".", "tools"]

@@ -1,6 +1,6 @@
 # Long-text synthesis: why chunk, and how to join
 
-Two constants in `core/voxcore/` look arbitrary and are not. Both were measured.
+Two constants in `packages/text/` look arbitrary and are not. Both were measured.
 
 ## Chunk at ~15 seconds of speech, not at the token limit
 

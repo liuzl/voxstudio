@@ -1,9 +1,0 @@
-Metadata-Version: 2.4
-Name: voxcore
-Version: 0.1.0
-Summary: voxstudio orchestration core: OpenAI-compatible ASR/LLM/TTS clients, chunking, voice profiles
-Requires-Python: >=3.10
-Requires-Dist: httpx>=0.27
-Requires-Dist: numpy>=1.24
-Requires-Dist: soundfile>=0.12
-Requires-Dist: pyyaml>=6

@@ -46,17 +46,18 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | `packages/conversation/` | The shared conversation loop (VAD turns, barge-in policy, speculative turn-taking, streaming replies, typed tools with a spoken confirmation flow) behind `vox listen` and the gateway |
 | `packages/mcp/` | The MCP client bridge: configured servers' tools join the conversation with annotation-derived effects |
 | `platforms/bun/` | Filesystem, process, recording, and playback adapters for Bun apps |
-| `core/` | Transitional Python parity implementation and research-facing core |
-| `apps/cli/` | Compiled TypeScript `vox` CLI plus the transitional Python fallback |
+| `apps/cli/` | Compiled TypeScript `vox` CLI |
 | `apps/realtime-gateway/` | Web Studio server: the duplex session protocol over WebSocket plus a credential-hiding REST facade |
 | `apps/web/` | The browser studio (React + Tailwind + Zustand): conversation, generation, voice bank + design profiles, captures library, and engine settings panels |
 | `apps/mcp/` | `vox-mcp` — voxstudio's voice I/O as an MCP server (speak / transcribe / list_voices) for any agent |
+| `tools/` | Measurement and calibration scripts (Python) — the constants in `packages/` stay re-derivable |
 | `docs/` | Product design docs |
 
 The product workspace uses Bun 1.3.14. Shared packages use Web APIs and remain independent
-of Bun; operating-system integration stays in `platforms/`. The Python parity code forms a
-uv workspace with one light, cross-platform lock. `engines/` is excluded from it because
-the TTS engine pins a CUDA torch build and resolves for x86_64 Linux only.
+of Bun; operating-system integration stays in `platforms/`. The measurement scripts in
+`tools/` form a small uv project with one light, cross-platform lock. `engines/` keep
+their own locks because the TTS engine pins a CUDA torch build and resolves for x86_64
+Linux only.
 
 ## Quick start
 
@@ -121,13 +122,6 @@ Tagged releases provide native archives for macOS arm64, Linux x64, and Windows 
 extracting the archive, put `vox` (or `vox.exe`) on `PATH`, copy `config.example.yaml` to a
 writable location, and point `--config` at it. Verify a downloaded archive against the
 release's `SHA256SUMS` file before installing it. FFmpeg remains optional and is not bundled.
-
-The Python CLI remains available as a migration fallback and parity oracle:
-
-```bash
-uv sync --locked
-uv run vox health
-```
 
 Long text is chunked at ~15 seconds of *estimated speech* — roughly 85 Chinese
 characters, or 275 English ones — and the pieces are joined by trimming each one's edge
