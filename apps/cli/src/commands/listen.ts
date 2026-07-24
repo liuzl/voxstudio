@@ -1,14 +1,11 @@
 import { probeEngine, AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
 import { engine } from "@voxstudio/config";
-import { type ConversationTool, runConversation, type ConversationPlayer } from "@voxstudio/conversation";
+import { createBuiltinTools, createSessionVad, runConversation, type ConversationPlayer, type ConversationTool } from "@voxstudio/conversation";
 import type { VoxConfig } from "@voxstudio/contracts";
 import { connectMcpServers, type McpToolSource } from "@voxstudio/mcp";
 import {
   DuplexSession,
-  EnergyVadSegmenter,
-  SileroVadSegmenter,
   type SpeechProbabilityModel,
-  type VadSegmenter,
 } from "@voxstudio/duplex-session";
 import { ffmpegPcmDecoder, capturePcm, FfplaySink, loadSileroVadModel, startMacosAudioHost, type MacosAudioHost, type PcmCapture, type PcmSink } from "@voxstudio/platform-bun";
 import { join } from "node:path";
@@ -151,9 +148,7 @@ export async function runListen(
         // The end_call tool hangs up after the farewell finished audibly.
         queueMicrotask(() => stop());
       }
-      if (event.type === "audio.queue_overflow") {
-        io.err(`listen: playback queue reached ${event.maxQueuedMs}ms; dropping audio`);
-      } else if (event.type === "turn.false_barge_in") {
+      if (event.type === "turn.false_barge_in") {
         io.err("listen: ignored a brief sound during playback (not speech)");
       } else if (event.type === "turn.reopened" && options.timing) {
         // The wasted-speculation counter: each reopen means one speculative dispatch was
@@ -165,40 +160,18 @@ export async function runListen(
       }
     },
   });
-  const energyVad = (): VadSegmenter => new EnergyVadSegmenter({
+  // Silero is the certified default and carries its own WASM fallback for the compiled
+  // binary, so a fallback here means both runtimes failed (or the model fetch did).
+  const vad = await createSessionVad({
+    choice: options.vad,
+    explicit: options.vadExplicit,
     sampleRate: 16_000,
-    threshold: options.threshold ?? 0.01,
-    silenceMs: options.silenceMs,
-    minSpeechMs: options.minSpeechMs,
+    ...(options.threshold === undefined ? {} : { threshold: options.threshold }),
+    ...(options.silenceMs === undefined ? {} : { silenceMs: options.silenceMs }),
+    ...(options.minSpeechMs === undefined ? {} : { minSpeechMs: options.minSpeechMs }),
+    ...(platform.loadSileroVad === undefined ? {} : { loadSileroVad: () => platform.loadSileroVad!() }),
+    onFallback: message => io.err(`listen: ${message}`),
   });
-  const sileroVad = async (): Promise<VadSegmenter> => {
-    if (!platform.loadSileroVad) throw new TypeError("the silero VAD is not available on this platform");
-    return new SileroVadSegmenter({
-      model: await platform.loadSileroVad(),
-      silenceMs: options.silenceMs,
-      minSpeechMs: options.minSpeechMs,
-      // Under silero, --threshold is the level pre-gate. Residual echo after cancellation
-      // is quiet speech, and the model recognizes it; the gate is what keeps the agent's
-      // own leaked voice below notice, exactly as it does for the energy detector.
-      ...(options.threshold === undefined ? {} : { minLevel: options.threshold }),
-    });
-  };
-  let vad: VadSegmenter;
-  if (options.vad === "energy") {
-    vad = energyVad();
-  } else {
-    try {
-      vad = await sileroVad();
-    } catch (error) {
-      // Silero is the certified default and carries its own WASM fallback for the compiled
-      // binary, so reaching here means both runtimes failed (or the model fetch did).
-      // Asked-for silero fails loudly; the default degrades loudly to the energy
-      // detector, which passed the same gate.
-      if (options.vadExplicit) throw error;
-      io.err(`listen: silero VAD unavailable (${error instanceof Error ? error.message : String(error)}); using the energy detector`);
-      vad = energyVad();
-    }
-  }
   if (options.speakerDuplex && !platform.startSpeakerDuplex) {
     throw new TypeError("speaker duplex is not available on this platform");
   }
@@ -236,56 +209,20 @@ export async function runListen(
       ...(options.nudgeAfterSeconds === undefined ? {} : { nudgeAfterSeconds: options.nudgeAfterSeconds }),
       ...(Object.keys(config.pronunciations).length === 0 ? {} : { pronunciations: config.pronunciations }),
     } as Parameters<typeof runConversation>[1];
-    // The phase-1 session tools (docs/tool-loop.md), CLI edition: the voice bank is the
-    // configured tts engine's own registry (the CLI speaks through one instance).
-    const tools: ConversationTool[] = [
-      {
-        name: "set_voice", description: "切换当前对话使用的 TTS 音色", effect: "session",
-        parameters: { type: "object", properties: { voice: { type: "string", description: "音色 ID" } }, required: ["voice"] },
-        handler: async args => {
-          const requested = String(args.voice ?? "").trim();
-          if (!requested) return { error: "voice 不能为空" };
-          const bank = await tts.listVoices();
-          if (bank.length > 0 && !bank.some(entry => entry.id === requested)) {
-            return { error: `没有找到音色 ${requested}`, examples: bank.slice(0, 8).map(entry => entry.id) };
-          }
-          conversationOptions.voice = requested;
-          return { ok: true, voice: requested, note: "生效于下一句回复" };
-        },
-      },
-      {
-        name: "set_speed", description: "调整语音回复的语速倍率", effect: "session",
-        parameters: { type: "object", properties: { rate: { type: "number", description: "0.5 到 2.0，1.0 为正常" } }, required: ["rate"] },
-        handler: async args => {
-          const rate = Number(args.rate);
-          if (!Number.isFinite(rate)) return { error: "rate 必须是数字" };
-          const clamped = Math.min(2, Math.max(0.5, rate));
-          conversationOptions.speed = clamped;
-          return { ok: true, rate: clamped, note: "生效于下一句回复；不支持变速的引擎会忽略该设置" };
-        },
-      },
-      {
-        name: "get_engine_status", description: "查询各语音引擎（ASR/LLM/TTS）的健康状态", effect: "read",
-        parameters: { type: "object", properties: {} },
-        handler: async () => {
-          const entries = await Promise.all(Object.entries(config.engines)
-            .filter(([, target]) => target.baseUrl)
-            .map(async ([name, target]) => {
-              const probe = await probeEngine(name, target, fetch);
-              return { name, healthy: probe.ok };
-            }));
-          return { engines: entries };
-        },
-      },
-      {
-        name: "end_call", description: "结束本次语音对话", effect: "session",
-        parameters: { type: "object", properties: {} },
-        handler: async () => {
-          endAfterTurn = true;
-          return { ok: true, note: "本轮回复播完后挂断" };
-        },
-      },
-    ];
+    // The shared phase-1 session tools (docs/tool-loop.md), CLI edition: the voice bank is
+    // the configured tts engine's own registry (the CLI speaks through one instance).
+    const tools: ConversationTool[] = createBuiltinTools({
+      listVoices: () => tts.listVoices(),
+      setVoice: voice => { conversationOptions.voice = voice; },
+      setSpeed: rate => { conversationOptions.speed = rate; },
+      engineStatus: () => Promise.all(Object.entries(config.engines)
+        .filter(([, target]) => target.baseUrl)
+        .map(async ([name, target]) => {
+          const probe = await probeEngine(name, target, fetch);
+          return { name, healthy: probe.ok };
+        })),
+      endCall: () => { endAfterTurn = true; },
+    });
     // MCP tools join through the same registration (docs/mcp-tools.md); a dead server
     // is logged and skipped, and the built-in names stay reserved.
     mcpSource = config.mcpServers.length > 0

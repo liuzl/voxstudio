@@ -1,11 +1,17 @@
 import { type PcmStreamDecoder, AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
 import { engine, enginesOfKind, roleInstance } from "@voxstudio/config";
-import { runConversation, type ConversationFrame, type ConversationPlayer, type ConversationTool } from "@voxstudio/conversation";
+import {
+  builtinToolNames,
+  createBuiltinTools,
+  createSessionVad,
+  runConversation,
+  type ConversationFrame,
+  type ConversationPlayer,
+  type ConversationTool,
+} from "@voxstudio/conversation";
 import type { EngineKind, ResolvedEngineConfig, SpeechInput, VoxConfig } from "@voxstudio/contracts";
 import {
   DuplexSession,
-  EnergyVadSegmenter,
-  SileroVadSegmenter,
   type SpeechProbabilityModel,
   type VadSegmenter,
 } from "@voxstudio/duplex-session";
@@ -55,7 +61,7 @@ export interface GatewaySessionOptions {
 }
 
 /** The session tools every conversation gets; surface-injected extras may not shadow them. */
-export const builtinToolNames = ["set_voice", "set_speed", "get_engine_status", "end_call"] as const;
+export { builtinToolNames };
 
 const inputSampleRate = 16_000;
 /** Buffered microphone audio beyond this is dropped oldest-first; the VAD sees a gap, not unbounded memory. */
@@ -216,13 +222,30 @@ export class GatewaySession {
       this.keytermCache = { at: Date.now(), terms: [...config.keyterms, ...bank.map(voice => voice.id)] };
       return this.keytermCache.terms;
     };
+    // The shared phase-1 session tools (docs/tool-loop.md), wired to this session's
+    // capabilities: the union voice bank with cross-engine retargeting, the registry's
+    // live health, and the hang-up flag. Handlers mutate the live conversation options —
+    // voice and speed take effect from the next reply chunk resolution (per turn).
     conversationOptions.tools = [
-      ...this.buildTools(conversationOptions, {
-        retargetTts: engineName => {
-          ttsClient = new TtsClient(pick("tts", "tts", engineName), this.options.fetch, this.options.pcmDecoder);
-          ttsEngineName = engineName;
+      ...createBuiltinTools({
+        listVoices: async () => await this.options.listVoices?.() ?? [],
+        onVoiceAccepted: entry => {
+          if (entry.engine && entry.engine !== ttsEngineName) {
+            ttsClient = new TtsClient(pick("tts", "tts", entry.engine), this.options.fetch, this.options.pcmDecoder);
+            ttsEngineName = entry.engine;
+          }
         },
-        currentEngine: () => ttsEngineName,
+        setVoice: voice => { conversationOptions.voice = voice; },
+        setSpeed: rate => { conversationOptions.speed = rate; },
+        engineStatus: async () => {
+          const engines = await this.options.engineStatus?.();
+          return engines?.map(entry => ({
+            name: entry.name,
+            ...(entry.kind === null ? {} : { kind: entry.kind }),
+            healthy: entry.healthy,
+          }));
+        },
+        endCall: () => { this.endAfterTurn = true; },
       }),
       ...(await this.options.extraTools?.() ?? []),
     ];
@@ -293,80 +316,6 @@ export class GatewaySession {
     this.sink = undefined;
     const grace = this.options.reconnectGraceMs ?? 30_000;
     this.graceTimer = setTimeout(() => { this.stop(); }, grace);
-  }
-
-  /**
-   * The phase-1 session tools (docs/tool-loop.md): self-referential, session-scoped,
-   * zero external dependencies. Handlers mutate the live conversation options — voice
-   * and speed take effect from the next reply chunk resolution (per turn).
-   */
-  private buildTools(
-    conversationOptions: { voice?: string; speed?: number },
-    tts: { retargetTts: (engineName: string) => void; currentEngine: () => string },
-  ): ConversationTool[] {
-    return [
-      {
-        name: "set_voice",
-        description: "切换当前对话使用的 TTS 音色",
-        parameters: {
-          type: "object",
-          properties: { voice: { type: "string", description: "音色 ID，如 zliu、zf_001、af_maple" } },
-          required: ["voice"],
-        },
-        effect: "session",
-        handler: async args => {
-          const requested = String(args.voice ?? "").trim();
-          if (!requested) return { error: "voice 不能为空" };
-          const bank = await this.options.listVoices?.() ?? [];
-          const entry = bank.find(voice => voice.id === requested);
-          if (!entry) {
-            // A structured miss the model can relay — including a taste of what exists.
-            return { error: `没有找到音色 ${requested}`, examples: bank.slice(0, 8).map(voice => voice.id) };
-          }
-          if (entry.engine && entry.engine !== tts.currentEngine()) tts.retargetTts(entry.engine);
-          conversationOptions.voice = requested;
-          return { ok: true, voice: requested, engine: entry.engine, note: "生效于下一句回复" };
-        },
-      },
-      {
-        name: "set_speed",
-        description: "调整语音回复的语速倍率",
-        parameters: {
-          type: "object",
-          properties: { rate: { type: "number", description: "语速倍率，0.5 到 2.0，1.0 为正常" } },
-          required: ["rate"],
-        },
-        effect: "session",
-        handler: async args => {
-          const rate = Number(args.rate);
-          if (!Number.isFinite(rate)) return { error: "rate 必须是数字" };
-          const clamped = Math.min(2, Math.max(0.5, rate));
-          conversationOptions.speed = clamped;
-          return { ok: true, rate: clamped, note: "生效于下一句回复；不支持变速的引擎会忽略该设置" };
-        },
-      },
-      {
-        name: "get_engine_status",
-        description: "查询各语音引擎（ASR/LLM/TTS）的健康状态",
-        parameters: { type: "object", properties: {} },
-        effect: "read",
-        handler: async () => {
-          const engines = await this.options.engineStatus?.();
-          if (!engines) return { error: "状态不可用" };
-          return { engines: engines.map(entry => ({ name: entry.name, kind: entry.kind, healthy: entry.healthy })) };
-        },
-      },
-      {
-        name: "end_call",
-        description: "结束本次语音对话",
-        parameters: { type: "object", properties: {} },
-        effect: "session",
-        handler: async () => {
-          this.endAfterTurn = true;
-          return { ok: true, note: "本轮回复播完后挂断" };
-        },
-      },
-    ];
   }
 
   handleCommand(command: GatewayCommand): void {
@@ -449,7 +398,7 @@ export class GatewaySession {
       if (payload.type === "error" || payload.type === "session.notice" || payload.type === "command.rejected") {
         const detail = "message" in payload ? payload.message : "reason" in payload ? payload.reason : "";
         this.options.log(`session ${this.id.slice(0, 8)} #${event.sequence} ${payload.type}: ${detail}`);
-      } else if (payload.type !== "response.text.delta" && payload.type !== "audio.discarded") {
+      } else if (payload.type !== "response.text.delta") {
         const turn = "turnId" in payload ? ` turn ${payload.turnId.slice(0, 8)}` : "";
         const state = payload.type === "session.state" ? ` ${payload.state}` : "";
         this.options.log(`session ${this.id.slice(0, 8)} #${event.sequence} ${payload.type}${turn}${state}`);
@@ -490,33 +439,16 @@ export class GatewaySession {
   }
 
   private async createVad(start: SessionStartOptions): Promise<VadSegmenter> {
-    const silenceMs = start.silenceMs ?? ((start.turnTaking ?? "speculative") === "speculative" ? 150 : 650);
-    const minSpeechMs = start.minSpeechMs ?? 250;
-    const energy = (): VadSegmenter => new EnergyVadSegmenter({
+    return createSessionVad({
+      ...(start.vad === undefined ? {} : { choice: start.vad }),
+      explicit: start.vad === "silero",
       sampleRate: inputSampleRate,
-      threshold: start.threshold ?? 0.01,
-      silenceMs,
-      minSpeechMs,
+      ...(start.threshold === undefined ? {} : { threshold: start.threshold }),
+      silenceMs: start.silenceMs ?? ((start.turnTaking ?? "speculative") === "speculative" ? 150 : 650),
+      minSpeechMs: start.minSpeechMs ?? 250,
+      ...(this.options.loadSileroVad === undefined ? {} : { loadSileroVad: this.options.loadSileroVad }),
+      onFallback: message => this.emit({ type: "session.notice", message }),
     });
-    if (start.vad === "energy") return energy();
-    try {
-      if (!this.options.loadSileroVad) throw new TypeError("the silero VAD is not available on this gateway");
-      return new SileroVadSegmenter({
-        model: await this.options.loadSileroVad(),
-        silenceMs,
-        minSpeechMs,
-        ...(start.threshold === undefined ? {} : { minLevel: start.threshold }),
-      });
-    } catch (error) {
-      // Same policy as the CLI: asked-for silero fails loudly, the default degrades loudly
-      // to the equally certified energy detector.
-      if (start.vad === "silero") throw error;
-      this.emit({
-        type: "session.notice",
-        message: `silero VAD unavailable (${error instanceof Error ? error.message : String(error)}); using the energy detector`,
-      });
-      return energy();
-    }
   }
 
   private createPlayer(turnId: string, revision: number): ConversationPlayer {

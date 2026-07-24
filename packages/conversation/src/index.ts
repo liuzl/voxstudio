@@ -632,3 +632,12 @@ export async function runConversation(
     await Promise.allSettled([...work]);
   }
 }
+
+export {
+  builtinToolNames,
+  createBuiltinTools,
+  createSessionVad,
+  type BuiltinToolDeps,
+  type BuiltinVoice,
+  type CreateVadOptions,
+} from "./builtin";
