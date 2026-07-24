@@ -23,33 +23,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-PUNCT = re.compile(r"[\s。，、！？；：\"\"''‘’“”,.!?;:\-—…()（）]")
-
-
-def normalize(text: str) -> str:
-    return PUNCT.sub("", text).lower()
-
-
-def edit_distance(a: str, b: str) -> int:
-    previous = list(range(len(b) + 1))
-    for i, char_a in enumerate(a, 1):
-        current = [i]
-        for j, char_b in enumerate(b, 1):
-            current.append(min(
-                previous[j] + 1,
-                current[j - 1] + 1,
-                previous[j - 1] + (char_a != char_b),
-            ))
-        previous = current
-    return previous[len(b)]
-
-
-def cer(reference: str, hypothesis: str) -> float:
-    ref = normalize(reference)
-    hyp = normalize(hypothesis)
-    if not ref:
-        return 0.0 if not hyp else 1.0
-    return edit_distance(ref, hyp) / len(ref)
+from asr_metrics import cer
 
 
 def transcribe(base_url: str, wav: Path, language: str | None) -> tuple[str, float]:
@@ -107,8 +81,9 @@ def main() -> int:
             line = f"  {name} ({elapsed:.2f}s): {text}"
             if reference is not None:
                 value = cer(reference, text)
-                totals[name].append(value)
-                line += f"   [CER {value:.1%}]"
+                if value is not None:
+                    totals[name].append(value)
+                    line += f"   [CER {value:.1%}]"
             print(line)
 
     print("\n=== 汇总 ===")
