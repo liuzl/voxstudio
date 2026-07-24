@@ -458,7 +458,6 @@ playback.ended|interrupted { turnId }
 turn.started|interrupted|completed|false_barge_in|reopened { turnId, ... }
 turn.timing         { turnId, endReason, offsetsMs: { vad_end, thinking,
                        asr_done, llm_first, speaking, tts_first_audio, playback_first } }
-audio.queue_overflow|discarded { turnId, queuedMs, maxQueuedMs }
 tool.call           { turnId, name, arguments }       # tool loop (tool-loop.md)
 tool.result         { turnId, name, ok, result? }
 tool.pending        { turnId, name, arguments }       # awaiting spoken confirmation (mcp-tools.md)
@@ -570,8 +569,9 @@ speakStream(text, options, signal): AsyncIterable<PcmAudio>
 
 Sentence segmentation bridges an LLM text stream to TTS. It sends complete
 sentences early but preserves unfinished text until a valid boundary or flush.
-The playback queue has a duration limit; when it exceeds that limit, the
-gateway applies backpressure rather than generating unbounded audio.
+Playback applies backpressure through the player write path — the CLI's player
+pipe and the gateway's endpoint-owned audible clock (`playbackAck`) — rather
+than generating unbounded audio.
 
 ## Privacy and safety
 

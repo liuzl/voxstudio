@@ -12,7 +12,6 @@ const stateLabels: Record<string, { text: MessageKey; tone: string }> = {
   finalizing: { text: "断句中", tone: "bg-sky-500/20 text-sky-300" },
   thinking: { text: "思考中", tone: "bg-amber-500/20 text-amber-300" },
   speaking: { text: "回答中", tone: "bg-accent-500/20 text-accent-500" },
-  reconfiguring: { text: "重配置", tone: "bg-ink-700 text-ink-300" },
   closed: { text: "已结束", tone: "bg-ink-700 text-ink-300" },
 };
 

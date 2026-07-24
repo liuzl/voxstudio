@@ -3,7 +3,6 @@ import cases from "../../../fixtures/audio/cases.json" with { type: "json" };
 import {
   decodePcm16,
   encodePcm16,
-  joinChunks,
   LinearResampler,
   matchLoudness,
   readWav,
@@ -122,21 +121,6 @@ describe("shared audio fixtures", () => {
     });
   }
 
-  for (const fixture of cases.join) {
-    test(`join: ${fixture.name}`, () => {
-      const chunks = fixture.chunks.map((chunk) => writeWav(tone(
-        fixture.rate,
-        chunk.toneSeconds,
-        chunk.leadSeconds,
-        chunk.tailSeconds,
-        chunk.gain,
-      ), fixture.rate));
-      const decoded = readWav(joinChunks(chunks, fixture.pauseMs, 25, fixture.padMs));
-      expect(decoded.sampleRate).toBe(fixture.rate);
-      expect(Math.abs(decoded.samples.length - fixture.expectedLength))
-        .toBeLessThanOrEqual(fixture.tolerance);
-    });
-  }
 });
 
 describe("level handling", () => {
@@ -147,17 +131,6 @@ describe("level handling", () => {
     expect(speechLevelDb(matched, 8_000)).toBeCloseTo(speechLevelDb(loud, 8_000), 4);
   });
 
-  test("all-silent chunks join to an empty WAV", () => {
-    const decoded = readWav(joinChunks([writeWav(new Float32Array(800), 8_000)]));
-    expect(decoded.samples.length).toBe(0);
-  });
-
-  test("mixed sample rates are rejected", () => {
-    expect(() => joinChunks([
-      writeWav(new Float32Array(100), 8_000),
-      writeWav(new Float32Array(100), 16_000),
-    ])).toThrow("sample rate");
-  });
 });
 
 describe("LinearResampler", () => {

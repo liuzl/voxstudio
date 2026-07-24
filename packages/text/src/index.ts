@@ -62,7 +62,7 @@ function scriptOf(char: string): string | null {
   return mark.test(char) ? null : "Other";
 }
 
-export function charSeconds(input: string): number[] {
+function charSeconds(input: string): number[] {
   const chars = Array.from(input);
   const seconds = Array<number>(chars.length).fill(0);
   const unresolved: number[] = [];

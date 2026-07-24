@@ -245,8 +245,6 @@ export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sess
       return withNotice("error", `${event.code}: ${event.message}`);
     case "command.rejected":
       return event.reason === "stale_turn" ? {} : withNotice("error", `command rejected: ${event.reason}`);
-    case "audio.queue_overflow":
-      return withNotice("error", "playback queue overflow; audio dropped");
     default:
       return {};
   }
