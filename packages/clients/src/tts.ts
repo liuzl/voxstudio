@@ -147,3 +147,26 @@ export class TtsClient extends EngineClient {
     return identity;
   }
 }
+
+export interface DesignProfileAudit {
+  status: "ok" | "drift" | "not_found";
+  model?: string;
+  detail?: string;
+}
+
+/**
+ * Compare a design profile's saved model identity against the live TTS runtime.
+ * The shared verdict behind the audit_profile tool on every surface (CLI listen,
+ * gateway, vox-mcp, the studio gate) — one comparison, one drift definition.
+ */
+export async function auditDesignProfile(tts: TtsClient, id: string): Promise<DesignProfileAudit> {
+  const voice = await tts.getVoice(id).catch(() => undefined);
+  const profile = voice?.design_profile;
+  if (!profile) return { status: "not_found", detail: `没有名为 ${id} 的设计音色` };
+  const runtime = await tts.runtimeIdentity();
+  const drifted = profile.model !== runtime.model
+    || profile.model_manifest_sha256 !== runtime.model_manifest_sha256;
+  return drifted
+    ? { status: "drift", model: runtime.model, detail: "模型或清单指纹与创建时不一致，复现前需重新审计" }
+    : { status: "ok", model: runtime.model };
+}

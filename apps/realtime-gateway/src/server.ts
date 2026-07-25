@@ -1,4 +1,4 @@
-import { TtsClient, type Fetch, type PcmStreamDecoder } from "@voxstudio/clients";
+import { auditDesignProfile, TtsClient, type Fetch, type PcmStreamDecoder } from "@voxstudio/clients";
 import { engine, engineByCapability, enginesOfKind, roleInstance } from "@voxstudio/config";
 import type { EngineKind, ResolvedEngineConfig, VoxConfig } from "@voxstudio/contracts";
 import type { SpeechProbabilityModel } from "@voxstudio/duplex-session";
@@ -327,18 +327,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // an anonymous visitor must not write the voice bank by talking at it.
       allowStudioTools: options.demoMode !== true,
       ...(options.persistPronunciations === undefined ? {} : { persistPronunciations: options.persistPronunciations }),
-      auditProfile: async (id: string) => {
-        const tts = new TtsClient(engine(options.config, "tts"), fetchImpl);
-        const voice = await tts.getVoice(id).catch(() => undefined);
-        const profile = voice?.design_profile;
-        if (!profile) return { status: "not_found", detail: `没有名为 ${id} 的设计音色` };
-        const runtime = await tts.runtimeIdentity();
-        const drifted = profile.model !== runtime.model
-          || profile.model_manifest_sha256 !== runtime.model_manifest_sha256;
-        return drifted
-          ? { status: "drift", model: runtime.model, detail: "模型或清单指纹与创建时不一致，复现前需重新审计" }
-          : { status: "ok", model: runtime.model };
-      },
+      auditProfile: (id: string) => auditDesignProfile(new TtsClient(engine(options.config, "tts"), fetchImpl), id),
       registerVoice: async (id, wav, transcript) => {
         if (!voiceIdPattern.test(id)) throw new Error("voice id must match [A-Za-z0-9._-]{1,64}");
         const selected = engineByCapability(options.config, "tts", "clone")

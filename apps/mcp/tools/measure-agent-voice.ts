@@ -46,7 +46,7 @@ async function main(): Promise<number> {
 
   try {
     const { tools } = await client.listTools();
-    check(tools.length === 3, "three tools listed", tools.map(tool => tool.name).sort().join(", "));
+    check(tools.length === 7, "seven tools listed", tools.map(tool => tool.name).sort().join(", "));
 
     const voices = payload(await client.callTool({ name: "list_voices", arguments: {} }));
     const bank = Array.isArray(voices.voices) ? voices.voices as string[] : [];
@@ -74,6 +74,52 @@ async function main(): Promise<number> {
     const heard = payload(await client.callTool({ name: "transcribe", arguments: { path, language: "zh" } }));
     check(typeof heard.text === "string" && heard.text.includes("天气"),
       "transcribe round-trips a synthesized phrase", `"${String(heard.text)}"`);
+
+    // ---- curation loop (voice-studio-control phase 4): generate → register → audit →
+    // delete, every step against the live engines through the real stdio server.
+    const curationId = "gate-agent-curation-tmp";
+    const takePath = `${process.env.TMPDIR ?? "/tmp"}/agent-voice-curation.wav`;
+    if (bank.includes(curationId)) {
+      check(false, "curation id is free before the run", `${curationId} already exists; delete it first`);
+    } else {
+      const generated = payload(await client.callTool({
+        name: "generate",
+        arguments: { text: "这是一句curation门禁的样本话语。", output_path: takePath },
+      }));
+      check(generated.ok === true && typeof generated.bytes === "number" && generated.bytes > 44,
+        "generate writes a playable take to the requested path", `${String(generated.bytes)} bytes at ${String(generated.path)}`);
+
+      const registered = payload(await client.callTool({
+        name: "register_voice",
+        arguments: { id: curationId, audio_path: takePath, language: "zh" },
+      }));
+      check(registered.ok === true && typeof registered.transcript === "string" && registered.transcript.length > 0,
+        "register_voice clones from the generated file with an ASR transcript", `"${String(registered.transcript)}"`);
+
+      const after = payload(await client.callTool({ name: "list_voices", arguments: {} }));
+      check(Array.isArray(after.voices) && (after.voices as string[]).includes(curationId),
+        "the registered voice appears in the bank", curationId);
+
+      // A clone voice has no design profile: the audit must answer not_found, not crash.
+      const cloneAudit = payload(await client.callTool({ name: "audit_profile", arguments: { profile: curationId } }));
+      check(cloneAudit.status === "not_found",
+        "audit answers not_found for a clone voice", String(cloneAudit.status));
+      const designId = (await new TtsClient(engine(config, "tts")).listVoices())
+        .find(entry => entry.design_profile !== undefined)?.id;
+      if (designId === undefined) {
+        console.error("  (design-profile audit skipped: none on the engine)");
+      } else {
+        const verdict = payload(await client.callTool({ name: "audit_profile", arguments: { profile: designId } }));
+        check(verdict.status === "ok" || verdict.status === "drift",
+          "audit answers a definite verdict for a live design profile", `${designId}: ${String(verdict.status)}`);
+      }
+
+      const deleted = payload(await client.callTool({ name: "delete_voice", arguments: { id: curationId } }));
+      const finalBank = payload(await client.callTool({ name: "list_voices", arguments: {} }));
+      check(deleted.ok === true && Array.isArray(finalBank.voices)
+        && !(finalBank.voices as string[]).includes(curationId),
+        "delete_voice removes it and the bank agrees", curationId);
+    }
   } finally {
     await client.close();
   }

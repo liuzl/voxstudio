@@ -1,4 +1,4 @@
-import { probeEngine, AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
+import { auditDesignProfile, probeEngine, AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
 import { engine } from "@voxstudio/config";
 import { createBuiltinTools, createKeytermProvider, createSessionVad, createStudioReferents, createStudioTools, runConversation, type ConversationControls, type ConversationPlayer, type ConversationTool } from "@voxstudio/conversation";
 import type { VoxConfig } from "@voxstudio/contracts";
@@ -271,17 +271,7 @@ export async function runListen(
           io.err(`listen: take written to ${path}`);
           return { location: path };
         },
-        auditProfile: async id => {
-          const voice = await tts.getVoice(id).catch(() => undefined);
-          const profile = voice?.design_profile;
-          if (!profile) return { status: "not_found", detail: `没有名为 ${id} 的设计音色` };
-          const runtime = await tts.runtimeIdentity();
-          const drifted = profile.model !== runtime.model
-            || profile.model_manifest_sha256 !== runtime.model_manifest_sha256;
-          return drifted
-            ? { status: "drift", model: runtime.model, detail: "模型或清单指纹与创建时不一致，复现前需重新审计" }
-            : { status: "ok", model: runtime.model };
-        },
+        auditProfile: id => auditDesignProfile(tts, id),
       }));
     }
     // MCP tools join through the same registration (docs/mcp-tools.md); a dead server

@@ -13,7 +13,7 @@
  *
  *   bun run measure:studio [--config CONFIG]
  */
-import { LlmClient, TtsClient } from "@voxstudio/clients";
+import { auditDesignProfile, LlmClient, TtsClient } from "@voxstudio/clients";
 import { engine } from "@voxstudio/config";
 import type { SpeechInput } from "@voxstudio/contracts";
 import { DuplexSession, EnergyVadSegmenter } from "@voxstudio/duplex-session";
@@ -114,14 +114,9 @@ async function main(): Promise<number> {
       return { location: "gate" };
     },
     auditProfile: async id => {
-      const voice = await tts.getVoice(id).catch(() => undefined);
-      const profile = voice?.design_profile;
-      if (!profile) return { status: "not_found" };
-      const runtime = await tts.runtimeIdentity();
-      const drifted = profile.model !== runtime.model
-        || profile.model_manifest_sha256 !== runtime.model_manifest_sha256;
-      events.push(`audit:${id}:${drifted ? "drift" : "ok"}`);
-      return drifted ? { status: "drift", model: runtime.model } : { status: "ok", model: runtime.model };
+      const verdict = await auditDesignProfile(tts, id);
+      if (verdict.status !== "not_found") events.push(`audit:${id}:${verdict.status}`);
+      return verdict;
     },
   });
 

@@ -195,3 +195,20 @@ prompt strings already obey.
    definite `ok` against a real design profile on the live runtime.
 4. **The agent door.** The same tools exported through `vox-mcp`; the
    agent-voice gate grows the curation cases.
+   **Delivered 2026-07-25**, as the dual track the pi/Codex/Claude Code survey
+   argued for. Track A, the playbook: `skills/voice-design/SKILL.md` (Agent
+   Skills format, consumable by any bash-capable harness) carries the
+   reproducibility discipline over the existing `vox` CLI — validated by an
+   agent actually following it against the live stack (create → audit ok →
+   reproduce → verify byte-for-byte → cleanup). Track B, the protocol
+   fallback: `vox-mcp` grew from three tools to seven — `generate`,
+   `register_voice` (ASR transcript when none is given), `audit_profile`,
+   `delete_voice` — the **non-referent** subset only: "刚才那句" has no
+   meaning in an agent client, so the tier-1 tools stay in the conversation,
+   which is the tiering proving itself. Write tools carry no `readOnlyHint`,
+   handing external-effect ceremony to the host. The audit verdict moved to
+   one shared implementation (`auditDesignProfile` in @voxstudio/clients),
+   retiring three copies. Gate: `measure:agent-voice` runs the full curation
+   loop over real stdio against live engines — generate → register → in the
+   bank → audit (not_found for a clone, a definite verdict for a live design
+   profile) → delete — PASS.

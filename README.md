@@ -49,7 +49,8 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | `apps/cli/` | Compiled TypeScript `vox` CLI |
 | `apps/realtime-gateway/` | Web Studio server: the duplex session protocol over WebSocket plus a credential-hiding REST facade |
 | `apps/web/` | The browser studio (React + Tailwind + Zustand): conversation, generation, voice bank + design profiles, captures library, and engine settings panels |
-| `apps/mcp/` | `vox-mcp` — voxstudio's voice I/O as an MCP server (speak / transcribe / list_voices) for any agent |
+| `apps/mcp/` | `vox-mcp` — voxstudio's voice and curation surface as an MCP server (speak / transcribe / generate / voice-bank management) for any agent |
+| `skills/` | Agent Skills playbooks — `voice-design` teaches any bash-capable harness the reproducible-experiment discipline over the `vox` CLI |
 | `tools/` | Measurement and calibration scripts (Python) — the constants in `packages/` stay re-derivable |
 | `docs/` | Product design docs |
 

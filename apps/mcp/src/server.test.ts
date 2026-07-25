@@ -66,11 +66,18 @@ function payload(result: unknown): Record<string, unknown> {
 }
 
 describe("agent voice server", () => {
-  test("lists the three tools with honest annotations and schemas", async () => {
+  test("lists the seven tools with honest annotations and schemas", async () => {
     const client = await connect();
     const { tools } = await client.listTools();
     const byName = new Map(tools.map(tool => [tool.name, tool]));
-    expect([...byName.keys()].sort()).toEqual(["list_voices", "speak", "transcribe"]);
+    expect([...byName.keys()].sort()).toEqual([
+      "audit_profile", "delete_voice", "generate", "list_voices", "register_voice", "speak", "transcribe",
+    ]);
+    // Curation writes carry no readOnlyHint: a host's confirmation machinery applies.
+    expect(byName.get("audit_profile")?.annotations?.readOnlyHint).toBe(true);
+    expect(byName.get("register_voice")?.annotations?.readOnlyHint).toBeUndefined();
+    expect(byName.get("delete_voice")?.annotations?.readOnlyHint).toBeUndefined();
+    expect(byName.get("generate")?.annotations?.readOnlyHint).toBeUndefined();
     // speak makes sound: not read-only, so a cautious client treats it as an action.
     expect(byName.get("speak")?.annotations?.readOnlyHint).toBeUndefined();
     expect(byName.get("transcribe")?.annotations?.readOnlyHint).toBe(true);
@@ -148,6 +155,76 @@ describe("agent voice server", () => {
 
     const voices = await client.callTool({ name: "list_voices", arguments: {} });
     expect(payload(voices)).toEqual({ voices: ["zf_001", "zliu"], default: config.ttsDefaults.voice });
+    await client.close();
+  });
+});
+
+describe("curation tools", () => {
+  test("generate writes a wav where asked and reports it", async () => {
+    const client = await connect();
+    const path = `${process.env.TMPDIR ?? "/tmp"}/agent-voice-take-test-${Date.now()}.wav`;
+    const result = payload(await client.callTool({ name: "generate", arguments: { text: "你好。", output_path: path } }));
+    expect(result).toMatchObject({ ok: true, path });
+    expect(await Bun.file(path).exists()).toBe(true);
+    expect((result.bytes as number)).toBeGreaterThan(44);
+    await Bun.file(path).delete();
+    await client.close();
+  });
+
+  test("register_voice transcribes when no text is given and posts the clone", async () => {
+    const registered: { id: string; text: string }[] = [];
+    const client = await connect({
+      fetch: engineFetch({
+        "/v1/voices": async request => {
+          if (request.method === "POST") {
+            const form = await request.formData();
+            registered.push({ id: String(form.get("id")), text: String(form.get("text")) });
+            return Response.json({ id: String(form.get("id")) });
+          }
+          return Response.json({ voices: [{ id: "zf_001" }] });
+        },
+      }),
+    });
+    const path = `${process.env.TMPDIR ?? "/tmp"}/agent-voice-clone-test-${Date.now()}.wav`;
+    await Bun.write(path, writeWav(new Float32Array(16_000).fill(0.1), 16_000));
+    const result = payload(await client.callTool({ name: "register_voice", arguments: { id: "clone-x", audio_path: path } }));
+    expect(result).toMatchObject({ ok: true, id: "clone-x", transcript: "你好" });
+    expect(registered).toEqual([{ id: "clone-x", text: "你好" }]);
+    const bad = await client.callTool({ name: "register_voice", arguments: { id: "坏 id", audio_path: path } });
+    expect(bad.isError).toBe(true);
+    await Bun.file(path).delete();
+    await client.close();
+  });
+
+  test("audit_profile maps clone/design/runtime through the shared verdict", async () => {
+    const client = await connect({
+      fetch: engineFetch({
+        "/v1/voices/design-x": async () => Response.json({
+          id: "design-x", design_profile: { description: "d", seed: 1, cfg_value: 2, timesteps: 10, model: "m1", model_manifest_sha256: "aaa", audio_sha256: "bbb" },
+        }),
+        "/health": async () => Response.json({ status: "ok", model: "m1", model_manifest_sha256: "aaa" }),
+      }),
+    });
+    const verdict = payload(await client.callTool({ name: "audit_profile", arguments: { profile: "design-x" } }));
+    expect(verdict).toMatchObject({ status: "ok", model: "m1" });
+    await client.close();
+  });
+
+  test("delete_voice forwards and refuses bad ids", async () => {
+    const deleted: string[] = [];
+    const client = await connect({
+      fetch: engineFetch({
+        "/v1/voices/old-voice": async request => {
+          if (request.method === "DELETE") { deleted.push("old-voice"); return Response.json({ id: "old-voice", deleted: true }); }
+          return Response.json({ id: "old-voice" });
+        },
+      }),
+    });
+    const result = payload(await client.callTool({ name: "delete_voice", arguments: { id: "old-voice" } }));
+    expect(result).toMatchObject({ ok: true, deleted: true });
+    expect(deleted).toEqual(["old-voice"]);
+    const bad = await client.callTool({ name: "delete_voice", arguments: { id: "bad id" } });
+    expect(bad.isError).toBe(true);
     await client.close();
   });
 });
