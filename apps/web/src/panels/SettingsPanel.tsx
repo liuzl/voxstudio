@@ -123,6 +123,8 @@ function EtiquetteSection() {
   const nudgeAfterSeconds = useStudio(state => state.nudgeAfterSeconds);
   const setWelcome = useStudio(state => state.setWelcome);
   const setNudgeAfterSeconds = useStudio(state => state.setNudgeAfterSeconds);
+  const studioTools = useStudio(state => state.studioTools);
+  const setStudioTools = useStudio(state => state.setStudioTools);
 
   return (
     <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
@@ -148,6 +150,15 @@ function EtiquetteSection() {
             onChange={event => setNudgeAfterSeconds(Math.max(0, Number(event.target.value) || 0))}
             className="mt-1 w-28 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-sm text-ink-100"
           />
+        </label>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={studioTools}
+            onChange={event => setStudioTools(event.target.checked)}
+            className="h-4 w-4 rounded border-ink-700 bg-ink-800"
+          />
+          <span className="text-xs text-ink-500">{t("工作台语音工具（存音色、重念、记发音等，说话就能操作）")}</span>
         </label>
       </div>
       <p className="mt-3 text-xs text-ink-500">

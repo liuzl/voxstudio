@@ -114,8 +114,11 @@ export function createBuiltinTools(deps: BuiltinToolDeps): ConversationTool[] {
   ];
 }
 
-/** The phase-2 Studio tool names (docs/voice-studio-control.md); reserved beside the built-ins. */
-export const studioToolNames = ["save_last_utterance_as_voice", "redo_last_reply", "remember_pronunciation"] as const;
+/** The Studio tool names (docs/voice-studio-control.md, phases 2–3); reserved beside the built-ins. */
+export const studioToolNames = [
+  "save_last_utterance_as_voice", "redo_last_reply", "remember_pronunciation",
+  "persist_pronunciations", "generate_take", "audit_profile",
+] as const;
 
 export interface StudioToolDeps {
   /**
@@ -131,6 +134,12 @@ export interface StudioToolDeps {
   queueAgentSpeech?: (text: string, overrides?: { voice?: string; speed?: number }) => void;
   /** Writes the session pronunciation overlay the TTS boundary reads. */
   setPronunciation: (term: string, reading: string) => void;
+  /** Writes session-added pronunciations into the user's config file. Omitted, persist refuses. */
+  persistPronunciations?: (entries: Record<string, string>) => Promise<void>;
+  /** Produces a generation take (a panel entry, a file — the surface decides). Returns where it landed. */
+  generateTake?: (text: string, voice: string | undefined) => Promise<{ location?: string } | void>;
+  /** Compares a design profile's saved model identity against the live TTS runtime. */
+  auditProfile?: (id: string) => Promise<{ status: string; model?: string; detail?: string }>;
 }
 
 /**
@@ -184,6 +193,9 @@ export function createStudioReferents(): {
  * catch.
  */
 export function createStudioTools(deps: StudioToolDeps): ConversationTool[] {
+  // Session-added pronunciations, recorded here so persist knows the delta against the
+  // config file without the surfaces bookkeeping it.
+  const overlay: Record<string, string> = {};
   return [
     {
       name: "save_last_utterance_as_voice",
@@ -259,7 +271,64 @@ export function createStudioTools(deps: StudioToolDeps): ConversationTool[] {
         const reading = String(args.reading ?? "").trim();
         if (!term || !reading) return { error: "term 和 reading 都不能为空" };
         deps.setPronunciation(term, reading);
+        overlay[term] = reading;
         return { ok: true, term, reading, note: "从下一句回复开始按这个读法" };
+      },
+    },
+    {
+      name: "persist_pronunciations",
+      description: "把本次对话记住的发音永久保存到配置文件",
+      parameters: { type: "object", properties: {} },
+      effect: "external",
+      handler: async () => {
+        if (!deps.persistPronunciations) return { error: "这个环境不支持保存发音配置" };
+        const entries = { ...overlay };
+        if (Object.keys(entries).length === 0) return { error: "本次对话还没有新记的发音" };
+        await deps.persistPronunciations(entries);
+        for (const term of Object.keys(entries)) delete overlay[term];
+        return { ok: true, saved: Object.keys(entries), note: "已写入配置文件，以后每次对话都生效" };
+      },
+    },
+    {
+      name: "generate_take",
+      description: "用指定音色合成一段语音，保存到生成面板",
+      parameters: {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "要合成的文本" },
+          voice: { type: "string", description: "音色 ID，可选" },
+        },
+        required: ["text"],
+      },
+      effect: "session",
+      handler: async args => {
+        if (!deps.generateTake) return { error: "这个环境不支持生成" };
+        const text = String(args.text ?? "").trim();
+        if (!text) return { error: "text 不能为空" };
+        if (text.length > 500) return { error: "生成的文本请控制在 500 字以内；更长的合成请用生成面板或 vox say" };
+        const voice = args.voice === undefined ? undefined : String(args.voice).trim() || undefined;
+        const produced = await deps.generateTake(text, voice);
+        return {
+          ok: true,
+          ...(produced && produced.location !== undefined ? { location: produced.location } : {}),
+          note: "已开始生成，请简短确认即可",
+        };
+      },
+    },
+    {
+      name: "audit_profile",
+      description: "检查一个设计音色与当前引擎运行时是否一致（有没有漂移）",
+      parameters: {
+        type: "object",
+        properties: { profile: { type: "string", description: "设计音色的 ID" } },
+        required: ["profile"],
+      },
+      effect: "read",
+      handler: async args => {
+        if (!deps.auditProfile) return { error: "这个环境不支持音色审计" };
+        const id = String(args.profile ?? "").trim();
+        if (!id) return { error: "profile 不能为空" };
+        return deps.auditProfile(id);
       },
     },
   ];

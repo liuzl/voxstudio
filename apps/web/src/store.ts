@@ -62,6 +62,8 @@ interface StudioState {
   welcome: string;
   /** Silence seconds before the one spoken follow-up; 0 disables. */
   nudgeAfterSeconds: number;
+  /** Register the Studio tools in conversation sessions (save voice / redo / pronunciations …). */
+  studioTools: boolean;
   /** Generation takes, newest first. Object URLs are revoked on eviction/removal. */
   takes: TakeView[];
   voicesList: VoiceEntry[];
@@ -86,6 +88,7 @@ interface StudioState {
   setVoice(voice: string, engine?: string): void;
   setWelcome(welcome: string): void;
   setNudgeAfterSeconds(seconds: number): void;
+  setStudioTools(enabled: boolean): void;
   toasts: ToastView[];
   toast(kind: ToastView["kind"], text: string): void;
   dismissToast(id: number): void;
@@ -96,8 +99,10 @@ interface StudioState {
 // Etiquette persists like the locale does: plain localStorage, read once at load.
 const welcomeKey = "voxstudio.etiquette.welcome";
 const nudgeKey = "voxstudio.etiquette.nudgeAfterSeconds";
+const studioToolsKey = "voxstudio.studio.tools";
 const storedWelcome = typeof localStorage !== "undefined" ? localStorage.getItem(welcomeKey) ?? "" : "";
 const storedNudge = typeof localStorage !== "undefined" ? Number(localStorage.getItem(nudgeKey)) || 0 : 0;
+const storedStudioTools = typeof localStorage !== "undefined" ? localStorage.getItem(studioToolsKey) === "1" : false;
 
 const maxTurns = 50;
 const maxNotices = 30;
@@ -263,6 +268,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   voiceEngine: "",
   welcome: storedWelcome,
   nudgeAfterSeconds: storedNudge,
+  studioTools: storedStudioTools,
   takes: [],
   voicesList: [],
   enginesList: [],
@@ -277,6 +283,10 @@ export const useStudio = create<StudioState>((set, get) => ({
   setNudgeAfterSeconds: nudgeAfterSeconds => {
     if (typeof localStorage !== "undefined") localStorage.setItem(nudgeKey, String(nudgeAfterSeconds));
     set({ nudgeAfterSeconds });
+  },
+  setStudioTools: studioTools => {
+    if (typeof localStorage !== "undefined") localStorage.setItem(studioToolsKey, studioTools ? "1" : "0");
+    set({ studioTools });
   },
   addTake: take =>
     set(state => {

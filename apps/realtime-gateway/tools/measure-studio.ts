@@ -25,7 +25,7 @@ import {
   type ConversationFrame,
 } from "@voxstudio/conversation";
 import { applyPronunciations, sanitizeForTts } from "@voxstudio/text";
-import { loadConfig } from "@voxstudio/platform-bun";
+import { loadConfig, persistPronunciationsFile } from "@voxstudio/platform-bun";
 
 const GATE_VOICE_ID = "gate-studio-tmp";
 
@@ -67,6 +67,7 @@ async function main(): Promise<number> {
     },
   };
 
+  const designProfileId = bank.find(voice => voice.design_profile !== undefined)?.id;
   const transcripts = [
     "记住，VoxCPM 这个词要读作 vox-c-p-m",
     "请用一句话介绍 VoxCPM",
@@ -74,10 +75,16 @@ async function main(): Promise<number> {
     "这是一句用来克隆声音的样本话语。",
     `把我刚才那句话存成音色样本，就叫 ${GATE_VOICE_ID}`,
     "确认",
+    "把这些发音保存下来，以后都这么读",
+    "确认",
+    `用 ${baseVoice} 的声音生成一句「门禁测试」`,
+    ...(designProfileId === undefined ? [] : [`检查一下 ${designProfileId} 这个音色有没有漂移`]),
   ];
   const events: string[] = [];
   const replies: string[] = [];
   const pronunciations: Record<string, string> = {};
+  const scratchConfig = `${process.env.TMPDIR ?? "/tmp"}/gate-studio-config-${Date.now()}.yaml`;
+  await Bun.write(scratchConfig, "# gate scratch config\nengines:\n  tts:\n    base_url: http://placeholder  # keep\n");
   const referents = createStudioReferents();
   let controls: ConversationControls | undefined;
   let registeredTranscript: string | undefined;
@@ -95,6 +102,26 @@ async function main(): Promise<number> {
       events.push(`register:${id}`);
       await tts.createVoice(id, transcript, new Blob([wav as BlobPart], { type: "audio/wav" }), "utterance.wav");
       referents.clearPin();
+    },
+    // The persist flow writes a REAL file through the REAL surgery+validation path —
+    // just not the operator's config: a scratch copy stands in for it.
+    persistPronunciations: async entries => {
+      await persistPronunciationsFile(scratchConfig, entries);
+      events.push(`persist:${Object.keys(entries).join(",")}`);
+    },
+    generateTake: async (text, voice) => {
+      events.push(`take:${text}@${voice ?? ""}`);
+      return { location: "gate" };
+    },
+    auditProfile: async id => {
+      const voice = await tts.getVoice(id).catch(() => undefined);
+      const profile = voice?.design_profile;
+      if (!profile) return { status: "not_found" };
+      const runtime = await tts.runtimeIdentity();
+      const drifted = profile.model !== runtime.model
+        || profile.model_manifest_sha256 !== runtime.model_manifest_sha256;
+      events.push(`audit:${id}:${drifted ? "drift" : "ok"}`);
+      return drifted ? { status: "drift", model: runtime.model } : { status: "ok", model: runtime.model };
     },
   });
 
@@ -169,11 +196,15 @@ async function main(): Promise<number> {
 
   // The gate ends the conversation once the register lands (or the deadline passes).
   const watchdog = (async (): Promise<void> => {
-    const deadline = Date.now() + 300_000;
+    const deadline = Date.now() + 420_000;
     while (Date.now() < deadline) {
       const redoDone = synthesized.some(piece => piece.voice === redoVoice);
       const saveDone = events.some(entry => entry.startsWith("register:"));
-      if ((redoDone && saveDone) || events.some(entry => entry.startsWith("error:"))) break;
+      const persistDone = events.some(entry => entry.startsWith("persist:"));
+      const takeDone = events.some(entry => entry.startsWith("take:"));
+      const auditDone = designProfileId === undefined || events.some(entry => entry.startsWith("audit:"));
+      if ((redoDone && saveDone && persistDone && takeDone && auditDone)
+        || events.some(entry => entry.startsWith("error:"))) break;
       await Bun.sleep(250);
     }
     await Bun.sleep(3_000); // let the closing reply finish synthesizing
@@ -215,6 +246,32 @@ async function main(): Promise<number> {
       `transcript="${registeredTranscript ?? ""}"`);
     const onEngine = await tts.getVoice(GATE_VOICE_ID).then(() => true).catch(() => false);
     check(onEngine, "the voice exists on the live engine", GATE_VOICE_ID);
+
+    // ---- persist: confirmed aloud, written through the real surgery, comments intact --
+    const persistPending = events.indexOf("pending:persist_pronunciations");
+    const persistIndex = events.findIndex(entry => entry.startsWith("persist:"));
+    check(persistPending >= 0 && persistIndex > persistPending,
+      "persist parked, asked, and executed only on the confirmation", JSON.stringify(events.filter(entry => entry.includes("persist"))));
+    const scratch = await Bun.file(scratchConfig).text().catch(() => "");
+    const scratchParsed = Bun.YAML.parse(scratch) as { pronunciations?: Record<string, string> } | null;
+    check(scratchParsed?.pronunciations?.VoxCPM === (pronunciations.VoxCPM ?? "")
+      && scratch.includes("# keep"),
+      "the config file gained the overlay and kept its comments",
+      JSON.stringify(scratchParsed?.pronunciations ?? {}));
+
+    // ---- generate_take: routed with the text and voice, produced where the surface says
+    check(events.some(entry => entry.startsWith("take:") && entry.includes("门禁测试") && entry.endsWith(`@${baseVoice}`)),
+      "generate_take carries the text and the requested voice",
+      events.find(entry => entry.startsWith("take:")) ?? "no take event");
+
+    // ---- audit: a definite verdict against the live runtime -------------------------
+    if (designProfileId === undefined) {
+      console.error("  (audit case skipped: no design profile on the engine)");
+    } else {
+      check(events.some(entry => entry.startsWith(`audit:${designProfileId}:`)),
+        "audit_profile answered with a definite verdict against the live runtime",
+        events.find(entry => entry.startsWith("audit:")) ?? "no audit event");
+    }
     check(!events.some(entry => entry.startsWith("error:")), "no conversation errors",
       events.filter(entry => entry.startsWith("error:")).join("; ") || "clean");
   } finally {
@@ -222,6 +279,7 @@ async function main(): Promise<number> {
     if (events.some(entry => entry.startsWith("register:"))) {
       await tts.deleteVoice(GATE_VOICE_ID).catch(() => {});
     }
+    await Bun.file(scratchConfig).delete().catch(() => {});
   }
 
   const pass = failures.length === 0;

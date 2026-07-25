@@ -87,6 +87,8 @@ const en = {
   "开场白（留空则不说）": "Welcome line (empty = none)",
   "例如：你好，我在，请讲。": "e.g. Hello, I'm here — go ahead.",
   "静默追问（秒，0 关闭）": "Follow-up after silence (seconds, 0 = off)",
+  "工作台语音工具（存音色、重念、记发音等，说话就能操作）": "Studio voice tools (save a voice, re-speak, pronunciations — operated by speaking)",
+  "对话生成的一条已加入生成面板": "A take from the conversation was added to the Generate panel",
   "开场白在会话开始时先说、可打断；静默追问在回答播完后你不说话时轻声追问一次。下次开始对话生效。":
     "The welcome is spoken once at session start and can be interrupted; the follow-up speaks once when you stay silent after a reply. Takes effect on the next conversation.",
 

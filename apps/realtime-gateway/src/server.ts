@@ -1,4 +1,4 @@
-import type { Fetch, PcmStreamDecoder } from "@voxstudio/clients";
+import { TtsClient, type Fetch, type PcmStreamDecoder } from "@voxstudio/clients";
 import { engine, engineByCapability, enginesOfKind, roleInstance } from "@voxstudio/config";
 import type { EngineKind, ResolvedEngineConfig, VoxConfig } from "@voxstudio/contracts";
 import type { SpeechProbabilityModel } from "@voxstudio/duplex-session";
@@ -28,6 +28,12 @@ export interface GatewayServerOptions {
   maxSessionSeconds?: number;
   /** Registry writes 403 and MCP servers stay unconnected, regardless of config. */
   demoMode?: boolean;
+  /**
+   * Writes session-added pronunciations to the host's config file. Injected by the
+   * entrypoint (which knows the resolved path and owns filesystem concerns); absent,
+   * the persist tool answers a structured refusal.
+   */
+  persistPronunciations?: (entries: Record<string, string>) => Promise<void>;
   /**
    * The capture library (docs/web-studio.md 素材库): every finalized utterance persists
    * here as WAV + SQLite metadata, served at /v1/library. Off by default — retention is
@@ -320,6 +326,19 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // The Studio tools (docs/voice-studio-control.md): demo mode never allows them —
       // an anonymous visitor must not write the voice bank by talking at it.
       allowStudioTools: options.demoMode !== true,
+      ...(options.persistPronunciations === undefined ? {} : { persistPronunciations: options.persistPronunciations }),
+      auditProfile: async (id: string) => {
+        const tts = new TtsClient(engine(options.config, "tts"), fetchImpl);
+        const voice = await tts.getVoice(id).catch(() => undefined);
+        const profile = voice?.design_profile;
+        if (!profile) return { status: "not_found", detail: `没有名为 ${id} 的设计音色` };
+        const runtime = await tts.runtimeIdentity();
+        const drifted = profile.model !== runtime.model
+          || profile.model_manifest_sha256 !== runtime.model_manifest_sha256;
+        return drifted
+          ? { status: "drift", model: runtime.model, detail: "模型或清单指纹与创建时不一致，复现前需重新审计" }
+          : { status: "ok", model: runtime.model };
+      },
       registerVoice: async (id, wav, transcript) => {
         if (!voiceIdPattern.test(id)) throw new Error("voice id must match [A-Za-z0-9._-]{1,64}");
         const selected = engineByCapability(options.config, "tts", "clone")

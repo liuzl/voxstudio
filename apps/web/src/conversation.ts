@@ -1,4 +1,6 @@
 import type { GatewayEvent } from "@voxstudio/realtime-gateway/protocol";
+import { t } from "./i18n";
+import { synthesize } from "./lib/api";
 import { MicCapture, SpeakerOutput } from "./lib/audio";
 import { GatewayClient } from "./lib/client";
 import { useStudio } from "./store";
@@ -35,6 +37,7 @@ export class ConversationController {
         turnTaking: "speculative",
         ...(store.welcome.trim() ? { welcome: store.welcome.trim() } : {}),
         ...(store.nudgeAfterSeconds > 0 ? { nudgeAfterSeconds: store.nudgeAfterSeconds } : {}),
+        ...(store.studioTools ? { studioTools: true } : {}),
       },
       onEvent: event => this.handleEvent(event),
       onAudio: samples => this.speaker?.enqueue(samples),
@@ -106,6 +109,26 @@ export class ConversationController {
       case "playback.format":
         this.playbackTurnId = event.turnId;
         this.speaker?.setFormat(event.sampleRate);
+        return;
+      case "studio.take":
+        // A spoken generate_take: the event reaches the same browser whose Generate
+        // panel owns takes, so the client runs the generation it would have run from
+        // the button — the gateway stays out of the batch-synthesis business.
+        void (async () => {
+          try {
+            const url = await synthesize({ input: event.text, voice: event.voice ?? store.voice ?? "" });
+            store.addTake({
+              id: crypto.randomUUID(),
+              text: event.text,
+              voice: `${event.voice ?? ""} (对话)`.trim(),
+              at: Date.now(),
+              url,
+            });
+            store.toast("info", t("对话生成的一条已加入生成面板"));
+          } catch (failure) {
+            store.toast("error", failure instanceof Error ? failure.message : String(failure));
+          }
+        })();
         return;
       case "playback.ended": {
         // The server sent the last piece; the audible clock is ours. Ack when the playhead

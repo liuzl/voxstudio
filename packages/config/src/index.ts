@@ -367,3 +367,51 @@ export function engineByCapability(
   }
   return candidates.find(([, instance]) => instance.capabilities.includes(capability));
 }
+
+/**
+ * Update (or create) the top-level `pronunciations:` block in a config file's TEXT,
+ * touching nothing else — comments, ordering, and formatting elsewhere survive, because
+ * this is targeted line surgery, not a parse-and-reserialize. `persist_pronunciations`
+ * (docs/voice-studio-control.md) writes a user's config with it; the caller re-parses
+ * the result and refuses the write if the entries did not land.
+ */
+export function updatePronunciationsYaml(text: string, entries: Record<string, string>): string {
+  const quote = (value: string): string =>
+    /^[A-Za-z0-9一-鿿][A-Za-z0-9一-鿿 ._-]*$/.test(value) && value === value.trim()
+      ? value
+      : JSON.stringify(value);
+  const lines = text.length === 0 ? [] : text.split("\n");
+  const headerIndex = lines.findIndex(line => /^pronunciations\s*:\s*(#.*)?$/.test(line));
+  const pending = new Map(Object.entries(entries));
+
+  if (headerIndex < 0) {
+    const block = [
+      "pronunciations:",
+      ...[...pending].map(([term, reading]) => `  ${quote(term)}: ${quote(reading)}`),
+    ];
+    const body = lines.join("\n");
+    return body === "" ? `${block.join("\n")}\n`
+      : `${body.replace(/\n*$/, "\n")}\n${block.join("\n")}\n`;
+  }
+
+  // The block runs until the next non-indented, non-blank, non-comment line.
+  let end = headerIndex + 1;
+  while (end < lines.length) {
+    const line = lines[end] as string;
+    if (/^\s*(#.*)?$/.test(line) || /^\s+/.test(line)) { end += 1; continue; }
+    break;
+  }
+  for (let index = headerIndex + 1; index < end; index += 1) {
+    const line = lines[index] as string;
+    const match = /^(\s+)(?:"([^"]*)"|([^\s:][^:]*?))\s*:/.exec(line);
+    if (!match) continue;
+    const term = match[2] !== undefined ? match[2] : (match[3] as string).trim();
+    if (pending.has(term)) {
+      lines[index] = `${match[1]}${quote(term)}: ${quote(pending.get(term) as string)}`;
+      pending.delete(term);
+    }
+  }
+  const inserted = [...pending].map(([term, reading]) => `  ${quote(term)}: ${quote(reading)}`);
+  lines.splice(end, 0, ...inserted);
+  return lines.join("\n");
+}

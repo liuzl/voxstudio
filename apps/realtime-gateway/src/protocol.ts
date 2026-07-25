@@ -80,6 +80,7 @@ export type GatewayEventPayload =
   | { type: "tool.call"; turnId: string; name: string; arguments: Record<string, unknown> }
   | { type: "tool.result"; turnId: string; name: string; ok: boolean; result?: unknown }
   | { type: "tool.pending"; turnId: string; name: string; arguments: Record<string, unknown> }
+  | { type: "studio.take"; text: string; voice?: string }
   | { type: "session.notice"; message: string }
   | { type: "command.accepted"; commandType: GatewayCommandType; idempotencyKey: string }
   | { type: "command.duplicate"; commandType: GatewayCommandType; idempotencyKey: string }

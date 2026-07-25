@@ -61,6 +61,10 @@ export interface GatewaySessionOptions {
   allowStudioTools?: boolean;
   /** Registers a clone voice from utterance audio; omitted, the save tool refuses. */
   registerVoice?: (id: string, wav: Uint8Array, transcript: string) => Promise<{ engine?: string }>;
+  /** Writes session-added pronunciations to the gateway host's config file. */
+  persistPronunciations?: (entries: Record<string, string>) => Promise<void>;
+  /** Compares a design profile against the live TTS runtime, for the audit tool. */
+  auditProfile?: (id: string) => Promise<{ status: string; model?: string; detail?: string }>;
   loadSileroVad?: (() => Promise<SpeechProbabilityModel>) | undefined;
   /** How long a detached session survives waiting for a reconnect. */
   reconnectGraceMs?: number;
@@ -280,6 +284,14 @@ export class GatewaySession {
         queueAgentSpeech: (text, overrides) => this.controls?.queueAgentSpeech(text, overrides),
         setPronunciation: (term, reading) => {
           (conversationOptions.pronunciations ??= {})[term] = reading;
+        },
+        ...(this.options.persistPronunciations === undefined ? {} : { persistPronunciations: this.options.persistPronunciations }),
+        ...(this.options.auditProfile === undefined ? {} : { auditProfile: this.options.auditProfile }),
+        // The take is produced by the client that asked for it: the event reaches the
+        // same browser whose Generate panel runs the generation — the loop stays out of
+        // the batch-synthesis business.
+        generateTake: async (text, voice) => {
+          this.emit({ type: "studio.take", text, ...(voice === undefined ? {} : { voice }) });
         },
       }) : []),
       ...(await this.options.extraTools?.() ?? []),

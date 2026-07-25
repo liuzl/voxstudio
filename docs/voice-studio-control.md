@@ -178,5 +178,20 @@ prompt strings already obey.
    confirmation), `generate_take`, `audit_profile`; Web reflection — a spoken
    `generate_take` appears in the Generate panel's takes via the existing
    event path.
+   **Delivered 2026-07-25**, same-day with phase 2. The config write is
+   targeted line surgery (`updatePronunciationsYaml`): only the
+   `pronunciations:` block is touched, the result is re-parsed and every
+   entry verified before the file is written — comments elsewhere survive by
+   construction, and the tool itself tracks the session delta so only new
+   readings are persisted. The gateway's `generate_take` emits a
+   `studio.take` event and the browser that asked runs the generation it
+   would have run from the button — the loop stays out of batch synthesis;
+   the CLI writes a `take-<stamp>.wav`. The Web conversation gained the
+   `studioTools` start option and a Settings toggle (the trial the day
+   before had exposed its absence). Gate: `measure:studio` grew to thirteen
+   checks and PASSed against the live stack — persist parked/asked/executed
+   on 确认 with the scratch config gaining the overlay and keeping its
+   comments, the take carrying text and voice, and the audit answering a
+   definite `ok` against a real design profile on the live runtime.
 4. **The agent door.** The same tools exported through `vox-mcp`; the
    agent-voice gate grows the curation cases.

@@ -164,8 +164,10 @@ surfaces run in both directions: `vox-mcp` gives any MCP client a voice on the h
 machine ([docs/agent-voice-mcp.md](./docs/agent-voice-mcp.md)). With `--studio-tools`,
 the conversation operates the studio itself — save the last utterance as a clone
 voice (spoken confirmation before anything persists), re-speak the last reply in
-another voice, teach a pronunciation mid-conversation — measured live end to end
-([docs/voice-studio-control.md](./docs/voice-studio-control.md)). The gateway also speaks
+another voice, teach a pronunciation mid-conversation and persist it to config,
+cast a take into the Generate panel, audit a design profile — measured live end
+to end ([docs/voice-studio-control.md](./docs/voice-studio-control.md)); the Web
+conversation opts in from Settings. The gateway also speaks
 the **OpenAI Realtime wire dialect** on the same `/v1/realtime` path — the official
 `openai` SDK (or anything written for OpenAI/xAI realtime endpoints) connects with only a
 base-URL change, client-declared function tools riding the same loop

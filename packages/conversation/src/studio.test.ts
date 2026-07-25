@@ -233,6 +233,50 @@ describe("studio tools", () => {
     expect(rejected.error).toBeDefined();
   });
 
+  test("persist saves exactly the session-added overlay, once", async () => {
+    const persisted: Record<string, string>[] = [];
+    const live: Record<string, string> = { existing: "旧读法" };
+    const tools = createStudioTools({
+      setPronunciation: (term, reading) => { live[term] = reading; },
+      persistPronunciations: async entries => { persisted.push(entries); },
+    });
+    const signal = new AbortController().signal;
+    const remember = tools.find(tool => tool.name === "remember_pronunciation");
+    const persist = tools.find(tool => tool.name === "persist_pronunciations");
+    // Nothing session-added yet: refuse rather than rewrite the config with nothing.
+    expect(((await persist?.handler({}, signal)) as Record<string, unknown>).error).toBeDefined();
+    await remember?.handler({ term: "VoxCPM", reading: "vox-c-p-m" }, signal);
+    const saved = await persist?.handler({}, signal) as Record<string, unknown>;
+    expect(saved.ok).toBe(true);
+    // The delta only — the config-sourced entry is not re-written.
+    expect(persisted).toEqual([{ VoxCPM: "vox-c-p-m" }]);
+    // A second persist with nothing new refuses again.
+    expect(((await persist?.handler({}, signal)) as Record<string, unknown>).error).toBeDefined();
+  });
+
+  test("generate_take validates and forwards; audit_profile forwards the verdict", async () => {
+    const takes: { text: string; voice: string | undefined }[] = [];
+    const tools = createStudioTools({
+      setPronunciation: () => {},
+      generateTake: async (text, voice) => { takes.push({ text, voice }); return { location: "takes" }; },
+      auditProfile: async id => ({ status: "drift", model: "m2", detail: `${id} drifted` }),
+    });
+    const signal = new AbortController().signal;
+    const generate = tools.find(tool => tool.name === "generate_take");
+    const audit = tools.find(tool => tool.name === "audit_profile");
+    expect(((await generate?.handler({ text: "  " }, signal)) as Record<string, unknown>).error).toBeDefined();
+    expect(((await generate?.handler({ text: "长".repeat(501) }, signal)) as Record<string, unknown>).error).toBeDefined();
+    const produced = await generate?.handler({ text: "欢迎光临", voice: "calm" }, signal) as Record<string, unknown>;
+    expect(produced).toMatchObject({ ok: true, location: "takes" });
+    expect(takes).toEqual([{ text: "欢迎光临", voice: "calm" }]);
+    expect(await audit?.handler({ profile: "design-x" }, signal)).toMatchObject({ status: "drift", model: "m2" });
+    // Deps omitted → structured refusals, not crashes.
+    const bare = createStudioTools({ setPronunciation: () => {} });
+    expect(((await bare.find(tool => tool.name === "generate_take")?.handler({ text: "x" }, signal)) as Record<string, unknown>).error).toBeDefined();
+    expect(((await bare.find(tool => tool.name === "audit_profile")?.handler({ profile: "x" }, signal)) as Record<string, unknown>).error).toBeDefined();
+    expect(((await bare.find(tool => tool.name === "persist_pronunciations")?.handler({}, signal)) as Record<string, unknown>).error).toBeDefined();
+  });
+
   test("save refuses when nothing has been said and redo refuses without a prior reply", async () => {
     const tools = createStudioTools({
       lastUtterance: () => undefined,

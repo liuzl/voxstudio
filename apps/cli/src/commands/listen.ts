@@ -7,7 +7,7 @@ import {
   DuplexSession,
   type SpeechProbabilityModel,
 } from "@voxstudio/duplex-session";
-import { ffmpegPcmDecoder, capturePcm, FfplaySink, loadSileroVadModel, startMacosAudioHost, type MacosAudioHost, type PcmCapture, type PcmSink } from "@voxstudio/platform-bun";
+import { ffmpegPcmDecoder, capturePcm, FfplaySink, loadSileroVadModel, persistPronunciationsFile, resolveConfigPath, startMacosAudioHost, writeBytes, type MacosAudioHost, type PcmCapture, type PcmSink } from "@voxstudio/platform-bun";
 import { join } from "node:path";
 import type { CliIo } from "../io";
 
@@ -142,6 +142,8 @@ export async function runListen(
   io: CliIo,
   fetch: Fetch = globalThis.fetch,
   platform: ListenPlatform = defaultPlatform,
+  /** The --config the process was started with; persist_pronunciations resolves through it. */
+  explicitConfigPath?: string,
 ): Promise<number> {
   const options = parse(args);
   let endAfterTurn = false;
@@ -248,6 +250,37 @@ export async function runListen(
         queueAgentSpeech: (text, overrides) => controls?.queueAgentSpeech(text, overrides),
         setPronunciation: (term, reading) => {
           (conversationOptions.pronunciations ??= {})[term] = reading;
+        },
+        persistPronunciations: async entries => {
+          const path = await resolveConfigPath(explicitConfigPath === undefined ? {} : { explicit: explicitConfigPath });
+          if (!path) throw new TypeError("没有找到配置文件，无法保存发音");
+          await persistPronunciationsFile(path, entries);
+          io.err(`listen: pronunciations persisted to ${path}`);
+        },
+        generateTake: async (text, voice) => {
+          const wav = await tts.speech({
+            input: text,
+            voice: voice ?? conversationOptions.voice ?? config.ttsDefaults.voice,
+            response_format: "wav",
+            cfg_value: config.ttsDefaults.cfgValue,
+            timesteps: config.ttsDefaults.timesteps,
+          });
+          const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+          const path = `take-${stamp}.wav`;
+          await writeBytes(path, wav instanceof Uint8Array ? wav : new Uint8Array(wav));
+          io.err(`listen: take written to ${path}`);
+          return { location: path };
+        },
+        auditProfile: async id => {
+          const voice = await tts.getVoice(id).catch(() => undefined);
+          const profile = voice?.design_profile;
+          if (!profile) return { status: "not_found", detail: `没有名为 ${id} 的设计音色` };
+          const runtime = await tts.runtimeIdentity();
+          const drifted = profile.model !== runtime.model
+            || profile.model_manifest_sha256 !== runtime.model_manifest_sha256;
+          return drifted
+            ? { status: "drift", model: runtime.model, detail: "模型或清单指纹与创建时不一致，复现前需重新审计" }
+            : { status: "ok", model: runtime.model };
         },
       }));
     }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import cases from "../../../fixtures/config/cases.json" with { type: "json" };
-import { engine, engineByCapability, enginesOfKind, parseConfig, roleInstance } from "./index";
+import { engine, engineByCapability, enginesOfKind, parseConfig, roleInstance, updatePronunciationsYaml } from "./index";
 
 function expectSubset(actual: unknown, expected: unknown): void {
   if (typeof expected !== "object" || expected === null || Array.isArray(expected)) {
@@ -99,5 +99,43 @@ describe("pronunciations", () => {
     expect(parseConfig({}).pronunciations).toEqual({});
     expect(parseConfig({ pronunciations: { VoxStudio: "沃克斯" } }).pronunciations).toEqual({ VoxStudio: "沃克斯" });
     expect(() => parseConfig({ pronunciations: { X: "" } })).toThrow("pronunciations");
+  });
+});
+
+describe("updatePronunciationsYaml", () => {
+  test("appends a new block to a file without one, preserving everything else", () => {
+    const text = "# my config\nengines:\n  tts:\n    base_url: http://x  # keep me\n";
+    const updated = updatePronunciationsYaml(text, { VoxCPM: "vox-c-p-m" });
+    expect(updated).toContain("# my config");
+    expect(updated).toContain("# keep me");
+    expect(updated).toContain("pronunciations:\n  VoxCPM: vox-c-p-m");
+    expect((Bun.YAML.parse(updated) as { pronunciations: Record<string, string> }).pronunciations)
+      .toEqual({ VoxCPM: "vox-c-p-m" });
+  });
+
+  test("updates an existing entry and inserts new ones without touching neighbors", () => {
+    const text = [
+      "pronunciations:",
+      "  # brand names",
+      "  VoxCPM: wrong",
+      "  kokoro: ko-ko-ro",
+      "engines:",
+      "  tts:",
+      "    base_url: http://x",
+      "",
+    ].join("\n");
+    const updated = updatePronunciationsYaml(text, { VoxCPM: "vox-c-p-m", SenseVoice: "sense voice" });
+    expect(updated).toContain("  # brand names");
+    expect(updated).toContain("  kokoro: ko-ko-ro");
+    const parsed = Bun.YAML.parse(updated) as { pronunciations: Record<string, string> };
+    expect(parsed.pronunciations).toEqual({
+      VoxCPM: "vox-c-p-m", kokoro: "ko-ko-ro", SenseVoice: "sense voice",
+    });
+  });
+
+  test("quotes readings YAML would otherwise mangle, and round-trips them", () => {
+    const updated = updatePronunciationsYaml("", { "C++": "西加加", weird: "a: b #x" });
+    const parsed = Bun.YAML.parse(updated) as { pronunciations: Record<string, string> };
+    expect(parsed.pronunciations).toEqual({ "C++": "西加加", weird: "a: b #x" });
   });
 });

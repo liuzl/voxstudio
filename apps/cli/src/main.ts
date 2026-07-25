@@ -110,8 +110,8 @@ export async function run(
     }
     if (command === "transcribe") return await runTranscribe(args, config, io, fetch);
     if (command === "reply") return await runReply(args, config, io, fetch);
-    if (command === "listen") return await runListen(args, config, io, fetch);
-    if (command === "studio") return await runStudio(args, config, io);
+    if (command === "listen") return await runListen(args, config, io, fetch, undefined, explicit);
+    if (command === "studio") return await runStudio(args, config, io, undefined, undefined, explicit);
     if (command === "say") return await runSay(args, config, io, fetch);
     if (command === "voices") return await runVoices(args, config, io, fetch);
     if (command === "profiles") return await runProfiles(args, config, io, fetch);

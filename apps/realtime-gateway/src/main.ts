@@ -1,4 +1,4 @@
-import { ffmpegPcmDecoder, loadConfig, loadSileroVadModel } from "@voxstudio/platform-bun";
+import { ffmpegPcmDecoder, loadConfig, loadSileroVadModel, persistPronunciationsFile, resolveConfigPath } from "@voxstudio/platform-bun";
 import { parseByteSize } from "./library";
 import { startGateway } from "./server";
 
@@ -50,6 +50,7 @@ async function main(args: string[]): Promise<number> {
     else throw new TypeError(`vox-gateway: unknown option ${arg}`);
   }
   const config = explicit === undefined ? await loadConfig() : await loadConfig({ explicit });
+  const configPath = await resolveConfigPath(explicit === undefined ? {} : { explicit });
   const parsedPort = port === undefined ? undefined : Number(port);
   if (parsedPort !== undefined && (!Number.isInteger(parsedPort) || parsedPort < 0 || parsedPort > 65_535)) {
     throw new TypeError("vox-gateway: --port must be an integer between 0 and 65535");
@@ -86,6 +87,9 @@ async function main(args: string[]): Promise<number> {
     ...(quotaBytes === undefined ? {} : { libraryMaxBytes: quotaBytes }),
     loadSileroVad: () => loadSileroVadModel(line => console.error(line)),
     ...(decoder === undefined ? {} : { pcmDecoder: decoder }),
+    ...(configPath === undefined ? {} : {
+      persistPronunciations: (entries: Record<string, string>) => persistPronunciationsFile(configPath, entries),
+    }),
     log: line => console.error(line),
   });
   const stop = () => { void gateway.stop().then(() => process.exit(0)); };

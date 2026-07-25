@@ -1,5 +1,5 @@
 import type { VoxConfig } from "@voxstudio/contracts";
-import { ffmpegPcmDecoder, loadSileroVadModel } from "@voxstudio/platform-bun";
+import { ffmpegPcmDecoder, loadSileroVadModel, persistPronunciationsFile, resolveConfigPath } from "@voxstudio/platform-bun";
 import { parseByteSize, startGateway, type GatewayServer, type GatewayServerOptions } from "@voxstudio/realtime-gateway";
 import { webAssets } from "../generated/web-assets";
 import type { CliIo } from "../io";
@@ -57,6 +57,8 @@ export async function runStudio(
   io: CliIo,
   start: (options: GatewayServerOptions) => GatewayServer = startGateway,
   waitForever = true,
+  /** The --config the process was started with; persist_pronunciations resolves through it. */
+  explicitConfigPath?: string,
 ): Promise<number> {
   let host: string | undefined;
   let port: number | undefined;
@@ -103,6 +105,7 @@ export async function runStudio(
   }
   // Without ffmpeg the decoder is absent and engines negotiate raw PCM instead.
   const decoder = ffmpegPcmDecoder();
+  const configPath = await resolveConfigPath(explicitConfigPath === undefined ? {} : { explicit: explicitConfigPath });
   const gateway = start({
     config,
     staticAssets: webAssets,
@@ -116,6 +119,9 @@ export async function runStudio(
     ...(libraryDir === undefined || libraryDir === "" ? {} : { libraryDir }),
     ...(libraryMaxBytes === undefined ? {} : { libraryMaxBytes }),
     loadSileroVad: () => loadSileroVadModel(line => io.err(line)),
+    ...(configPath === undefined ? {} : {
+      persistPronunciations: (entries: Record<string, string>) => persistPronunciationsFile(configPath, entries),
+    }),
     log: line => io.err(line),
   });
   io.out(`Web Studio at ${gateway.url}`);
