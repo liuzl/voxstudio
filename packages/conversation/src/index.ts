@@ -168,6 +168,8 @@ export interface ConversationOptions {
 
 export interface ConversationControls {
   queueAgentSpeech(text: string, overrides?: { voice?: string; speed?: number }): void;
+  /** Queued agent speech not yet spoken — surfaces defer an end_call teardown past it. */
+  pendingAgentSpeech(): number;
 }
 
 export type ConversationErrorCode = "asr_empty" | "llm_empty" | "turn_failed";
@@ -255,6 +257,7 @@ export async function runConversation(
     queueAgentSpeech: (text, overrides) => {
       if (text.trim() !== "") agentSpeechQueue.push({ text: text.trim(), ...(overrides === undefined ? {} : { overrides }) });
     },
+    pendingAgentSpeech: () => agentSpeechQueue.length,
   });
 
   const processTurn = async (turn: DuplexTurn, samples: Float32Array): Promise<void> => {
@@ -602,6 +605,12 @@ export async function runConversation(
         vad.reset();
         continue;
       }
+      // A soft-ended turn stops being reopenable the moment it is no longer the kernel's
+      // current turn (it completed, or was interrupted). The marker must be dropped then:
+      // a stale one blocked this gap forever — the silence nudge in speculative mode
+      // (the default) had been dead after the first exchange, and the agent-speech queue
+      // inherited the same closed door (adversarial review, 2026-07-25).
+      if (speculative && session.currentTurn?.id !== speculative.turnId) speculative = undefined;
       // Queued agent speech drains into the same idle gap the nudge uses: never over a
       // turn or a reopenable soft end, and startAgentTurn re-checks the kernel state.
       if (agentSpeechQueue.length > 0 && !activeTurn && !speculative) {

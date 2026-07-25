@@ -137,4 +137,11 @@ describe("applyPronunciations", () => {
   test("regex metacharacters in terms are literal", () => {
     expect(applyPronunciations("价格是 C++ 之上", { "C++": "西加加" })).toBe("价格是 西加加 之上");
   });
+
+  test("replacement tokens in readings are literal — a spoken reading must not rearrange the reply", () => {
+    // Readings are user-controlled at runtime (remember_pronunciation): $&, $' and $`
+    // would otherwise expand to the match and its surroundings.
+    expect(applyPronunciations("前文 X 后文", { X: "$&$'$`" })).toBe("前文 $&$'$` 后文");
+    expect(applyPronunciations("A X B", { X: "$1" })).toBe("A $1 B");
+  });
 });

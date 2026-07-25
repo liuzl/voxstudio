@@ -147,6 +147,8 @@ export function createStudioReferents(): {
   recordReply(text: string): void;
   /** Call from onToolPending: pins the save referent the moment the action parks. */
   onToolPending(name: string): void;
+  /** Call when the pending save is cancelled or has succeeded: drops the retained audio. */
+  clearPin(): void;
   lastUtterance(): { wav: Uint8Array; transcript: string } | undefined;
   lastReply(): string | undefined;
 } {
@@ -163,11 +165,12 @@ export function createStudioReferents(): {
     onToolPending: name => {
       if (name === "save_last_utterance_as_voice") pinned = previous;
     },
-    lastUtterance: () => {
-      const value = pinned ?? previous;
-      pinned = undefined;
-      return value;
-    },
+    clearPin: () => { pinned = undefined; },
+    // The read does NOT consume the pin: registration is asynchronous, and a transient
+    // failure after a consuming read would lose the confirmed sample before the failure
+    // was known (adversarial review, 2026-07-25). The pin is dropped explicitly —
+    // clearPin on cancel or success — or overwritten by the next park.
+    lastUtterance: () => pinned ?? previous,
     lastReply: () => reply,
   };
 }
@@ -194,6 +197,11 @@ export function createStudioTools(deps: StudioToolDeps): ConversationTool[] {
       handler: async args => {
         const id = String(args.voice ?? "").trim();
         if (!id) return { error: "voice 不能为空" };
+        // The same rule the gateway facade enforces; a model-invented id with control
+        // characters must not reach the engine from either surface.
+        if (!/^[A-Za-z0-9._-]{1,64}$/.test(id)) {
+          return { error: "音色 ID 只能包含字母、数字、点、下划线和连字符，最长 64 个字符" };
+        }
         if (!deps.lastUtterance || !deps.registerVoice) return { error: "这个环境不支持注册音色" };
         const utterance = deps.lastUtterance();
         if (!utterance) return { error: "本次对话还没有录到你的话，没有可保存的语音" };

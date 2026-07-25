@@ -161,6 +161,19 @@ prompt strings already obey.
    re-speak (a *correct* barge-in: the harness had to play a user who waits to
    listen), and waits that didn't treat `closed` as an exit; the product code
    needed zero changes across all three.
+   A same-day adversarial review added six hardenings, one of them a
+   pre-existing bug the new queue exposed: the speculative marker was cleared
+   only on a successful reopen, so **the silence nudge in speculative mode
+   (the default) had been dead after the first exchange** — the marker now
+   drops when its turn stops being the kernel's current turn, and both gates
+   re-ran PASS. The rest: an end_call in the same breath as a redo waits for
+   the queued speech (`pendingAgentSpeech`); the save pin is no longer
+   consumed by the read (a transient registration failure kept the sample)
+   and clears on cancel/success; pronunciation readings are applied as
+   literal replacements ($&/$'/$` from a spoken reading can no longer
+   rearrange the reply into TTS); voice-id validation moved into the shared
+   tool so the CLI path enforces the facade's rule; and the gate refuses to
+   run against a pre-existing voice bearing its cleanup id.
 3. **Persistence + launchers.** `persist_pronunciations` (config write behind
    confirmation), `generate_take`, `audit_profile`; Web reflection — a spoken
    `generate_take` appears in the Generate panel's takes via the existing

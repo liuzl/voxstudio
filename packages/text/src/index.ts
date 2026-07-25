@@ -209,7 +209,10 @@ export function applyPronunciations(input: string, entries: Record<string, strin
   for (const [term, reading] of Object.entries(entries).sort((a, b) => b[0].length - a[0].length)) {
     if (!term) continue;
     const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    output = output.replace(new RegExp(escaped, "giu"), reading);
+    // A replacement FUNCTION, not a string: readings are user-controlled at runtime
+    // (remember_pronunciation), and string replacements expand $&, $' and $` — a spoken
+    // reading could otherwise duplicate or rearrange the surrounding reply text.
+    output = output.replace(new RegExp(escaped, "giu"), () => reading);
   }
   return output;
 }

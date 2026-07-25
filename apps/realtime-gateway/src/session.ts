@@ -157,6 +157,7 @@ export class GatewaySession {
   private readonly sawDelta = new Set<string>();
   /** Set by the end_call tool: hang up after the current turn finishes audibly. */
   private endAfterTurn = false;
+  private controls: ConversationControls | undefined;
   /** Conversation-referent bookkeeping for the Studio tools; in-memory only, never retained. */
   private readonly referents = createStudioReferents();
   constructor(options: GatewaySessionOptions) {
@@ -169,7 +170,10 @@ export class GatewaySession {
         this.emit(payload);
         // The end_call tool hangs up only after the farewell finished audibly:
         // turn.completed fires downstream of the player's audible clock.
-        if (payload.type === "turn.completed" && this.endAfterTurn) {
+        if (payload.type === "turn.completed" && this.endAfterTurn
+          && (this.controls?.pendingAgentSpeech() ?? 0) === 0) {
+          // Hang up after the farewell — and after any queued agent speech (a redo asked
+          // in the same breath): its own completed turn re-arrives here, queue empty.
           queueMicrotask(() => { this.stop(); });
         }
       },
@@ -231,8 +235,7 @@ export class GatewaySession {
       ...(studioActive || Object.keys(config.pronunciations).length > 0
         ? { pronunciations: { ...config.pronunciations } } : {}),
     } as Parameters<typeof runConversation>[1];
-    let controls: ConversationControls | undefined;
-    conversationOptions.onControls = handle => { controls = handle; };
+    conversationOptions.onControls = handle => { this.controls = handle; };
     conversationOptions.keyterms = createKeytermProvider({
       configTerms: config.keyterms,
       listVoices: async () => await this.options.listVoices?.() ?? [],
@@ -266,9 +269,15 @@ export class GatewaySession {
       // AND the deployment allows: demo mode never registers them, the same rule as MCP.
       ...(studioActive ? createStudioTools({
         lastUtterance: this.referents.lastUtterance,
-        ...(this.options.registerVoice === undefined ? {} : { registerVoice: this.options.registerVoice }),
+        ...(this.options.registerVoice === undefined ? {} : {
+          registerVoice: async (id: string, wav: Uint8Array, transcript: string) => {
+            const registered = await this.options.registerVoice?.(id, wav, transcript);
+            this.referents.clearPin();
+            return registered;
+          },
+        }),
         lastReply: this.referents.lastReply,
-        queueAgentSpeech: (text, overrides) => controls?.queueAgentSpeech(text, overrides),
+        queueAgentSpeech: (text, overrides) => this.controls?.queueAgentSpeech(text, overrides),
         setPronunciation: (term, reading) => {
           (conversationOptions.pronunciations ??= {})[term] = reading;
         },
@@ -308,7 +317,11 @@ export class GatewaySession {
         ...(turn === undefined ? {} : { turnId: turn.id }),
       }),
       onToolCall: (name, args, turn) => this.emit({ type: "tool.call", turnId: turn.id, name, arguments: args }),
-      onToolResult: (name, ok, result, turn) => this.emit({ type: "tool.result", turnId: turn.id, name, ok, result }),
+      onToolResult: (name, ok, result, turn) => {
+        // A cancelled save drops its pinned audio; success clears it in registerVoice.
+        if (name === "cancel_action") this.referents.clearPin();
+        this.emit({ type: "tool.result", turnId: turn.id, name, ok, result });
+      },
       onToolPending: (name, args, turn) => {
         this.referents.onToolPending(name);
         this.emit({ type: "tool.pending", turnId: turn.id, name, arguments: args });

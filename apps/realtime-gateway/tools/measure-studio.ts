@@ -39,7 +39,12 @@ async function main(): Promise<number> {
 
   // Two real voices from the live bank: one to converse in, one for the redo override.
   const bank = await tts.listVoices();
-  const voices = bank.map(voice => voice.id).filter(id => id !== GATE_VOICE_ID);
+  if (bank.some(voice => voice.id === GATE_VOICE_ID)) {
+    // Never adopt-and-delete someone's voice that happens to share the gate's id.
+    console.error(`STUDIO GATE: REFUSED (${GATE_VOICE_ID} already exists on the engine; delete it first if it is a leftover)`);
+    return 1;
+  }
+  const voices = bank.map(voice => voice.id);
   if (voices.length < 2) {
     console.error(`STUDIO GATE: SKIP (need two registered voices, found ${voices.length})`);
     return 1;
@@ -89,6 +94,7 @@ async function main(): Promise<number> {
       registeredTranscript = transcript;
       events.push(`register:${id}`);
       await tts.createVoice(id, transcript, new Blob([wav as BlobPart], { type: "audio/wav" }), "utterance.wav");
+      referents.clearPin();
     },
   });
 
@@ -212,7 +218,10 @@ async function main(): Promise<number> {
     check(!events.some(entry => entry.startsWith("error:")), "no conversation errors",
       events.filter(entry => entry.startsWith("error:")).join("; ") || "clean");
   } finally {
-    await tts.deleteVoice(GATE_VOICE_ID).catch(() => {});
+    // Cleanup only what this run created; the pre-existence check above refused otherwise.
+    if (events.some(entry => entry.startsWith("register:"))) {
+      await tts.deleteVoice(GATE_VOICE_ID).catch(() => {});
+    }
   }
 
   const pass = failures.length === 0;

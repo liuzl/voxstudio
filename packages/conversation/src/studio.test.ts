@@ -207,6 +207,32 @@ describe("studio tools", () => {
     );
   });
 
+  test("the pin survives a failed registration and clears on cancel or success", () => {
+    const referents = createStudioReferents();
+    referents.recordUtterance(new Uint8Array([1]), "样本");
+    referents.recordUtterance(new Uint8Array([2]), "保存命令");
+    referents.onToolPending("save_last_utterance_as_voice");
+    referents.recordUtterance(new Uint8Array([3]), "确认");
+    // Non-consuming: a transient registration failure must not lose the confirmed sample.
+    expect(referents.lastUtterance()?.transcript).toBe("样本");
+    expect(referents.lastUtterance()?.transcript).toBe("样本");
+    referents.clearPin();
+    // Unpinned, the referent falls back to the utterance before the current one.
+    expect(referents.lastUtterance()?.transcript).toBe("保存命令");
+  });
+
+  test("save rejects a voice id the engine facade would refuse", async () => {
+    const tools = createStudioTools({
+      lastUtterance: () => ({ wav: new Uint8Array([1]), transcript: "样本" }),
+      registerVoice: async () => { throw new Error("must not be called"); },
+      setPronunciation: () => {},
+    });
+    const save = tools.find(tool => tool.name === "save_last_utterance_as_voice");
+    const signal = new AbortController().signal;
+    const rejected = await save?.handler({ voice: "坏 id\n" }, signal) as Record<string, unknown>;
+    expect(rejected.error).toBeDefined();
+  });
+
   test("save refuses when nothing has been said and redo refuses without a prior reply", async () => {
     const tools = createStudioTools({
       lastUtterance: () => undefined,

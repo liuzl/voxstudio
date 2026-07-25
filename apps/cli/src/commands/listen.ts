@@ -145,10 +145,13 @@ export async function runListen(
 ): Promise<number> {
   const options = parse(args);
   let endAfterTurn = false;
+  let controls: ConversationControls | undefined;
   const session = new DuplexSession({
     onEvent: event => {
-      if (event.type === "turn.completed" && endAfterTurn) {
-        // The end_call tool hangs up after the farewell finished audibly.
+      if (event.type === "turn.completed" && endAfterTurn && (controls?.pendingAgentSpeech() ?? 0) === 0) {
+        // The end_call tool hangs up after the farewell finished audibly — and after any
+        // queued agent speech (a redo asked in the same breath) has played out: its own
+        // completed turn re-arrives here with an empty queue.
         queueMicrotask(() => stop());
       }
       if (event.type === "turn.false_barge_in") {
@@ -215,7 +218,6 @@ export async function runListen(
       ...(options.studioTools || Object.keys(config.pronunciations).length > 0
         ? { pronunciations: { ...config.pronunciations } } : {}),
     } as Parameters<typeof runConversation>[1];
-    let controls: ConversationControls | undefined;
     conversationOptions.onControls = handle => { controls = handle; };
     // Conversation-referent bookkeeping for the studio tools; in-memory only.
     const referents = createStudioReferents();
@@ -240,6 +242,7 @@ export async function runListen(
         lastUtterance: referents.lastUtterance,
         registerVoice: async (id, wav, transcript) => {
           await tts.createVoice(id, transcript, new Blob([wav as BlobPart], { type: "audio/wav" }), "utterance.wav");
+          referents.clearPin();
         },
         lastReply: referents.lastReply,
         queueAgentSpeech: (text, overrides) => controls?.queueAgentSpeech(text, overrides),
@@ -275,7 +278,11 @@ export async function runListen(
       onError: (_code, message) => io.err(`listen: ${message}`),
       onKeytermCorrection: (from, to) => io.err(`keyterm: "${from}" -> "${to}"`),
       onToolCall: (name, args) => io.err(`tool: ${name} ${JSON.stringify(args)}`),
-      onToolResult: (name, ok) => io.err(`tool: ${name} ${ok ? "ok" : "failed"}`),
+      onToolResult: (name, ok) => {
+        // A cancelled save drops its pinned audio; success clears it in registerVoice.
+        if (name === "cancel_action") referents.clearPin();
+        io.err(`tool: ${name} ${ok ? "ok" : "failed"}`);
+      },
       onToolPending: (name, args) => {
         referents.onToolPending(name);
         io.err(`tool: ${name} ${JSON.stringify(args)} awaiting spoken confirmation`);
