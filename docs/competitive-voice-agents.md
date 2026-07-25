@@ -36,7 +36,87 @@ verbatim** — `conversation.item.create`, `response.create`,
 base64-encoded audio. The OpenAI Realtime protocol is consolidating into the
 de-facto realtime-voice wire standard across vendors.
 
+### Re-survey 2026-07-25 — logged-in console walkthrough
+
+The Voice Agent Builder left waitlist for open beta (announced 2026-07-01); this
+pass was a hands-on tour of a live account, not a product page. Deltas against
+the 07-17 survey:
+
+- **Two-stage tool disclosure is production practice.** Connected apps are not
+  flattened into the tool list: the agent template instructs
+  `search_connected_tools` first, then `call_connected_tool` with the exact
+  name returned — a meta-tool router over a large tool surface. This is the
+  strongest external evidence yet for the capacity-gate fallback in
+  [voice-studio-control.md](./voice-studio-control.md) (phase 1): the pattern
+  our design holds in reserve is what they ship.
+- **The stock instructions encode our gate's failure modes as prompt law.**
+  "Never claim you transferred… unless a tool in your tool list just returned
+  success" is claiming-without-calling; "Call tools by exact name. Do not
+  invent tools" is the invented-tool check. Independent convergence on the
+  same two failures the tool-loop gate measures.
+- **The etiquette surface has fully converged.** Their Speech tab is our five
+  knobs one-for-one: pronunciation overrides, keyterms, language auto-detect,
+  speaking speed, follow-up-after-silence — plus the interruptible welcome
+  toggle. This area is now table stakes, not differentiation, in either
+  direction.
+- **Observability is their strength worth borrowing.** Per-conversation trace:
+  full-call waveform, per-turn transcripts with timestamps and **per-utterance
+  audio replay**, a raw-events view, download/share. 30-day retention on their
+  infra (the privacy inversion of our opt-in library stands). The per-turn
+  replay + raw-events viewer is a cheap, high-value UI idea for our captures
+  library / conversation panel — the event stream already exists.
+- **Their realtime sessions accept text.** The integration sample sends
+  `conversation.item.create` with an `input_text` item. When voxstudio grows
+  text turns, supporting `input_text` in the OpenAI dialect aligns us with
+  clients written for their endpoint.
+- **Pricing anchor**: realtime audio $0.05/min ($3.00/hr), TTS $15/1M chars,
+  STT $0.10/hr batch / $0.20/hr streaming; voices included, cloning from
+  ≤120s reference clips; phone numbers provisioned free. $3/hr is the first
+  concrete number a self-hosting TCO story can be told against.
+- Connectors remain proprietary OAuth (Gmail "Log in" per agent) — the fork
+  against our MCP route (07-19 conclusion) persists. Guardrails are
+  first-class config; agents have a draft → Try-it-live → Publish lifecycle
+  and five persona templates.
+
+## OpenAI: GPT-Live + the unified ChatGPT desktop — surveyed 2026-07-24
+
+Two launches in one week reshaped the reference landscape:
+
+- **GPT-Live (2026-07-08)** replaces Advanced Voice Mode outright with a
+  **native full-duplex** speech model: simultaneous listening/speaking,
+  backchannels, mid-sentence interruption, and simultaneous translation.
+  Architecture is two layers — a continuous interaction layer for the live
+  back-and-forth, and a **delegation layer that hands harder questions to
+  GPT-5.5 in the background**. Live-1 for paid tiers, Live-1 mini free.
+  **No API at launch**; developers stay on GPT-Realtime via the Realtime API.
+- **Unified desktop app (2026-07-09)**: Chat / Work / Codex as three surfaces
+  of one app, all plans. Notably, **voice is not wired into the agentic
+  surfaces** — GPT-Live lives in Chat only.
+
+What this means for the positioning:
+
+1. **The turn-based cascade's ceiling is now visible.** Interruption, overlap
+   and backchannels become model-native; a cascade cannot match that feel.
+   But voxstudio's bet is the *contract*, not the cascade: when open-weight
+   full-duplex speech models arrive (the Moshi lineage points there), a
+   duplex-speech engine is one more registry kind — the session protocol,
+   gateway, and surfaces survive; only part of the turn state machine
+   dissolves. **Watch item (re-check quarterly): open-weight full-duplex
+   speech models.**
+2. **GPT-Live's delegation layer validates our fast-path shape** — a fast
+   mouth backed by a slower thinker is exactly the clause fast path and the
+   planned agent-delegation pattern, at larger scale.
+3. **Voice × agentic-surface integration is still nobody's shipped product**
+   — OpenAI has all the pieces in one app and has not connected them. The
+   voice-studio-control direction competes with an empty slot, not a leader.
+4. Their data boundary (audio on their infra, no API, hosted only) leaves the
+   self-hosted/measurable/reproducible position untouched.
+
 ## Comparison
+
+Snapshot of 2026-07-17; the 07-25 re-survey above amends two cells: their
+latency claim is now published ("sub-second", telephony path), and the
+etiquette portion of the agent-abilities gap has fully converged both ways.
 
 | Axis | xAI Voice Agents | VoxStudio |
 |---|---|---|
