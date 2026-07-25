@@ -1,6 +1,8 @@
 # Voice control of the Studio: the intent layer, not the whole surface
 
-Status: Proposed, 2026-07-24. The third consumer of the tool loop
+Status: Accepted, 2026-07-25 — phase 1's capacity gate passed against live
+gemma4-12b (see Phases), so the design proceeds without the two-stage router.
+Proposed 2026-07-24. The third consumer of the tool loop
 ([tool-loop.md](./tool-loop.md), [mcp-tools.md](./mcp-tools.md)): Studio
 operations registered as `ConversationTool`s, so the conversation can operate
 the product it lives in. Scoped by two first-principles constraints — what the
@@ -123,6 +125,19 @@ prompt strings already obey.
    usable arguments. Fail → the fallback is a two-stage router (one `studio`
    meta-tool that narrows intent before dispatch), designed only if this
    measurement demands it — complexity is not pre-paid.
+   **Delivered 2026-07-25.** `measure:tools --studio` against live
+   gemma4-12b-qat: 10 tools, 27 cases per suite — single-turn and turn-9 both
+   **14/14 explicit, 0/8 false triggers, 5/5 edge**, compound 3/3, zero
+   invented tools, zero bad JSON; the baseline 4-tool gate re-ran PASS in the
+   same session. One case was corrected during the run, in the model's favor:
+   asked cold, "把这些发音保存下来" was answered with a refusal to persist an
+   empty set — correct behavior, since nothing had been remembered; the case
+   now carries the remember-exchange production would have. One observation
+   for phase 2: the underspecified "把刚才那句存下来" called
+   `save_last_utterance_as_voice` with an *invented* voice id rather than
+   asking — exactly the miss the `external` confirmation flow is designed to
+   catch (the spoken restatement surfaces the wrong id before anything
+   persists), and the reason that tool must stay `external`.
 2. **Tier 1 trio + the overlay.** `save_last_utterance_as_voice` (library
    promote path), `redo_last_reply`, `remember_pronunciation` with the
    session overlay at the TTS boundary. Unit tests with a scripted LLM;

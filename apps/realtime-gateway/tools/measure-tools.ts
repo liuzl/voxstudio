@@ -14,6 +14,13 @@
  * never triggers one, and the model never invents a tool or emits broken JSON.
  *
  *   bun run measure:tools [--config CONFIG]
+ *
+ * `--studio` is the voice-studio-control phase-1 capacity experiment
+ * (docs/voice-studio-control.md): the six Studio tool *descriptions* join the
+ * surface (no handlers exist yet) and the same three phases run over the
+ * enlarged tool list — the original cases must not degrade, and the new
+ * intents must route with usable arguments. This flag decides whether that
+ * design proceeds or falls back to a two-stage router.
  */
 import { LlmClient } from "@voxstudio/clients";
 import { engine } from "@voxstudio/config";
@@ -31,15 +38,30 @@ const TOOLS = [
   { type: "function" as const, function: { name: "end_call", description: "结束本次语音对话",
     parameters: { type: "object", properties: {} } } },
 ];
-const KNOWN = new Set(TOOLS.map(tool => tool.function.name));
+/** The phase-1 candidates from docs/voice-studio-control.md §Tool inventory — descriptions
+ * only. If accepted, these strings become gate constants exactly like the four above. */
+const STUDIO_TOOLS = [
+  { type: "function" as const, function: { name: "save_last_utterance_as_voice", description: "把用户刚才说的那句话注册为一个新的克隆音色样本",
+    parameters: { type: "object", properties: { voice: { type: "string", description: "新音色的 ID" } }, required: ["voice"] } } },
+  { type: "function" as const, function: { name: "redo_last_reply", description: "把上一条回复重新念一遍，可以换音色或语速",
+    parameters: { type: "object", properties: { voice: { type: "string", description: "改用的音色 ID，可选" }, rate: { type: "number", description: "语速倍率 0.5-2.0，可选" } } } } },
+  { type: "function" as const, function: { name: "remember_pronunciation", description: "记住一个词的正确读法，之后的回复按这个发音读",
+    parameters: { type: "object", properties: { term: { type: "string", description: "要纠正的词" }, reading: { type: "string", description: "正确读法" } }, required: ["term", "reading"] } } },
+  { type: "function" as const, function: { name: "persist_pronunciations", description: "把本次对话记住的发音永久保存到配置文件",
+    parameters: { type: "object", properties: {} } } },
+  { type: "function" as const, function: { name: "generate_take", description: "用指定音色合成一段语音，保存到生成面板",
+    parameters: { type: "object", properties: { text: { type: "string", description: "要合成的文本" }, voice: { type: "string", description: "音色 ID，可选" } }, required: ["text"] } } },
+  { type: "function" as const, function: { name: "audit_profile", description: "检查一个设计音色与当前引擎运行时是否一致（有没有漂移）",
+    parameters: { type: "object", properties: { profile: { type: "string", description: "设计音色的 ID" } }, required: ["profile"] } } },
+];
 
 type Expect =
-  | { kind: "call"; name: string; args?: Record<string, unknown>; rateBelowOne?: boolean }
+  | { kind: "call"; name: string; args?: Record<string, unknown>; rateBelowOne?: boolean; hasArgs?: string[] }
   | { kind: "no_call" }
   | { kind: "clarify_or_call" }
   | { kind: "no_invented_tool" };
 
-const CASES: { utterance: string; expect: Expect }[] = [
+const CASES: { utterance: string; expect: Expect; pre?: ChatMessage[] }[] = [
   { utterance: "把声音换成 zliu", expect: { kind: "call", name: "set_voice", args: { voice: "zliu" } } },
   { utterance: "换个女声，用 zf_001 吧", expect: { kind: "call", name: "set_voice", args: { voice: "zf_001" } } },
   { utterance: "语速调到 1.5 倍", expect: { kind: "call", name: "set_speed", args: { rate: 1.5 } } },
@@ -56,6 +78,33 @@ const CASES: { utterance: string; expect: Expect }[] = [
   { utterance: "太快了", expect: { kind: "call", name: "set_speed", rateBelowOne: true } },
   { utterance: "用英文的声音读", expect: { kind: "clarify_or_call" } },
   { utterance: "先暂停一下", expect: { kind: "no_invented_tool" } },
+];
+
+/** The studio intents, and decoys aimed at the enlarged surface's new confusion edges.
+ * `pre` is per-case context: persist only makes sense after a remember — asked cold, the
+ * model correctly refuses to save an empty set (measured 2026-07-25), so the case carries
+ * the exchange production would have. */
+const STUDIO_CASES: { utterance: string; expect: Expect; pre?: ChatMessage[] }[] = [
+  { utterance: "把我刚才那句话存成音色样本，就叫 myvoice", expect: { kind: "call", name: "save_last_utterance_as_voice", args: { voice: "myvoice" } } },
+  { utterance: "用 zf_001 的声音把刚才那句再念一遍", expect: { kind: "call", name: "redo_last_reply", args: { voice: "zf_001" } } },
+  { utterance: "记住：VoxCPM 要读作 vox-c-p-m", expect: { kind: "call", name: "remember_pronunciation", hasArgs: ["term", "reading"] } },
+  { utterance: "把这些发音保存下来，以后都这么读",
+    pre: [
+      { role: "user", content: "记住：VoxCPM 要读作 vox-c-p-m" },
+      { role: "assistant", content: "好的，我记住了：VoxCPM 读作 vox-c-p-m，之后都按这个读。" },
+    ],
+    expect: { kind: "call", name: "persist_pronunciations" } },
+  { utterance: "用 calm 的声音生成一句「欢迎光临」", expect: { kind: "call", name: "generate_take", hasArgs: ["text"] } },
+  { utterance: "检查一下 design-calm-clear 这个音色有没有漂移", expect: { kind: "call", name: "audit_profile", args: { profile: "design-calm-clear" } } },
+  // Decoys on the new tools' semantic edges: mention of pronunciation, repetition,
+  // voices, and generation that a chat reply serves and a tool call would break.
+  { utterance: "这个词你发音真标准", expect: { kind: "no_call" } },
+  { utterance: "你觉得哪个音色最好听？", expect: { kind: "no_call" } },
+  { utterance: "我刚才说到哪儿了？", expect: { kind: "no_call" } },
+  { utterance: "帮我把这句话翻译成英文", expect: { kind: "no_invented_tool" } },
+  // Underspecified save: required id missing — a clarifying question or a call with
+  // usable arguments both count, silence does not.
+  { utterance: "把刚才那句存下来", expect: { kind: "clarify_or_call" } },
 ];
 
 /** Turn 1–8: everyday chatter shaped exactly like the loop's history (text pairs only). */
@@ -94,6 +143,11 @@ async function main(): Promise<number> {
   const config = explicitIndex >= 0
     ? await loadConfig({ explicit: process.argv[explicitIndex + 1] as string })
     : await loadConfig();
+  const studio = process.argv.includes("--studio");
+  const activeTools = studio ? [...TOOLS, ...STUDIO_TOOLS] : TOOLS;
+  const activeCases = studio ? [...CASES, ...STUDIO_CASES] : CASES;
+  const known = new Set(activeTools.map(tool => tool.function.name));
+  if (studio) console.error(`studio capacity experiment: ${activeTools.length} tools, ${activeCases.length} cases per suite\n`);
   const llm = new LlmClient(engine(config, "llm"));
   const system: ChatMessage = {
     role: "system",
@@ -106,7 +160,7 @@ async function main(): Promise<number> {
   const collect = async (messages: ChatMessage[]): Promise<{ parsed: { name: string; args: Record<string, unknown> | undefined }[]; text: string; raw: ChatToolCall[] }> => {
     const raw: ChatToolCall[] = [];
     let text = "";
-    for await (const item of llm.chatToolStream(messages, TOOLS, 200, 0)) {
+    for await (const item of llm.chatToolStream(messages, activeTools, 200, 0)) {
       if (item.type === "text") text += item.text;
       else raw.push(...item.calls);
     }
@@ -114,7 +168,7 @@ async function main(): Promise<number> {
       let args: Record<string, unknown> | undefined;
       try { args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>; }
       catch { badJson += 1; }
-      if (!KNOWN.has(call.function.name)) invented += 1;
+      if (!known.has(call.function.name)) invented += 1;
       return { name: call.function.name, args };
     });
     return { parsed, text, raw };
@@ -124,14 +178,16 @@ async function main(): Promise<number> {
     let shouldCall = 0, shouldCallTotal = 0;
     let falseTriggers = 0, noCallTotal = 0;
     let edgeOk = 0, edgeTotal = 0;
-    for (const { utterance, expect } of CASES) {
-      const { parsed, text } = await collect([system, ...history, { role: "user", content: utterance }]);
+    for (const { utterance, expect, pre } of activeCases) {
+      const { parsed, text } = await collect([system, ...history, ...(pre ?? []), { role: "user", content: utterance }]);
       let ok = false;
       if (expect.kind === "call") {
         shouldCallTotal += 1;
         ok = parsed.some(call => call.name === expect.name
           && (expect.args === undefined || Bun.deepEquals(call.args, expect.args))
-          && (!expect.rateBelowOne || (typeof call.args?.rate === "number" && call.args.rate < 1)));
+          && (!expect.rateBelowOne || (typeof call.args?.rate === "number" && call.args.rate < 1))
+          && (expect.hasArgs === undefined || expect.hasArgs.every(key =>
+            typeof call.args?.[key] === "string" ? (call.args[key] as string).length > 0 : call.args?.[key] !== undefined)));
         shouldCall += ok ? 1 : 0;
       } else if (expect.kind === "no_call") {
         noCallTotal += 1;
@@ -140,8 +196,8 @@ async function main(): Promise<number> {
       } else {
         edgeTotal += 1;
         ok = expect.kind === "no_invented_tool"
-          ? parsed.every(call => KNOWN.has(call.name))
-          : (parsed.length === 0 && text.length > 0) || parsed.every(call => KNOWN.has(call.name) && call.args !== undefined);
+          ? parsed.every(call => known.has(call.name))
+          : (parsed.length === 0 && text.length > 0) || (parsed.length > 0 && parsed.every(call => known.has(call.name) && call.args !== undefined));
         edgeOk += ok ? 1 : 0;
       }
       const summary = parsed.length > 0 ? JSON.stringify(parsed) : text.slice(0, 40);
@@ -183,7 +239,8 @@ async function main(): Promise<number> {
 
   console.error(`bad-json ${badJson}  invented ${invented}`);
   const pass = single && multi && compound && badJson === 0 && invented === 0;
-  console.error(pass ? "TOOL GATE: PASS" : `TOOL GATE: FAIL (${failures.join("; ")})`);
+  const label = studio ? "TOOL GATE (studio capacity)" : "TOOL GATE";
+  console.error(pass ? `${label}: PASS` : `${label}: FAIL (${failures.join("; ")})`);
   return pass ? 0 : 1;
 }
 
