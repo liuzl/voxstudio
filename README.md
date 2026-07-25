@@ -83,6 +83,7 @@ bun run build:cli
 ./platforms/macos-audio/build.sh
 ./apps/cli/dist/vox listen --speaker-duplex --language zh --voice design-calm-clear
 ./apps/cli/dist/vox listen --welcome "你好，我在，请讲。" --nudge-after 20   # conversation etiquette
+./apps/cli/dist/vox listen --studio-tools   # voice runs the studio: save that voice, re-speak, fix a pronunciation
 ./apps/cli/dist/vox studio               # Web Studio: browser app + gateway from the same binary
 bun apps/mcp/src/main.ts                 # vox-mcp: this machine's voice as an MCP server
 # claude mcp add voxstudio -- bun /path/to/voxstudio/apps/mcp/src/main.ts
@@ -160,7 +161,11 @@ spoken confirmation flow ([docs/mcp-tools.md](./docs/mcp-tools.md)), and convers
 etiquette — an interruptible welcome line, one follow-up after silence, pronunciation
 overrides ([docs/conversation-etiquette.md](./docs/conversation-etiquette.md)). The MCP
 surfaces run in both directions: `vox-mcp` gives any MCP client a voice on the host
-machine ([docs/agent-voice-mcp.md](./docs/agent-voice-mcp.md)). The gateway also speaks
+machine ([docs/agent-voice-mcp.md](./docs/agent-voice-mcp.md)). With `--studio-tools`,
+the conversation operates the studio itself — save the last utterance as a clone
+voice (spoken confirmation before anything persists), re-speak the last reply in
+another voice, teach a pronunciation mid-conversation — measured live end to end
+([docs/voice-studio-control.md](./docs/voice-studio-control.md)). The gateway also speaks
 the **OpenAI Realtime wire dialect** on the same `/v1/realtime` path — the official
 `openai` SDK (or anything written for OpenAI/xAI realtime endpoints) connects with only a
 base-URL change, client-declared function tools riding the same loop

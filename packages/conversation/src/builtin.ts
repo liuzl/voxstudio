@@ -114,6 +114,149 @@ export function createBuiltinTools(deps: BuiltinToolDeps): ConversationTool[] {
   ];
 }
 
+/** The phase-2 Studio tool names (docs/voice-studio-control.md); reserved beside the built-ins. */
+export const studioToolNames = ["save_last_utterance_as_voice", "redo_last_reply", "remember_pronunciation"] as const;
+
+export interface StudioToolDeps {
+  /**
+   * The last finalized utterance (raw ASR transcript). Undefined until the user has
+   * spoken — the tool answers a structured error the model can relay, not a crash.
+   */
+  lastUtterance?: () => { wav: Uint8Array; transcript: string } | undefined;
+  /** Registers a clone voice from utterance audio. Omitted when the surface cannot. */
+  registerVoice?: (id: string, wav: Uint8Array, transcript: string) => Promise<{ engine?: string } | void>;
+  /** The last reply the user audibly heard. */
+  lastReply?: () => string | undefined;
+  /** The loop's ConversationControls handle: re-speaking rides the agent-turn machinery. */
+  queueAgentSpeech?: (text: string, overrides?: { voice?: string; speed?: number }) => void;
+  /** Writes the session pronunciation overlay the TTS boundary reads. */
+  setPronunciation: (term: string, reading: string) => void;
+}
+
+/**
+ * The conversation-referent bookkeeping behind the Studio tools, shared so neither
+ * surface re-derives it. The subtlety is the save tool's referent under the confirmation
+ * flow: the sequence is [sample] → [save command] → [确认], and the handler runs at the
+ * confirm — by which time "刚才那句" has been overwritten twice. So the referent is
+ * **pinned at park time** (the surface's onToolPending fires exactly then): the utterance
+ * before the command's. An unpinned read falls back to the previous utterance, which is
+ * the same rule at zero turns' distance.
+ */
+export function createStudioReferents(): {
+  recordUtterance(wav: Uint8Array, transcript: string): void;
+  recordReply(text: string): void;
+  /** Call from onToolPending: pins the save referent the moment the action parks. */
+  onToolPending(name: string): void;
+  lastUtterance(): { wav: Uint8Array; transcript: string } | undefined;
+  lastReply(): string | undefined;
+} {
+  let current: { wav: Uint8Array; transcript: string } | undefined;
+  let previous: { wav: Uint8Array; transcript: string } | undefined;
+  let pinned: { wav: Uint8Array; transcript: string } | undefined;
+  let reply: string | undefined;
+  return {
+    recordUtterance: (wav, transcript) => {
+      previous = current;
+      current = { wav, transcript };
+    },
+    recordReply: text => { reply = text; },
+    onToolPending: name => {
+      if (name === "save_last_utterance_as_voice") pinned = previous;
+    },
+    lastUtterance: () => {
+      const value = pinned ?? previous;
+      pinned = undefined;
+      return value;
+    },
+    lastReply: () => reply,
+  };
+}
+
+/**
+ * The phase-2 Studio tools (docs/voice-studio-control.md): conversation-referent
+ * operations whose referents — "刚才那句"、"上一条回复" — exist only in conversation
+ * state. `save_last_utterance_as_voice` persists and is therefore `external`: the
+ * capacity experiment watched the model invent a voice id for an underspecified save,
+ * and the spoken confirmation restating that id before anything lands is the designed
+ * catch.
+ */
+export function createStudioTools(deps: StudioToolDeps): ConversationTool[] {
+  return [
+    {
+      name: "save_last_utterance_as_voice",
+      description: "把用户刚才说的那句话注册为一个新的克隆音色样本",
+      parameters: {
+        type: "object",
+        properties: { voice: { type: "string", description: "新音色的 ID" } },
+        required: ["voice"],
+      },
+      effect: "external",
+      handler: async args => {
+        const id = String(args.voice ?? "").trim();
+        if (!id) return { error: "voice 不能为空" };
+        if (!deps.lastUtterance || !deps.registerVoice) return { error: "这个环境不支持注册音色" };
+        const utterance = deps.lastUtterance();
+        if (!utterance) return { error: "本次对话还没有录到你的话，没有可保存的语音" };
+        if (!utterance.transcript.trim()) return { error: "刚才那句没有识别出文字，无法用作克隆样本" };
+        const registered = await deps.registerVoice(id, utterance.wav, utterance.transcript);
+        return {
+          ok: true,
+          voice: id,
+          ...(registered && registered.engine !== undefined ? { engine: registered.engine } : {}),
+          note: "音色已注册，可以用 set_voice 切换过去",
+        };
+      },
+    },
+    {
+      name: "redo_last_reply",
+      description: "把上一条回复重新念一遍，可以换音色或语速",
+      parameters: {
+        type: "object",
+        properties: {
+          voice: { type: "string", description: "改用的音色 ID，可选" },
+          rate: { type: "number", description: "语速倍率 0.5-2.0，可选" },
+        },
+      },
+      effect: "session",
+      handler: async args => {
+        if (!deps.lastReply || !deps.queueAgentSpeech) return { error: "这个环境不支持重念" };
+        const text = deps.lastReply();
+        if (!text || !text.trim()) return { error: "还没有可以重念的回复" };
+        const overrides: { voice?: string; speed?: number } = {};
+        const voice = args.voice === undefined ? "" : String(args.voice).trim();
+        if (voice) overrides.voice = voice;
+        if (args.rate !== undefined) {
+          const rate = Number(args.rate);
+          if (!Number.isFinite(rate)) return { error: "rate 必须是数字" };
+          overrides.speed = Math.min(2, Math.max(0.5, rate));
+        }
+        deps.queueAgentSpeech(text, Object.keys(overrides).length > 0 ? overrides : undefined);
+        return { ok: true, note: "说完这句就重念上一条回复，请简短确认即可，不要复述内容" };
+      },
+    },
+    {
+      name: "remember_pronunciation",
+      description: "记住一个词的正确读法，之后的回复按这个发音读",
+      parameters: {
+        type: "object",
+        properties: {
+          term: { type: "string", description: "要纠正的词" },
+          reading: { type: "string", description: "正确读法" },
+        },
+        required: ["term", "reading"],
+      },
+      effect: "session",
+      handler: async args => {
+        const term = String(args.term ?? "").trim();
+        const reading = String(args.reading ?? "").trim();
+        if (!term || !reading) return { error: "term 和 reading 都不能为空" };
+        deps.setPronunciation(term, reading);
+        return { ok: true, term, reading, note: "从下一句回复开始按这个读法" };
+      },
+    },
+  ];
+}
+
 /**
  * The keyterm provider shared by both surfaces: config terms plus the live voice-bank
  * ids, cached briefly so the ASR correction pass does not refetch the bank every turn.

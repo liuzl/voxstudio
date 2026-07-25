@@ -17,6 +17,7 @@
     "build:report": "bun tools/build-report.ts",
     "measure:tools": "bun apps/realtime-gateway/tools/measure-tools.ts",
     "measure:openai": "bun apps/realtime-gateway/tools/measure-openai-adapter.ts",
+    "measure:studio": "bun apps/realtime-gateway/tools/measure-studio.ts",
     "measure:mcp": "bun apps/realtime-gateway/tools/measure-mcp.ts",
     "measure:agent-voice": "bun apps/mcp/tools/measure-agent-voice.ts",
     "measure:etiquette": "bun apps/realtime-gateway/tools/measure-etiquette.ts",

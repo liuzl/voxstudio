@@ -1,6 +1,6 @@
 import { probeEngine, AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
 import { engine } from "@voxstudio/config";
-import { createBuiltinTools, createKeytermProvider, createSessionVad, runConversation, type ConversationPlayer, type ConversationTool } from "@voxstudio/conversation";
+import { createBuiltinTools, createKeytermProvider, createSessionVad, createStudioReferents, createStudioTools, runConversation, type ConversationControls, type ConversationPlayer, type ConversationTool } from "@voxstudio/conversation";
 import type { VoxConfig } from "@voxstudio/contracts";
 import { connectMcpServers, type McpToolSource } from "@voxstudio/mcp";
 import {
@@ -16,6 +16,7 @@ export const listenUsage = `usage: vox listen [--device NAME] [--language LANG] 
                  [--turn-taking conservative|speculative] [--reopen-ms N]
                  [--threshold N] [--silence-ms N] [--min-speech-ms N] [--timing]
                  [--welcome TEXT] [--nudge-after SECONDS] [--save-utterances DIR]
+                 [--studio-tools]
 
 Run a continuous voice conversation. Press Ctrl-C to stop.
 Without --barge-in, microphone input is suppressed while the agent speaks so external speakers
@@ -55,6 +56,7 @@ interface ListenOptions {
   minSpeechMs: number;
   timing: boolean;
   saveUtterances?: string;
+  studioTools: boolean;
 }
 
 export interface ListenPlayer extends PcmSink {
@@ -91,7 +93,7 @@ function parse(args: string[]): ListenOptions {
   const options: ListenOptions = {
     language: "auto", bargeIn: false, speakerDuplex: false, vad: "silero", vadExplicit: false,
     silenceMs: 650, minSpeechMs: 250,
-    turnTaking: "speculative", reopenMs: 7_000, timing: false,
+    turnTaking: "speculative", reopenMs: 7_000, timing: false, studioTools: false,
   };
   let silenceSet = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -103,6 +105,7 @@ function parse(args: string[]): ListenOptions {
     else if (arg === "--barge-in") options.bargeIn = true;
     else if (arg === "--speaker-duplex") options.speakerDuplex = true;
     else if (arg === "--timing") options.timing = true;
+    else if (arg === "--studio-tools") options.studioTools = true;
     else if (arg === "--save-utterances") options.saveUtterances = required(args, ++index, arg);
     else if (arg === "--turn-taking") {
       const value = required(args, ++index, arg);
@@ -207,8 +210,15 @@ export async function runListen(
       reopenMs: options.reopenMs,
       ...(options.welcome === undefined ? {} : { welcome: options.welcome }),
       ...(options.nudgeAfterSeconds === undefined ? {} : { nudgeAfterSeconds: options.nudgeAfterSeconds }),
-      ...(Object.keys(config.pronunciations).length === 0 ? {} : { pronunciations: config.pronunciations }),
+      // A run-local copy: remember_pronunciation mutates it, config stays shared. The map
+      // must exist whenever the studio tools do.
+      ...(options.studioTools || Object.keys(config.pronunciations).length > 0
+        ? { pronunciations: { ...config.pronunciations } } : {}),
     } as Parameters<typeof runConversation>[1];
+    let controls: ConversationControls | undefined;
+    conversationOptions.onControls = handle => { controls = handle; };
+    // Conversation-referent bookkeeping for the studio tools; in-memory only.
+    const referents = createStudioReferents();
     // The shared phase-1 session tools (docs/tool-loop.md), CLI edition: the voice bank is
     // the configured tts engine's own registry (the CLI speaks through one instance).
     const tools: ConversationTool[] = createBuiltinTools({
@@ -223,6 +233,21 @@ export async function runListen(
         })),
       endCall: () => { endAfterTurn = true; },
     });
+    // The studio tools (docs/voice-studio-control.md) enter only on explicit opt-in —
+    // registration is contextual, so the everyday conversation keeps the certified surface.
+    if (options.studioTools) {
+      tools.push(...createStudioTools({
+        lastUtterance: referents.lastUtterance,
+        registerVoice: async (id, wav, transcript) => {
+          await tts.createVoice(id, transcript, new Blob([wav as BlobPart], { type: "audio/wav" }), "utterance.wav");
+        },
+        lastReply: referents.lastReply,
+        queueAgentSpeech: (text, overrides) => controls?.queueAgentSpeech(text, overrides),
+        setPronunciation: (term, reading) => {
+          (conversationOptions.pronunciations ??= {})[term] = reading;
+        },
+      }));
+    }
     // MCP tools join through the same registration (docs/mcp-tools.md); a dead server
     // is logged and skipped, and the built-in names stay reserved.
     mcpSource = config.mcpServers.length > 0
@@ -246,18 +271,26 @@ export async function runListen(
       tts,
     }, conversationOptions, {
       onTranscript: text => io.out(`transcript: ${text}`),
-      onReply: text => io.out(`reply: ${text}`),
+      onReply: text => { referents.recordReply(text); io.out(`reply: ${text}`); },
       onError: (_code, message) => io.err(`listen: ${message}`),
       onKeytermCorrection: (from, to) => io.err(`keyterm: "${from}" -> "${to}"`),
       onToolCall: (name, args) => io.err(`tool: ${name} ${JSON.stringify(args)}`),
       onToolResult: (name, ok) => io.err(`tool: ${name} ${ok ? "ok" : "failed"}`),
-      onToolPending: (name, args) => io.err(`tool: ${name} ${JSON.stringify(args)} awaiting spoken confirmation`),
-      ...(options.saveUtterances === undefined ? {} : {
+      onToolPending: (name, args) => {
+        referents.onToolPending(name);
+        io.err(`tool: ${name} ${JSON.stringify(args)} awaiting spoken confirmation`);
+      },
+      ...(options.saveUtterances === undefined && !options.studioTools ? {} : {
         onUtterance: async (wav: Uint8Array, transcript: string) => {
+          // The studio referents hold at most two utterances in memory — "把刚才那句存成
+          // 音色" and its park-time pin — and are not retention: nothing touches disk
+          // unless the user later confirms the save aloud.
+          if (options.studioTools) referents.recordUtterance(wav, transcript);
+          if (options.saveUtterances === undefined) return;
           // An explicit opt-in per the privacy rules. The empty-transcript failures are the
           // most valuable samples in the set, so saving happens regardless of the result.
           const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-          const base = join(options.saveUtterances as string, `utterance-${stamp}`);
+          const base = join(options.saveUtterances, `utterance-${stamp}`);
           await Bun.write(`${base}.wav`, wav);
           await Bun.write(`${base}.txt`, `${transcript}\n`);
           io.err(`listen: saved utterance ${base}.wav`);

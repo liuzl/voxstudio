@@ -5,7 +5,10 @@ import {
   createBuiltinTools,
   createKeytermProvider,
   createSessionVad,
+  createStudioReferents,
+  createStudioTools,
   runConversation,
+  type ConversationControls,
   type ConversationFrame,
   type ConversationPlayer,
   type ConversationTool,
@@ -50,6 +53,14 @@ export interface GatewaySessionOptions {
    * raw ASR text. Absent, nothing is kept — the conversation loop's own privacy rule.
    */
   onUtterance?: (wav: Uint8Array, transcript: string) => void | Promise<void>;
+  /**
+   * Whether a session may request the Studio tools (docs/voice-studio-control.md).
+   * The server sets this false in demo mode — an anonymous visitor must not write the
+   * voice bank by talking at it, the same rule that refuses MCP.
+   */
+  allowStudioTools?: boolean;
+  /** Registers a clone voice from utterance audio; omitted, the save tool refuses. */
+  registerVoice?: (id: string, wav: Uint8Array, transcript: string) => Promise<{ engine?: string }>;
   loadSileroVad?: (() => Promise<SpeechProbabilityModel>) | undefined;
   /** How long a detached session survives waiting for a reconnect. */
   reconnectGraceMs?: number;
@@ -146,6 +157,8 @@ export class GatewaySession {
   private readonly sawDelta = new Set<string>();
   /** Set by the end_call tool: hang up after the current turn finishes audibly. */
   private endAfterTurn = false;
+  /** Conversation-referent bookkeeping for the Studio tools; in-memory only, never retained. */
+  private readonly referents = createStudioReferents();
   constructor(options: GatewaySessionOptions) {
     this.options = options;
     this.duplex = new DuplexSession({
@@ -183,6 +196,7 @@ export class GatewaySession {
       }, this.options.maxSessionSeconds * 1_000);
     }
     const turnTaking = start.turnTaking ?? "speculative";
+    const studioActive = start.studioTools === true && this.options.allowStudioTools === true;
     const config = this.options.config;
     // Engine overrides are validated against the registry before the session runs; a
     // typo rejects the start instead of wiring the conversation to a misroute.
@@ -212,8 +226,13 @@ export class GatewaySession {
       reopenMs: start.reopenMs ?? 7_000,
       ...(start.welcome === undefined ? {} : { welcome: start.welcome }),
       ...(start.nudgeAfterSeconds === undefined ? {} : { nudgeAfterSeconds: start.nudgeAfterSeconds }),
-      ...(Object.keys(config.pronunciations).length === 0 ? {} : { pronunciations: config.pronunciations }),
+      // A session-local copy: remember_pronunciation mutates it, config stays shared. The
+      // map must exist whenever the studio tools do.
+      ...(studioActive || Object.keys(config.pronunciations).length > 0
+        ? { pronunciations: { ...config.pronunciations } } : {}),
     } as Parameters<typeof runConversation>[1];
+    let controls: ConversationControls | undefined;
+    conversationOptions.onControls = handle => { controls = handle; };
     conversationOptions.keyterms = createKeytermProvider({
       configTerms: config.keyterms,
       listVoices: async () => await this.options.listVoices?.() ?? [],
@@ -243,6 +262,17 @@ export class GatewaySession {
         },
         endCall: () => { this.endAfterTurn = true; },
       }),
+      // The Studio tools (docs/voice-studio-control.md) join only when the session asked
+      // AND the deployment allows: demo mode never registers them, the same rule as MCP.
+      ...(studioActive ? createStudioTools({
+        lastUtterance: this.referents.lastUtterance,
+        ...(this.options.registerVoice === undefined ? {} : { registerVoice: this.options.registerVoice }),
+        lastReply: this.referents.lastReply,
+        queueAgentSpeech: (text, overrides) => controls?.queueAgentSpeech(text, overrides),
+        setPronunciation: (term, reading) => {
+          (conversationOptions.pronunciations ??= {})[term] = reading;
+        },
+      }) : []),
       ...(await this.options.extraTools?.() ?? []),
     ];
     if (this.stopped) return;
@@ -266,7 +296,10 @@ export class GatewaySession {
         }
         this.emit({ type: "response.text.delta", turnId: turn.id, revision: turn.revision, text });
       },
-      onReply: (text, turn) => this.emit({ type: "response.text.final", turnId: turn.id, revision: turn.revision, text }),
+      onReply: (text, turn) => {
+        this.referents.recordReply(text);
+        this.emit({ type: "response.text.final", turnId: turn.id, revision: turn.revision, text });
+      },
       onError: (code, message, turn) => this.emit({
         type: "error",
         code,
@@ -276,8 +309,19 @@ export class GatewaySession {
       }),
       onToolCall: (name, args, turn) => this.emit({ type: "tool.call", turnId: turn.id, name, arguments: args }),
       onToolResult: (name, ok, result, turn) => this.emit({ type: "tool.result", turnId: turn.id, name, ok, result }),
-      onToolPending: (name, args, turn) => this.emit({ type: "tool.pending", turnId: turn.id, name, arguments: args }),
-      ...(this.options.onUtterance === undefined ? {} : { onUtterance: this.options.onUtterance }),
+      onToolPending: (name, args, turn) => {
+        this.referents.onToolPending(name);
+        this.emit({ type: "tool.pending", turnId: turn.id, name, arguments: args });
+      },
+      ...(this.options.onUtterance === undefined && !studioActive ? {} : {
+        onUtterance: async (wav: Uint8Array, transcript: string) => {
+          // The studio referents hold at most two utterances in memory — "把刚才那句存成
+          // 音色" and its park-time pin — and are not retention: nothing persists unless
+          // the user confirms the save aloud. The library opt-in still gets every utterance.
+          if (studioActive) this.referents.recordUtterance(wav, transcript);
+          await this.options.onUtterance?.(wav, transcript);
+        },
+      }),
     });
     // The loop ending — frame source closed, session closed, or a crash — always tears the
     // session down; a gateway session with no loop behind it would accept audio into a void.

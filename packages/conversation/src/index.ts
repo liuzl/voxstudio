@@ -150,8 +150,24 @@ export interface ConversationOptions {
   nudgeAfterSeconds?: number;
   /** What the silence nudge says (docs/conversation-etiquette.md; fixed text in phase 1). */
   nudgeText?: string;
-  /** Term → reading substitutions applied at the TTS boundary only; captions keep the spelling. */
+  /**
+   * Term → reading substitutions applied at the TTS boundary only; captions keep the
+   * spelling. Read at each synthesis, so a tool may mutate the map mid-session
+   * (remember_pronunciation, docs/voice-studio-control.md) and the next reply obeys it.
+   */
   pronunciations?: Record<string, string>;
+  /**
+   * Receives the loop's control handle at start. `queueAgentSpeech` is how anything
+   * outside the turn pipeline gets a voice: the text is spoken as an agent-initiated
+   * turn (the welcome/nudge machinery) at the next idle gap, with optional one-shot
+   * voice/speed overrides. Studio tools use it for redo; agent delegation will use it
+   * for progress reports.
+   */
+  onControls?: (controls: ConversationControls) => void;
+}
+
+export interface ConversationControls {
+  queueAgentSpeech(text: string, overrides?: { voice?: string; speed?: number }): void;
 }
 
 export type ConversationErrorCode = "asr_empty" | "llm_empty" | "turn_failed";
@@ -232,6 +248,14 @@ export async function runConversation(
   // and, while a continuation is being captured, the audio it continues.
   let speculative: { turnId: string; samples: Float32Array; softEndedAtMs: number } | undefined;
   let continuationPrefix: Float32Array | undefined;
+  // Agent speech queued from outside the turn pipeline (ConversationControls): drained
+  // into agent turns at the next idle gap, exactly where the nudge fires.
+  const agentSpeechQueue: { text: string; overrides?: { voice?: string; speed?: number } }[] = [];
+  options.onControls?.({
+    queueAgentSpeech: (text, overrides) => {
+      if (text.trim() !== "") agentSpeechQueue.push({ text: text.trim(), ...(overrides === undefined ? {} : { overrides }) });
+    },
+  });
 
   const processTurn = async (turn: DuplexTurn, samples: Float32Array): Promise<void> => {
     try {
@@ -487,7 +511,12 @@ export async function runConversation(
    * ASR and no LLM — a welcome line or a silence nudge. Completed turns enter history as
    * assistant messages (the model knows it greeted); interrupted ones leave no trace.
    */
-  const speakAgentTurn = async (turn: DuplexTurn, text: string, armsNudge: boolean): Promise<void> => {
+  const speakAgentTurn = async (
+    turn: DuplexTurn,
+    text: string,
+    armsNudge: boolean,
+    overrides?: { voice?: string; speed?: number },
+  ): Promise<void> => {
     try {
       if (!session.startThinking(turn.id)) return;
       const player = deps.createPlayer(turn);
@@ -495,7 +524,7 @@ export async function runConversation(
       turn.signal.addEventListener("abort", abort, { once: true });
       try {
         callbacks.onReplyDelta?.(text, turn);
-        const voice = options.voice ?? options.ttsDefaults.voice;
+        const voice = overrides?.voice ?? options.voice ?? options.ttsDefaults.voice;
         for await (const piece of streamReply(tts, (async function* (): AsyncGenerator<string> { yield text; })(), {
           chunking: {
             ...options.chunking,
@@ -505,7 +534,7 @@ export async function runConversation(
           },
           ttsDefaults: options.ttsDefaults,
           voice,
-          ...(options.speed === undefined ? {} : { speed: options.speed }),
+          ...((overrides?.speed ?? options.speed) === undefined ? {} : { speed: (overrides?.speed ?? options.speed) as number }),
           ...(voice === "clone" || voice === "design" ? {} : { prosodyPrompt: true }),
           continuationId: crypto.randomUUID(),
           signal: turn.signal,
@@ -549,8 +578,13 @@ export async function runConversation(
     void task.finally(() => work.delete(task));
   };
 
-  const startAgentWork = (turn: DuplexTurn, text: string, armsNudge: boolean): void => {
-    const task = speakAgentTurn(turn, text, armsNudge);
+  const startAgentWork = (
+    turn: DuplexTurn,
+    text: string,
+    armsNudge: boolean,
+    overrides?: { voice?: string; speed?: number },
+  ): void => {
+    const task = speakAgentTurn(turn, text, armsNudge, overrides);
     work.add(task);
     void task.finally(() => work.delete(task));
   };
@@ -567,6 +601,15 @@ export async function runConversation(
       if (!options.allowBargeIn && (session.state === "speaking" || frame.timestampMs < suppressInputUntil)) {
         vad.reset();
         continue;
+      }
+      // Queued agent speech drains into the same idle gap the nudge uses: never over a
+      // turn or a reopenable soft end, and startAgentTurn re-checks the kernel state.
+      if (agentSpeechQueue.length > 0 && !activeTurn && !speculative) {
+        const speechTurn = session.startAgentTurn();
+        if (speechTurn) {
+          const queued = agentSpeechQueue.shift() as { text: string; overrides?: { voice?: string; speed?: number } };
+          startAgentWork(speechTurn, queued.text, false, queued.overrides);
+        }
       }
       // The silence nudge fires only into an idle gap — never over a turn, a reopenable
       // soft end, or suppressed input — and startAgentTurn re-checks the kernel state.
@@ -638,7 +681,11 @@ export {
   createBuiltinTools,
   createKeytermProvider,
   createSessionVad,
+  createStudioReferents,
+  createStudioTools,
+  studioToolNames,
   type BuiltinToolDeps,
   type BuiltinVoice,
   type CreateVadOptions,
+  type StudioToolDeps,
 } from "./builtin";

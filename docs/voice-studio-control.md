@@ -144,6 +144,23 @@ prompt strings already obey.
    **gate**: the three flows land by voice against the live stack — a
    mispronounced term is corrected mid-conversation and the next reply says it
    right; the promote asks aloud and executes only on "确认".
+   **Delivered 2026-07-25.** `bun run measure:studio` (the real conversation
+   loop, live gemma4-12b deciding the calls, live VoxCPM2 synthesizing and
+   registering) PASS, all nine checks: the overlay stored from one spoken
+   sentence; the very next reply captioned "VoxCPM" while the engine was asked
+   to say "vox-c-p-m"; the redo re-spoke the previous reply as an agent turn
+   in the requested voice; the save parked, restated aloud, and registered
+   only after "确认" — with the **park-time sample**, verified on the engine
+   and cleaned up. Two designs were forced by building it: the loop grew
+   `ConversationControls.queueAgentSpeech` (the welcome/nudge machinery
+   exposed as a handle, one-shot voice/speed overrides — the same door agent
+   delegation will use), and `createStudioReferents` pins the save referent
+   at park time, because [sample] → [save command] → [确认] overwrites
+   "刚才那句" twice before the handler runs. The gate script deadlocked three
+   times before passing — insufficient silence tail, speaking over the queued
+   re-speak (a *correct* barge-in: the harness had to play a user who waits to
+   listen), and waits that didn't treat `closed` as an exit; the product code
+   needed zero changes across all three.
 3. **Persistence + launchers.** `persist_pronunciations` (config write behind
    confirmation), `generate_take`, `audit_profile`; Web reflection — a spoken
    `generate_take` appears in the Generate panel's takes via the existing

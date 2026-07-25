@@ -8,6 +8,7 @@ import { connectMcpServers, type McpToolSource } from "@voxstudio/mcp";
 import { OpenAiRealtimeConnection } from "./openai-realtime";
 import { CaptureLibrary } from "./library";
 import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand } from "./protocol";
+import { studioToolNames } from "@voxstudio/conversation";
 import { builtinToolNames, GatewaySession, type EventSink } from "./session";
 
 export interface GatewayServerOptions {
@@ -316,11 +317,31 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // The session tools see the same sanitized surfaces the facade serves.
       listVoices: async () => (await collectVoices()).map(voice => ({ id: voice.id, engine: voice.engine })),
       engineStatus: collectEngines,
+      // The Studio tools (docs/voice-studio-control.md): demo mode never allows them —
+      // an anonymous visitor must not write the voice bank by talking at it.
+      allowStudioTools: options.demoMode !== true,
+      registerVoice: async (id, wav, transcript) => {
+        if (!voiceIdPattern.test(id)) throw new Error("voice id must match [A-Za-z0-9._-]{1,64}");
+        const selected = engineByCapability(options.config, "tts", "clone")
+          ?? ([roleInstance(options.config, "tts"), engine(options.config, "tts")] as const);
+        const [engineName, target] = selected;
+        const form = new FormData();
+        form.set("id", id);
+        form.set("text", transcript);
+        form.set("audio", new File([wav as BlobPart], `${id}.wav`, { type: "audio/wav" }));
+        const headers = new Headers();
+        if (target.apiKey) headers.set("authorization", `Bearer ${target.apiKey}`);
+        const upstream = await fetchImpl(new URL("/v1/voices", target.baseUrl), { method: "POST", headers, body: form });
+        if (!upstream.ok) throw new Error(`${engineName} refused the voice registration (HTTP ${upstream.status})`);
+        return { engine: engineName };
+      },
       extraTools: async () => {
         // Built-ins always win; then the surface's own tools (an OpenAI client owns the
         // function names it declared — an ambient MCP tool must never absorb its calls);
-        // MCP tools last. Duplicates keep their first registration.
-        const taken = new Set<string>(builtinToolNames);
+        // MCP tools last. Duplicates keep their first registration. Studio names are
+        // reserved even when the tools are off, so enabling them never changes whose
+        // call an ambient tool had been absorbing.
+        const taken = new Set<string>([...builtinToolNames, ...studioToolNames]);
         const composed: ConversationTool[] = [];
         for (const tool of [...extraTools, ...(mcpSource ? (await mcpSource).tools() : [])]) {
           if (taken.has(tool.name)) continue;

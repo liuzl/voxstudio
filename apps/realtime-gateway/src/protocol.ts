@@ -34,6 +34,11 @@ export interface SessionStartOptions {
   asrEngine?: string;
   llmEngine?: string;
   ttsEngine?: string;
+  /**
+   * Register the Studio tools (docs/voice-studio-control.md) for this session. Honored
+   * only when the gateway allows it — demo mode never does.
+   */
+  studioTools?: boolean;
   /** Spoken once at session start, before any user speech; interruptible like any reply. */
   welcome?: string;
   /** After a completed exchange, this much silence earns one spoken follow-up. */
@@ -131,6 +136,8 @@ function parseStartOptions(value: unknown): SessionStartOptions {
   if (bargeIn !== undefined && typeof bargeIn !== "boolean") throw new ProtocolError("bargeIn must be a boolean");
   const playbackAck = value.playbackAck;
   if (playbackAck !== undefined && typeof playbackAck !== "boolean") throw new ProtocolError("playbackAck must be a boolean");
+  const studioTools = value.studioTools;
+  if (studioTools !== undefined && typeof studioTools !== "boolean") throw new ProtocolError("studioTools must be a boolean");
   const maxTokens = optionalNumber(value, "maxTokens");
   if (maxTokens !== undefined && (!Number.isInteger(maxTokens) || maxTokens === 0)) {
     throw new ProtocolError("maxTokens must be a positive integer");
@@ -159,6 +166,7 @@ function parseStartOptions(value: unknown): SessionStartOptions {
   if (voice !== undefined) options.voice = voice;
   if (bargeIn !== undefined) options.bargeIn = bargeIn;
   if (playbackAck !== undefined) options.playbackAck = playbackAck;
+  if (studioTools !== undefined) options.studioTools = studioTools;
   if (turnTaking !== undefined) options.turnTaking = turnTaking;
   if (reopenMs !== undefined) options.reopenMs = reopenMs;
   if (vad !== undefined) options.vad = vad;
