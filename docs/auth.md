@@ -1,0 +1,195 @@
+# Authentication and identity
+
+Status: Accepted, 2026-07-26.
+
+## Scope
+
+How voxstudio gains accounts: identity for the hosted product at **voxstudio.cc** (a
+public, self-serve entrance — not an owner-only console), and the explicit guarantee
+that the self-hosted product keeps its current zero-auth / optional-token shape
+untouched. This document records the architecture review's conclusions and the v1
+decisions; it deliberately scopes out everything a first version does not need.
+
+Supersedes one earlier stance: [competitive-voice-agents.md](./competitive-voice-agents.md)
+sketched an OIDC-first identity abstraction (Keycloak / Authentik / Cloudflare Access).
+That remains right for *enterprise SSO later*, but it is the wrong first move for a
+public product entrance: Access-style gating is an allow-list door, it produces no
+product-owned user record, and resource ownership built against its JWT claims would be
+rebuilt the day real accounts arrive. The hosted product owns its identity; OIDC/SSO
+demotes to a future plugin.
+
+## Where the architecture already stands
+
+The review that produced this document found the boundary the design needs is already
+in place:
+
+- **No auth in shared packages.** The nine `packages/*` have no HTTP server, no cookie,
+  no auth dependency; every `token`/`Authorization` hit is upstream-engine API-key
+  injection (`packages/clients/src/http.ts`) or outbound MCP-client bearer
+  (`packages/mcp/src/index.ts`). The dependency graph is strictly one-way
+  (packages → nothing app-side).
+- **One choke point.** Gateway admission is a single `authorized()` function with a
+  single call site (`apps/realtime-gateway/src/server.ts`), placed after `/healthz` and
+  static assets, before every `/v1` route including the WebSocket upgrade.
+- **Engines never see identity.** Engines are separate processes with no auth of their
+  own; the gateway strips the caller's authorization and injects the engine credential
+  at exactly one layer ("injected here and only here"). This survives every phase below
+  unchanged.
+- **WebSocket auth happens once**, at upgrade; message handlers do no per-frame checks.
+
+The debts are not in authentication but in **ownership**:
+
+- Voice ids are user-visible names used directly as engine-side directory names,
+  engine-local, and re-registration silently overwrites (`engines/voxcpm2-server`).
+- Captures record a `session_id` but reads never filter by it; one bearer token reads,
+  edits, and deletes everything (`apps/realtime-gateway/src/library.ts`).
+- No owner/user/tenant field exists anywhere in code.
+- The web client has **no credential path at all**: bare same-origin fetches, and the
+  realtime URL constructor drops the page query string — a token-gated gateway serves a
+  shell whose every `/v1` call 401s. The browser's answer is a cookie, not a token.
+- The upgrade path checks no `Origin`, so a token-less loopback gateway accepts
+  cross-site WebSocket connections today; once cookies exist this would become CSRF.
+
+## Decisions
+
+1. **Two product shapes, not an auth-mode framework.** Self-hosted / local
+   (`vox studio`, localhost) keeps today's behavior byte-for-byte: no auth by default,
+   `VOX_GATEWAY_TOKEN` optional, loopback bind. Hosted (voxstudio.cc) is account-based.
+   One startup branch — auth configured or not — no `none|token|accounts|hybrid` mode
+   enum. Hosted does **not** also accept the shared token: cookie session or API key,
+   nothing else.
+2. **Better Auth, directly, for hosted v1.** No Cloudflare-Access-first detour: the
+   migration cost (user table, ownership keys, and front-end login state all redone)
+   exceeds the cost of doing it right once. Access remains available as an *optional*
+   edge layer for private self-hosted deployments — zero code in this repo.
+3. **Auth lives in one gateway directory.** `better-auth` is imported only under
+   `apps/realtime-gateway/src/auth/`, loaded dynamically only when auth is configured;
+   the compiled single binary without auth config never loads it. Shared packages,
+   engine contracts, and the credential-injecting facade are not touched.
+4. **A two-field AuthContext.** `{ userId: string; via: "session" | "apiKey" }` —
+   resolved once per HTTP request and once per WebSocket upgrade (stored on the
+   connection state), then threaded to handlers. No scopes, no roles: in v1 a key's
+   authority equals its owner's.
+5. **Human door: email + password + email verification, cookie session.** No social
+   login in v1 (adding it later is configuration, not schema). Verification is not
+   ceremony — this is a public GPU-backed service where signup grants synthesis; it is
+   the minimum abuse floor, delivered via a transactional email provider.
+6. **Machine door: API keys, same contract, same day.** Better Auth's api-key plugin;
+   keys are created and revoked on the web settings page and ride
+   `Authorization: Bearer` to the *existing* OpenAI-compatible `/v1` routes and the
+   realtime WebSocket. Machine-door parity is a v1 acceptance gate, not a roadmap item.
+7. **WebSocket: authenticate at upgrade, verify Origin.** Browser upgrades carry the
+   cookie, agents carry the bearer; both resolve to the same AuthContext once, cached on
+   the socket — no per-frame database work. Origin checking ships in the same change
+   (mandatory once cookies exist; already overdue for the token-less loopback case).
+8. **Ownership before login.** Accounts are meaningless while everyone shares one
+   resource pool, so ownership lands first (phases below): captures gain an owner
+   column, gateway sessions bind to their owner (attach checks it), and voices gain an
+   internal-id / display-name split.
+
+## What AI-native means here
+
+Four concrete, testable properties — not a framework:
+
+1. **An agent is not an account type.** An agent is a caller holding one of a user's
+   API keys. Ownership, quota, and audit land on that userId; a key may carry a label
+   for per-agent revocation, and that is the entire "agent identity model". No agent
+   registry, no agent OAuth.
+2. **One door.** The machine surface *is* the existing OpenAI-compatible `/v1`
+   contract plus the realtime WebSocket — no separate "agent API". Cookie and API key
+   resolve to the same AuthContext; every code path past the gateway is identical, and
+   a human and their agents see the same voice bank and the same library.
+3. **CLI and automation take a pasted key.** `vox --server https://voxstudio.cc` with
+   `VOX_API_KEY` (env or config). No device-authorization flow in v1: copying a key
+   from the settings page is sufficient developer experience, and that judgment is what
+   deletes an entire OAuth flow from the first version. Local CLI commands remain
+   in-process and credential-free.
+4. **Parity on day one.** The API key works the day the login form works. Machine
+   access is an acceptance criterion of v1, not a fast-follow.
+
+## Data model and boundaries
+
+Three stores, each with one owner, no new frameworks:
+
+```text
+auth.db      Owned entirely by Better Auth (user / session / account /
+             verification / apikey). Schema and migrations via its CLI;
+             product code reads nothing but userId.
+
+library.db   Existing captures table gains owner_user_id TEXT NOT NULL;
+             every /v1/library route (list / read / patch / delete / promote)
+             filters by it. Prerequisite: replace the ad-hoc PRAGMA migration
+             with a minimal schema-version marker before adding the column.
+
+voices       No new database. The gateway facade maps identity deterministically:
+             engine-side id = u<short-user-id>.<user-chosen-name> (still within
+             the engines' [A-Za-z0-9._-]{1,64} contract); listings filter by
+             prefix and strip it, so the display name is the user's own.
+             The mapping also ends silent same-name overwrites: prefixes are
+             per-user namespaces.
+```
+
+Boundary rules, restated as invariants:
+
+- `better-auth` appears in exactly one directory; `packages/*` and `platforms/*` stay
+  auth-free; the AuthContext type does not enter `packages/contracts`.
+- Engines keep zero auth and zero user concepts; cookies and API keys terminate at the
+  gateway; the engine credential is injected at the facade and only there.
+- Gateway sessions record their owner; `session.attach` verifies it — reconnect grace
+  survives, cross-user session takeover does not.
+- A self-hosted binary with no auth config behaves exactly as today, verified by the
+  existing gate tests running unchanged.
+
+## Non-goals (v1)
+
+- Organizations, teams, or any multi-principal ownership — the owner is one userId
+  column, and that is the whole extension point.
+- RBAC, roles, generic scopes, or a permission framework.
+- Device authorization / `vox login`.
+- An auth-mode enum, or hosted deployments that also accept the shared token.
+- OIDC, SSO, or social login (future plugins, per the superseded stance above).
+- Agent-specific identity types, agent registries, per-agent quota models.
+- Remote/HTTP MCP (local stdio MCP unchanged; when remote MCP arrives the API key is
+  already the credential, so nothing is rebuilt).
+- Anonymous trial accounts — decide after observing real signup friction.
+- Cloudflare Access on the public entrance (optional for private self-hosts only).
+- Any database beyond SQLite; any rate-limiting framework — the existing demo
+  guardrails plus simple per-user counters suffice.
+
+## Delivery phases
+
+Phases 1–2 introduce no dependency and are correct independently of Better Auth;
+phase 3 is the only dependency-bearing step and is confined to one directory.
+
+1. **AuthContext refactor (zero-dep).** `authorized(): boolean` becomes
+   `resolveAuthContext(request): AuthContext | null`; the context lands on the socket
+   state and every `/v1` handler. Same change set: Origin verification on upgrade,
+   constant-time token comparison, and unifying the two divergent token-parsing entry
+   points (`main.ts` reads `VOX_GATEWAY_TOKEN`, `studio.ts` currently does not).
+   Gate: the existing self-hosted admission tests pass unmodified.
+2. **Ownership (zero-dep).** Library owner column plus filtering on every route; voice
+   prefix mapping in the facade; session-owner binding with attach verification.
+   Gate: two simulated userIds cannot see each other's captures or voices; a
+   single-owner self-hosted deployment notices nothing.
+3. **Better Auth mount.** `src/auth/` with `auth.db`; email + password + verification;
+   api-key plugin; upgrade-time cookie/bearer resolution; web login page, 401 handling,
+   and settings-page key management. Gates: signup → login → conversation → generate →
+   library passes the existing suites; the same user's API key hitting
+   `/v1/audio/speech` produces fingerprint-identical artifacts to the web path (the
+   machine-parity gate); a binary without auth config demonstrably never loads
+   better-auth.
+4. **Launch hardening.** Per-user generation quota; `/healthz` stops disclosing session
+   counts (or moves behind auth); the ops half (tunnel and edge configuration) stays in
+   the internal repo per this repo's public-boundary rules.
+
+## References
+
+- [web-studio.md](./web-studio.md) — the hosted surface, single-binary serving, and the
+  original "one owner, Access at the door" v1 stance this document succeeds.
+- [public-demo.md](./public-demo.md) — the layered access model for *private* demos;
+  its guardrails (session caps, demo read-only mode, retention opt-in) remain orthogonal
+  to authentication and unchanged.
+- [product-runtime.md](./product-runtime.md) — dependency rules that keep shared
+  packages platform- and auth-free.
+- [competitive-voice-agents.md](./competitive-voice-agents.md) — the superseded
+  OIDC-first identity note, retained for the enterprise-SSO future.
