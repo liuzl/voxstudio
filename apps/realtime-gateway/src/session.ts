@@ -35,6 +35,12 @@ export interface EventSink {
 export interface GatewaySessionOptions {
   config: VoxConfig;
   fetch?: Fetch;
+  /**
+   * Whose session this is (docs/auth.md phase 2): reattach is refused across owners,
+   * and captures ingest under this id. A plain userId string — the session never sees
+   * credentials. Defaults to the self-hosted owner.
+   */
+  owner?: string;
   /** Decodes compressed (Opus) TTS streams; without it engines stream raw PCM. */
   pcmDecoder?: PcmStreamDecoder;
   /** The union voice bank, for the set_voice tool's validation and engine routing. */
@@ -145,6 +151,8 @@ class FrameQueue implements AsyncIterable<ConversationFrame> {
  */
 export class GatewaySession {
   readonly id: string;
+  /** The owning userId; the server verifies it on every reattach. */
+  readonly owner: string;
   private readonly duplex: DuplexSession;
   private readonly frames = new FrameQueue();
   private readonly options: GatewaySessionOptions;
@@ -183,6 +191,7 @@ export class GatewaySession {
       },
     });
     this.id = this.duplex.sessionId;
+    this.owner = options.owner ?? "owner";
   }
 
   get done(): Promise<void> {

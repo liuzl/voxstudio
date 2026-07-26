@@ -2,6 +2,15 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { readWav } from "@voxstudio/audio";
+import { OWNER_USER_ID } from "./auth/auth-context";
+
+/**
+ * The store's schema generation, stamped into SQLite's user_version (docs/auth.md
+ * phase 2 asked for a real marker before the owner column). v1 added `bytes` with the
+ * retention quota; v2 added `owner_user_id`. Databases from before the marker report
+ * 0, so each step also checks the column it introduces.
+ */
+const SCHEMA_VERSION = 2;
 
 /**
  * Parse a byte-size argument: a plain positive integer, or one with a K/M/G suffix
@@ -27,6 +36,8 @@ export interface CaptureRecord {
   id: string;
   created_at: number;
   session_id: string;
+  /** Whose capture this is (docs/auth.md phase 2); self-hosted deployments hold one owner. */
+  owner_user_id: string;
   transcript: string;
   corrected: string | null;
   duration_ms: number;
@@ -91,14 +102,23 @@ export class CaptureLibrary {
       corrected TEXT,
       duration_ms INTEGER NOT NULL,
       sample_rate INTEGER NOT NULL,
-      promoted_voice_id TEXT
+      promoted_voice_id TEXT,
+      bytes INTEGER NOT NULL DEFAULT 0,
+      owner_user_id TEXT NOT NULL DEFAULT '${OWNER_USER_ID}'
     )`);
     this.db.run("CREATE INDEX IF NOT EXISTS captures_created ON captures (created_at DESC)");
-    // The bytes column arrived with the quota; a pre-quota database gains it here and
-    // reconcile() backfills each row from its file.
-    const columns = this.db.query<{ name: string }, []>("PRAGMA table_info(captures)").all();
-    if (!columns.some(column => column.name === "bytes")) {
-      this.db.run("ALTER TABLE captures ADD COLUMN bytes INTEGER NOT NULL DEFAULT 0");
+    // Fresh databases are born at the current schema; older ones step up here. Each
+    // step re-checks its column because pre-marker databases all report version 0.
+    const version = this.db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0;
+    if (version < SCHEMA_VERSION) {
+      const columns = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(captures)").all().map(column => column.name));
+      // v1: bytes, backfilled from each file by reconcile().
+      if (!columns.has("bytes")) this.db.run("ALTER TABLE captures ADD COLUMN bytes INTEGER NOT NULL DEFAULT 0");
+      // v2: ownership — every pre-account capture belongs to the self-hosted owner.
+      if (!columns.has("owner_user_id")) {
+        this.db.run(`ALTER TABLE captures ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT '${OWNER_USER_ID}'`);
+      }
+      this.db.run(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     }
     this.reconcile();
     this.enforceQuotaOnOpen();
@@ -228,7 +248,7 @@ export class CaptureLibrary {
   }
 
   /** Persist one utterance. The empty-transcript failures are kept too — they are the set's most valuable samples. */
-  async ingest(wav: Uint8Array, transcript: string, sessionId: string): Promise<CaptureRecord> {
+  async ingest(wav: Uint8Array, transcript: string, sessionId: string, owner: string = OWNER_USER_ID): Promise<CaptureRecord> {
     const id = crypto.randomUUID();
     const record = await this.runExclusive(id, async () => {
       // Quota admission: if even evicting every unpinned capture cannot make room —
@@ -245,6 +265,7 @@ export class CaptureLibrary {
         id,
         created_at: Date.now(),
         session_id: sessionId,
+        owner_user_id: owner,
         transcript,
         corrected: null,
         duration_ms: Math.round(audio.samples.length * 1_000 / audio.sampleRate),
@@ -262,8 +283,8 @@ export class CaptureLibrary {
         renameSync(`${wavPath}.tmp`, wavPath);
         renameSync(`${txtPath}.tmp`, txtPath);
         this.db.run(
-          "INSERT INTO captures (id, created_at, session_id, transcript, corrected, duration_ms, sample_rate, promoted_voice_id, bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          [fresh.id, fresh.created_at, fresh.session_id, fresh.transcript, null, fresh.duration_ms, fresh.sample_rate, null, fresh.bytes],
+          "INSERT INTO captures (id, created_at, session_id, owner_user_id, transcript, corrected, duration_ms, sample_rate, promoted_voice_id, bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [fresh.id, fresh.created_at, fresh.session_id, fresh.owner_user_id, fresh.transcript, null, fresh.duration_ms, fresh.sample_rate, null, fresh.bytes],
         );
       } catch (error) {
         for (const path of [`${wavPath}.tmp`, `${txtPath}.tmp`, wavPath, txtPath]) rmSync(path, { force: true });
@@ -288,17 +309,26 @@ export class CaptureLibrary {
     return record;
   }
 
-  list(limit = 50, offset = 0): { captures: CaptureRecord[]; total: number; bytes: number; max_bytes: number | null } {
-    const captures = this.db
-      // rowid breaks same-millisecond ties by insertion order; a UUID tiebreaker shuffles.
-      .query<CaptureRecord, [number, number]>("SELECT * FROM captures ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?")
-      .all(limit, offset);
-    const row = this.db.query<{ total: number }, []>("SELECT COUNT(*) AS total FROM captures").get();
+  /**
+   * With an owner, only that owner's captures (docs/auth.md phase 2) — the routes always
+   * pass one. `bytes`/`max_bytes` stay store-wide: the quota bounds the disk, not a user.
+   */
+  list(limit = 50, offset = 0, owner?: string): { captures: CaptureRecord[]; total: number; bytes: number; max_bytes: number | null } {
+    // rowid breaks same-millisecond ties by insertion order; a UUID tiebreaker shuffles.
+    const captures = owner === undefined
+      ? this.db.query<CaptureRecord, [number, number]>("SELECT * FROM captures ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?").all(limit, offset)
+      : this.db.query<CaptureRecord, [string, number, number]>("SELECT * FROM captures WHERE owner_user_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?").all(owner, limit, offset);
+    const row = owner === undefined
+      ? this.db.query<{ total: number }, []>("SELECT COUNT(*) AS total FROM captures").get()
+      : this.db.query<{ total: number }, [string]>("SELECT COUNT(*) AS total FROM captures WHERE owner_user_id = ?").get(owner);
     return { captures, total: row?.total ?? 0, bytes: this.totalBytes(), max_bytes: this.maxBytes };
   }
 
-  get(id: string): CaptureRecord | undefined {
-    return this.db.query<CaptureRecord, [string]>("SELECT * FROM captures WHERE id = ?").get(id) ?? undefined;
+  /** With an owner, another owner's capture reads as absent — indistinguishable from not existing. */
+  get(id: string, owner?: string): CaptureRecord | undefined {
+    const record = this.db.query<CaptureRecord, [string]>("SELECT * FROM captures WHERE id = ?").get(id) ?? undefined;
+    if (record === undefined) return undefined;
+    return owner === undefined || record.owner_user_id === owner ? record : undefined;
   }
 
   /** Only meaningful for an id that `get` confirmed; ids are gateway-minted UUIDs. */
@@ -307,11 +337,11 @@ export class CaptureLibrary {
   }
 
   /** Set (or with null/blank, clear) the human reference transcript. */
-  async correct(id: string, corrected: string | null): Promise<CaptureRecord | undefined> {
+  async correct(id: string, corrected: string | null, owner?: string): Promise<CaptureRecord | undefined> {
     return this.runExclusive(id, async () => {
       // Re-checked under the lock: a delete that won the queue must not be resurrected
       // as a stray .ref.txt.
-      if (!this.get(id)) return undefined;
+      if (!this.get(id, owner)) return undefined;
       const value = corrected === null || corrected.trim() === "" ? null : corrected.trim();
       this.db.run("UPDATE captures SET corrected = ? WHERE id = ?", [value, id]);
       // The .ref.txt sidecar mirrors the correction so compare_asr.py scores it directly.
@@ -328,9 +358,9 @@ export class CaptureLibrary {
     return this.get(id);
   }
 
-  async remove(id: string): Promise<boolean> {
+  async remove(id: string, owner?: string): Promise<boolean> {
     return this.runExclusive(id, async () => {
-      if (!this.get(id)) return false;
+      if (!this.get(id, owner)) return false;
       this.db.run("DELETE FROM captures WHERE id = ?", [id]);
       for (const suffix of [".wav", ".txt", ".ref.txt"]) {
         await Bun.file(join(this.capturesDir, `${id}${suffix}`)).delete().catch(() => {});

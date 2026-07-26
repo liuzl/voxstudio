@@ -4,6 +4,9 @@ import { parseConfig } from "@voxstudio/config";
 import type { Fetch } from "@voxstudio/clients";
 import { protocolVersion, type GatewayEvent } from "./protocol";
 import { startGateway, type GatewayServer } from "./server";
+import { CaptureLibrary } from "./library";
+import { voicePrefix } from "./voice-namespace";
+import type { AuthContext } from "./auth/auth-context";
 
 const config = parseConfig({
   engines: {
@@ -885,6 +888,148 @@ describe("capture library", () => {
     expect(lines.some(line => line.includes("capture library stays off"))).toBe(true);
     // No store was created: nothing to retain into.
     expect(await Bun.file(`${dir}/library.db`).exists()).toBe(false);
+    await Bun.$`rm -rf ${dir}`.quiet().nothrow();
+  });
+});
+
+describe("resource ownership (docs/auth.md phase 2)", () => {
+  // The phase-3 seam, used here to simulate account holders: identity from a test
+  // header or query param, defaulting to the owner.
+  const accountResolver = (request: Request): AuthContext => ({
+    userId: request.headers.get("x-test-user") ?? new URL(request.url).searchParams.get("user") ?? "owner",
+    via: "session",
+  });
+  const wavBytes = (): Uint8Array => new Uint8Array(writeWav(new Float32Array(16_000).fill(0.05), 16_000));
+  const tempDir = (): string => `${import.meta.dir}/../node_modules/.test-owner-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
+  test("captures are visible only to their owner across every route", async () => {
+    const dir = tempDir();
+    const seeded = new CaptureLibrary(dir);
+    const alices = await seeded.ingest(wavBytes(), "alice 的话", "session-a", "alice");
+    const bobs = await seeded.ingest(wavBytes(), "bob 的话", "session-b", "bob");
+    await seeded.close();
+
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0, libraryDir: dir, authResolver: accountResolver });
+    const as = (user: string, path: string, init?: RequestInit): Promise<Response> =>
+      fetch(new URL(path, gateway?.url), { ...init, headers: { ...(init?.headers ?? {}), "x-test-user": user } });
+
+    const listed = await (await as("alice", "/v1/library")).json() as { captures: { id: string }[]; total: number };
+    expect(listed.captures.map(capture => capture.id)).toEqual([alices.id]);
+    expect(listed.total).toBe(1);
+    expect((await as("alice", `/v1/library/${bobs.id}`)).status).toBe(404);
+    expect((await as("alice", `/v1/library/${bobs.id}/audio`)).status).toBe(404);
+    expect((await as("alice", `/v1/library/${bobs.id}`, { method: "PATCH", body: JSON.stringify({ corrected: "偷改" }) })).status).toBe(404);
+    expect((await as("alice", `/v1/library/${bobs.id}`, { method: "DELETE" })).status).toBe(404);
+    // Bob's capture survived it all, untouched.
+    const bobsView = await (await as("bob", `/v1/library/${bobs.id}`)).json() as { corrected: string | null };
+    expect(bobsView.corrected).toBeNull();
+    await Bun.$`rm -rf ${dir}`.quiet().nothrow();
+  });
+
+  test("voice names are namespaced per account holder; the owner keeps the bare bank", async () => {
+    const seen: { method: string; path: string; formId?: string }[] = [];
+    const bank = ["laok", `${voicePrefix("alice")}myvoice`, `${voicePrefix("bob")}myvoice`];
+    gateway = startGateway({
+      config,
+      port: 0,
+      authResolver: accountResolver,
+      fetch: async (input, init) => {
+        const request = new Request(input instanceof Request ? input : String(input), init);
+        const path = new URL(request.url).pathname;
+        if (path === "/v1/voices" && request.method === "GET") {
+          return Response.json({ voices: bank.map(id => ({ id })) });
+        }
+        if (path === "/v1/voices" && request.method === "POST") {
+          const form = await request.formData();
+          seen.push({ method: "POST", path, formId: String(form.get("id")) });
+          return Response.json({ id: form.get("id") }, { status: 201 });
+        }
+        if (path.startsWith("/v1/voices/")) {
+          seen.push({ method: request.method, path });
+          return Response.json({ deleted: true });
+        }
+        throw new Error(`unexpected engine path ${path}`);
+      },
+    });
+    const as = (user: string, path: string, init?: RequestInit): Promise<Response> =>
+      fetch(new URL(path, gateway?.url), { ...init, headers: { ...(init?.headers ?? {}), "x-test-user": user } });
+
+    // Each viewer sees exactly their namespace, in display names.
+    const aliceBank = await (await as("alice", "/v1/voices")).json() as { voices: { id: string }[] };
+    expect(aliceBank.voices.map(voice => voice.id)).toEqual(["myvoice"]);
+    const ownerBank = await (await as("owner", "/v1/voices")).json() as { voices: { id: string }[] };
+    expect(ownerBank.voices.map(voice => voice.id)).toEqual(["laok"]);
+
+    // Registration maps the display name onto the account's engine id.
+    const form = new FormData();
+    form.set("id", "fresh");
+    form.set("text", "参考音");
+    form.set("audio", new File([new Uint8Array(16)], "ref.wav", { type: "audio/wav" }));
+    expect((await as("alice", "/v1/voices", { method: "POST", body: form })).status).toBe(201);
+    expect(seen[0]?.formId).toBe(`${voicePrefix("alice")}fresh`);
+
+    // Entry routes map the path; an unfittable name never reaches an engine.
+    expect((await as("alice", "/v1/voices/fresh", { method: "DELETE" })).status).toBe(200);
+    expect(seen[1]?.path).toBe(`/v1/voices/${voicePrefix("alice")}fresh`);
+    expect((await as("alice", `/v1/voices/${"x".repeat(64)}`, { method: "DELETE" })).status).toBe(400);
+  });
+
+  test("a session can be reattached only by its owner; a cross-owner attach reads as unknown", async () => {
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0, reconnectGraceMs: 60_000, authResolver: accountResolver });
+    const alice = new TestClient(gateway.url, "/v1/realtime?user=alice");
+    await alice.ready();
+    alice.command({ type: "session.start", idempotencyKey: "own-1", options: startOptions });
+    await alice.until(events => events.some(event => event.type === "session.snapshot"), "session up");
+    const sessionId = (alice.events[0] as GatewayEvent).sessionId;
+    alice.close();
+    await alice.closed;
+
+    const bob = new TestClient(gateway.url, "/v1/realtime?user=bob");
+    await bob.ready();
+    bob.command({ type: "session.attach", idempotencyKey: "steal-1", sessionId });
+    await bob.until(events => events.some(event => event.type === "command.rejected"), "cross-owner rejection");
+    const rejected = bob.events.find(event => event.type === "command.rejected");
+    expect(rejected && "reason" in rejected ? rejected.reason : "").toBe("unknown_session");
+    bob.close();
+
+    // The owner of the session reattaches as before.
+    const aliceAgain = new TestClient(gateway.url, "/v1/realtime?user=alice");
+    await aliceAgain.ready();
+    aliceAgain.command({ type: "session.attach", idempotencyKey: "back-1", sessionId });
+    await aliceAgain.until(events => events.some(event => event.type === "session.snapshot"), "owner reattach");
+    aliceAgain.command({ type: "session.stop", idempotencyKey: "stop-1" });
+    await aliceAgain.until(events => events.some(event => event.type === "command.accepted" && "idempotencyKey" in event && event.idempotencyKey === "stop-1"), "stopped");
+  });
+
+  test("promote records the display name while the engine hears the namespaced id", async () => {
+    const dir = tempDir();
+    const seeded = new CaptureLibrary(dir);
+    const capture = await seeded.ingest(wavBytes(), "拿去克隆", "session-a", "alice");
+    await seeded.close();
+
+    let engineHeard: string | undefined;
+    gateway = startGateway({
+      config,
+      port: 0,
+      libraryDir: dir,
+      authResolver: accountResolver,
+      fetch: engineFetch({
+        "/v1/voices": async request => {
+          const form = await request.formData();
+          engineHeard = String(form.get("id"));
+          return Response.json({ id: form.get("id") }, { status: 201 });
+        },
+      }),
+    });
+    const promoted = await fetch(new URL(`/v1/library/${capture.id}/promote`, gateway.url), {
+      method: "POST",
+      headers: { "x-test-user": "alice" },
+      body: JSON.stringify({ voice_id: "made" }),
+    });
+    expect(promoted.status).toBe(200);
+    expect(engineHeard).toBe(`${voicePrefix("alice")}made`);
+    const record = (await promoted.json() as { capture: { promoted_voice_id: string } }).capture;
+    expect(record.promoted_voice_id).toBe("made");
     await Bun.$`rm -rf ${dir}`.quiet().nothrow();
   });
 });

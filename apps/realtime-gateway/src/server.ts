@@ -6,8 +6,9 @@ import type { ServerWebSocket } from "bun";
 import type { ConversationTool } from "@voxstudio/conversation";
 import { connectMcpServers, type McpToolSource } from "@voxstudio/mcp";
 import { OpenAiRealtimeConnection } from "./openai-realtime";
-import type { AuthContext } from "./auth/auth-context";
+import { OWNER_USER_ID, type AuthContext } from "./auth/auth-context";
 import { resolveAuthContext, upgradeOriginAllowed } from "./auth/request-auth";
+import { fromEngineVoiceId, toEngineVoiceId } from "./voice-namespace";
 import { CaptureLibrary } from "./library";
 import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand } from "./protocol";
 import { studioToolNames } from "@voxstudio/conversation";
@@ -21,6 +22,12 @@ export interface GatewayServerOptions {
   port?: number;
   /** Optional bearer token required on every request and WebSocket upgrade. */
   token?: string;
+  /**
+   * Overrides how a request becomes an identity — the seam hosted accounts
+   * (docs/auth.md phase 3) plug into, and how tests simulate account holders.
+   * Absent, the self-hosted rule applies: the optional shared token, owner identity.
+   */
+  authResolver?: (request: Request) => AuthContext | null;
   reconnectGraceMs?: number;
   /** OpenAI-dialect connections: how long a client may take to answer a function call. */
   openAiFunctionCallTimeoutMs?: number;
@@ -199,8 +206,13 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     return new Response(upstream.body, { status: upstream.status, headers: passthrough });
   };
 
-  /** Union voice bank: every TTS instance's registry, entries attributed to their engine. */
-  const collectVoices = async (): Promise<{ id: string; engine: string; design_profile?: unknown; prompt_text?: string }[]> => {
+  /**
+   * Union voice bank: every TTS instance's registry, entries attributed to their engine
+   * and translated into the viewer's namespace (docs/auth.md phase 2) — an account
+   * holder sees their own display names, the owner sees the bare bank, nobody sees
+   * anyone else's.
+   */
+  const collectVoices = async (viewer: string): Promise<{ id: string; engine: string; design_profile?: unknown; prompt_text?: string }[]> => {
     const instances = enginesOfKind(options.config, "tts");
     const collected = await Promise.all(instances.map(async ([name, target]) => {
       try {
@@ -217,14 +229,18 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         return (payload.voices ?? [])
           .map(entry => typeof entry === "string" ? { id: entry } : entry)
           .filter(entry => entry.id)
-          .map(entry => ({
-            id: entry.id as string,
-            engine: name,
-            // Design-profile metadata rides along so the studio can show fingerprints
-            // and audit against the runtime without a per-voice round trip.
-            ...(entry.design_profile === undefined ? {} : { design_profile: entry.design_profile }),
-            ...(entry.prompt_text === undefined ? {} : { prompt_text: entry.prompt_text }),
-          }));
+          .flatMap(entry => {
+            const display = fromEngineVoiceId(viewer, entry.id as string);
+            if (display === null) return [];
+            return [{
+              id: display,
+              engine: name,
+              // Design-profile metadata rides along so the studio can show fingerprints
+              // and audit against the runtime without a per-voice round trip.
+              ...(entry.design_profile === undefined ? {} : { design_profile: entry.design_profile }),
+              ...(entry.prompt_text === undefined ? {} : { prompt_text: entry.prompt_text }),
+            }];
+          });
       } catch (error) {
         // One dead engine must not empty the whole bank; its absence is visible in /v1/engines.
         log(`voices: ${name} unreachable: ${error instanceof Error ? error.message : String(error)}`);
@@ -234,7 +250,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     return collected.flat();
   };
 
-  const aggregatedVoices = async (): Promise<Response> => Response.json({ voices: await collectVoices() });
+  const aggregatedVoices = async (viewer: string): Promise<Response> => Response.json({ voices: await collectVoices(viewer) });
 
   /** The registry, sanitized: names, kinds, capabilities, roles, live health — never addresses. */
   const collectEngines = async () => {
@@ -307,17 +323,18 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     }
   }
 
-  const createSession = (extraTools: ConversationTool[] = []): GatewaySession => {
+  const createSession = (extraTools: ConversationTool[] = [], owner: string = OWNER_USER_ID): GatewaySession => {
     if (options.maxSessions !== undefined && sessions.size >= options.maxSessions) {
       log(`session refused: at the ${options.maxSessions}-session capacity`);
       throw new CapacityError();
     }
     const session = new GatewaySession({
       config: options.config,
+      owner,
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       ...(options.pcmDecoder === undefined ? {} : { pcmDecoder: options.pcmDecoder }),
       // The session tools see the same sanitized surfaces the facade serves.
-      listVoices: async () => (await collectVoices()).map(voice => ({ id: voice.id, engine: voice.engine })),
+      listVoices: async () => (await collectVoices(owner)).map(voice => ({ id: voice.id, engine: voice.engine })),
       engineStatus: collectEngines,
       // The Studio tools (docs/voice-studio-control.md): demo mode never allows them —
       // an anonymous visitor must not write the voice bank by talking at it.
@@ -326,11 +343,14 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       auditProfile: (id: string) => auditDesignProfile(new TtsClient(engine(options.config, "tts"), fetchImpl), id),
       registerVoice: async (id, wav, transcript) => {
         if (!voiceIdPattern.test(id)) throw new Error("voice id must match [A-Za-z0-9._-]{1,64}");
+        // The session speaks its owner's namespace; the engine hears the mapped id.
+        const engineId = toEngineVoiceId(owner, id);
+        if (engineId === null) throw new Error("voice id too long for this account's namespace");
         const selected = engineByCapability(options.config, "tts", "clone")
           ?? ([roleInstance(options.config, "tts"), engine(options.config, "tts")] as const);
         const [engineName, target] = selected;
         const form = new FormData();
-        form.set("id", id);
+        form.set("id", engineId);
         form.set("text", transcript);
         form.set("audio", new File([wav as BlobPart], `${id}.wav`, { type: "audio/wav" }));
         const headers = new Headers();
@@ -358,7 +378,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         // A failed ingest must never cost the turn — capture is an observer, not a stage.
         onUtterance: async (wav: Uint8Array, transcript: string) => {
           try {
-            await library.ingest(wav, transcript, session.id);
+            await library.ingest(wav, transcript, session.id, owner);
           } catch (error) {
             log(`library: ingest failed: ${error instanceof Error ? error.message : String(error)}`);
           }
@@ -379,7 +399,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     if (command.type === "session.start") {
       let session: GatewaySession;
       try {
-        session = createSession();
+        session = createSession([], ws.data.ctx.userId);
       } catch (error) {
         sink.send(rejection("", error instanceof CapacityError ? "session_capacity" : "session_unavailable", command));
         return;
@@ -405,7 +425,9 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     }
     if (command.type === "session.attach") {
       const session = sessions.get(command.sessionId);
-      if (!session) {
+      // A cross-owner attach reads as unknown (docs/auth.md phase 2): whether a
+      // session id exists is nobody else's business either.
+      if (!session || session.owner !== ws.data.ctx.userId) {
         sink.send(rejection(command.sessionId, "unknown_session", command));
         return;
       }
@@ -430,7 +452,9 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       if (page) return page;
       // The one place a credential becomes an identity; every /v1 handler below sees
       // only the resolved context (docs/auth.md phase 1).
-      const ctx = resolveAuthContext(request, options);
+      const ctx = options.authResolver === undefined
+        ? resolveAuthContext(request, options)
+        : options.authResolver(request);
       if (ctx === null) return new Response("unauthorized", { status: 401 });
       if (url.pathname === "/v1/realtime") {
         // Browsers always send Origin on an upgrade; a cross-site one is refused before
@@ -469,29 +493,63 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         { error: { message: "registry writes are disabled in demo mode", code: "demo_mode" } },
         { status: 403 },
       );
+      // An account holder's name that cannot be namespaced (or is missing/invalid).
+      const badVoiceName = (): Response => Response.json(
+        { error: { message: "voice id must match [A-Za-z0-9._-] and fit the engine id limit with the account prefix", code: "bad_voice_id" } },
+        { status: 400 },
+      );
       if (url.pathname === "/v1/design-profiles") {
         if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
         if (options.demoMode === true) return demoRefusal();
         // Zero-shot voice design is an engine capability, not a given.
         const selected = selectEngine(url, "tts", "tts", "design");
         if (selected instanceof Response) return selected;
-        return proxy(request, selected[1], url.pathname, selected[0]);
+        if (ctx.userId === OWNER_USER_ID) return proxy(request, selected[1], url.pathname, selected[0]);
+        // Account holders create into their namespace: the JSON id is mapped, the rest
+        // of the body rides through untouched.
+        return (async (): Promise<Response> => {
+          const body = await request.json().catch(() => null) as { id?: unknown } | null;
+          if (body === null || typeof body.id !== "string" || !voiceIdPattern.test(body.id)) return badVoiceName();
+          const engineId = toEngineVoiceId(ctx.userId, body.id);
+          if (engineId === null) return badVoiceName();
+          const rewritten = new Request(request.url, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ ...body, id: engineId }),
+          });
+          return proxy(rewritten, selected[1], url.pathname, selected[0]);
+        })();
       }
       if (url.pathname === "/v1/voices") {
-        if (request.method === "GET") return aggregatedVoices();
+        if (request.method === "GET") return aggregatedVoices(ctx.userId);
         if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
         if (options.demoMode === true) return demoRefusal();
         // Registration needs a registry: route to the clone-capable instance by default.
         const selected = selectEngine(url, "tts", "tts", "clone");
         if (selected instanceof Response) return selected;
-        return proxy(request, selected[1], url.pathname, selected[0]);
+        if (ctx.userId === OWNER_USER_ID) return proxy(request, selected[1], url.pathname, selected[0]);
+        return (async (): Promise<Response> => {
+          const form = await request.formData().catch(() => null);
+          const id = form?.get("id");
+          if (form === null || typeof id !== "string" || !voiceIdPattern.test(id)) return badVoiceName();
+          const engineId = toEngineVoiceId(ctx.userId, id);
+          if (engineId === null) return badVoiceName();
+          form.set("id", engineId);
+          return proxy(new Request(request.url, { method: "POST", body: form }), selected[1], url.pathname, selected[0]);
+        })();
       }
       if (voiceEntryPattern.test(url.pathname)) {
         if (!["GET", "DELETE"].includes(request.method)) return new Response("method not allowed", { status: 405 });
         if (request.method === "DELETE" && options.demoMode === true) return demoRefusal();
         const selected = selectEngine(url, "tts", "tts", "clone");
         if (selected instanceof Response) return selected;
-        return proxy(request, selected[1], url.pathname, selected[0]);
+        let enginePath = url.pathname;
+        if (ctx.userId !== OWNER_USER_ID) {
+          const engineId = toEngineVoiceId(ctx.userId, url.pathname.slice("/v1/voices/".length));
+          if (engineId === null) return badVoiceName();
+          enginePath = `/v1/voices/${engineId}`;
+        }
+        return proxy(request, selected[1], enginePath, selected[0]);
       }
       if (url.pathname === "/v1/library" || url.pathname.startsWith("/v1/library/")) {
         // Absent library = the deployment never opted into retention; the panel reads the
@@ -519,7 +577,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
             const parsed = Number(url.searchParams.get(name) ?? fallback);
             return Number.isInteger(parsed) && parsed >= 0 ? Math.min(parsed, max) : fallback;
           };
-          return Response.json(library.list(bounded("limit", 50, 200), bounded("offset", 0, Number.MAX_SAFE_INTEGER)));
+          return Response.json(library.list(bounded("limit", 50, 200), bounded("offset", 0, Number.MAX_SAFE_INTEGER), ctx.userId));
         }
         const entry = libraryEntryPattern.exec(url.pathname);
         if (!entry) return new Response("not found", { status: 404 });
@@ -527,7 +585,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         const sub = entry[2];
         if (sub === "/audio") {
           if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
-          if (!library.get(captureId)) return notFound();
+          if (!library.get(captureId, ctx.userId)) return notFound();
           return new Response(Bun.file(library.audioPath(captureId)), {
             headers: { "content-type": "audio/wav", "cache-control": "no-cache" },
           });
@@ -545,11 +603,14 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
             if (!voiceIdPattern.test(voiceId)) {
               return Response.json({ error: { message: "voice_id must match [A-Za-z0-9._-]{1,64}", code: "bad_voice_id" } }, { status: 400 });
             }
+            // The record keeps the display name; the engine hears the namespaced id.
+            const engineVoiceId = toEngineVoiceId(ctx.userId, voiceId);
+            if (engineVoiceId === null) return badVoiceName();
             // The whole flow — validate, engine round-trip, mark — holds the capture's
             // mutation lock: a concurrent delete waits its turn instead of leaving the
             // clone engine holding a voice the library no longer records.
             return library.runExclusive(captureId, async (): Promise<Response> => {
-              const capture = library.get(captureId);
+              const capture = library.get(captureId, ctx.userId);
               if (!capture) return notFound();
               // A voice sample needs its verbatim text; the correction is the reference.
               const text = (capture.corrected ?? capture.transcript).trim();
@@ -563,7 +624,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
               if (selected instanceof Response) return selected;
               const [engineName, target] = selected;
               const form = new FormData();
-              form.set("id", voiceId);
+              form.set("id", engineVoiceId);
               form.set("text", text);
               form.set("audio", new File([await Bun.file(library.audioPath(captureId)).bytes()], `${captureId}.wav`, { type: "audio/wav" }));
               const headers = new Headers();
@@ -594,7 +655,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
               return Response.json({ error: { message: "corrected must be a string or null", code: "bad_correction" } }, { status: 400 });
             }
             try {
-              const updated = await library.correct(captureId, body.corrected as string | null);
+              const updated = await library.correct(captureId, body.corrected as string | null, ctx.userId);
               return updated ? Response.json(updated) : notFound();
             } catch (error) {
               if (error instanceof Error && error.message.includes("closed")) return closing();
@@ -605,7 +666,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         if (request.method === "DELETE") {
           return (async (): Promise<Response> => {
             try {
-              return (await library.remove(captureId)) ? Response.json({ deleted: true }) : notFound();
+              return (await library.remove(captureId, ctx.userId)) ? Response.json({ deleted: true }) : notFound();
             } catch (error) {
               if (error instanceof Error && error.message.includes("closed")) return closing();
               throw error;
@@ -613,7 +674,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           })();
         }
         if (request.method === "GET") {
-          const capture = library.get(captureId);
+          const capture = library.get(captureId, ctx.userId);
           return capture ? Response.json(capture) : notFound();
         }
         return new Response("method not allowed", { status: 405 });
@@ -633,7 +694,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         ws.data.openai = new OpenAiRealtimeConnection({
           send: text => { ws.send(text); },
           close: () => { ws.close(); },
-          createSession: extraTools => createSession(extraTools),
+          createSession: extraTools => createSession(extraTools, ws.data.ctx.userId),
           reservedToolNames: builtinToolNames,
           model: ws.data.openaiModel,
           ...(options.openAiFunctionCallTimeoutMs === undefined ? {} : { functionCallTimeoutMs: options.openAiFunctionCallTimeoutMs }),

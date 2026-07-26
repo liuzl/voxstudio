@@ -41,6 +41,39 @@ describe("capture library", () => {
     await library.close();
   });
 
+  test("a pre-ownership database gains owner_user_id backfilled to the owner", async () => {
+    const library = tempLibrary();
+    const record = await library.ingest(wav(), "旧数据", "session-a");
+    await library.close();
+
+    // Rewind to the pre-account era: no owner column, no version marker.
+    const db = new Database(join(library.dir, "library.db"));
+    db.run("ALTER TABLE captures DROP COLUMN owner_user_id");
+    db.run("PRAGMA user_version = 0");
+    db.close();
+
+    const reopened = new CaptureLibrary(library.dir);
+    expect(reopened.get(record.id)?.owner_user_id).toBe("owner");
+    await reopened.close();
+  });
+
+  test("captures are invisible across owners: list, get, correct, and remove all scope", async () => {
+    const library = tempLibrary();
+    const alices = await library.ingest(wav(), "alice 的话", "session-a", "alice");
+    const bobs = await library.ingest(wav(), "bob 的话", "session-b", "bob");
+
+    expect(library.list(50, 0, "alice").captures.map(capture => capture.id)).toEqual([alices.id]);
+    expect(library.list(50, 0, "alice").total).toBe(1);
+    expect(library.get(bobs.id, "alice")).toBeUndefined();
+    expect(await library.correct(bobs.id, "偷改", "alice")).toBeUndefined();
+    expect(await library.remove(bobs.id, "alice")).toBe(false);
+    // Bob's capture survived every cross-owner attempt, untouched.
+    expect(library.get(bobs.id, "bob")?.corrected).toBeNull();
+    // Owner-less internal access (reconcile, eviction) still sees the whole store.
+    expect(library.list().total).toBe(2);
+    await library.close();
+  });
+
   test("survives a reopen: rows and audio outlive the process object", async () => {
     const library = tempLibrary();
     const record = await library.ingest(wav(), "重启前", "session-a");
@@ -240,9 +273,11 @@ describe("retention quota", () => {
     const record = await library.ingest(wav(), "老库", "session-a");
     await library.close();
 
-    // Rewind the schema to the pre-quota shape.
+    // Rewind the schema to the pre-quota shape — including the version marker, which
+    // a database from that era had never heard of.
     const db = new Database(`${library.dir}/library.db`);
     db.run("ALTER TABLE captures DROP COLUMN bytes");
+    db.run("PRAGMA user_version = 0");
     db.close();
 
     const reopened = new CaptureLibrary(library.dir);
