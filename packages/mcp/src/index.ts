@@ -1,4 +1,10 @@
+// Must precede the SDK imports: `bun build --compile` emits the SDK's types.js
+// without the init call for zod's lazily-wrapped classic module, so its top-level
+// `custom(...)` reads ZodCustom before assignment. Evaluating zod first works around
+// it; the call keeps tree-shaking from dropping the import (zod is sideEffects-free).
+import { z } from "zod";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+void z.custom(() => true);
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
