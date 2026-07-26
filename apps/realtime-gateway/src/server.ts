@@ -7,7 +7,7 @@ import type { ConversationTool } from "@voxstudio/conversation";
 import { connectMcpServers, type McpToolSource } from "@voxstudio/mcp";
 import { OpenAiRealtimeConnection } from "./openai-realtime";
 import { OWNER_USER_ID, type AuthContext } from "./auth/auth-context";
-import { resolveAuthContext, upgradeOriginAllowed } from "./auth/request-auth";
+import { isLoopbackHost, resolveAuthContext, upgradeOriginAllowed } from "./auth/request-auth";
 // Type-only: the accounts module (and better-auth with it) loads dynamically, and
 // only when a deployment configured accounts (docs/auth.md phase 3).
 import type { Accounts } from "./auth/accounts";
@@ -119,6 +119,14 @@ const voiceEntryPattern = /^\/v1\/voices\/[A-Za-z0-9._-]{1,64}$/;
 const libraryEntryPattern = /^\/v1\/library\/([A-Za-z0-9-]{1,64})(\/audio|\/promote)?$/;
 const voiceIdPattern = /^[A-Za-z0-9._-]{1,64}$/;
 
+/** Every 400 for an unusable voice name reads the same, whichever path refused it. */
+function badVoiceId(): Response {
+  return Response.json(
+    { error: { message: "voice id must match [A-Za-z0-9._-], fit the engine id limit with the account prefix, and not be a raw engine id", code: "bad_voice_id" } },
+    { status: 400 },
+  );
+}
+
 function badEngine(reason: string): Response {
   return Response.json({ error: { message: reason, code: "unknown_engine" } }, { status: 400 });
 }
@@ -145,11 +153,39 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   if (options.accounts !== undefined && options.token !== undefined && options.token !== "") {
     throw new TypeError("accounts and --token are mutually exclusive: hosted deployments take a session or an API key, nothing else");
   }
+  // The resolver seam exists for tests and future identity sources; standing beside
+  // hosted accounts it would silently outrank Better Auth on every request — an
+  // authentication bypass assembled from two valid options (adversarial review
+  // 2026-07-26). Fail closed at startup rather than resolve one of them at runtime.
+  if (options.accounts !== undefined && options.authResolver !== undefined) {
+    throw new TypeError("accounts and authResolver are mutually exclusive: a custom resolver would bypass hosted authentication");
+  }
   // Fail at startup, not on the first request: a hosted deployment with a weak or
   // missing secret must never come up. 32 is Better Auth's own floor.
   if (options.accounts !== undefined && options.accounts.secret.length < 32) {
     throw new TypeError("accounts: the auth secret must be at least 32 characters (set VOX_AUTH_SECRET)");
   }
+  /**
+   * The upgrade's Origin policy. Hosted: exactly the configured public origin (and the
+   * gateway's own, which is that origin when no tunnel fronts it). Self-hosted: host
+   * comparison, with the dev-server loopback exception only when we ourselves bind
+   * loopback (adversarial review 2026-07-26).
+   */
+  const originPolicy = (): { allowedOrigins?: readonly string[]; allowLoopback?: boolean } => {
+    if (options.accounts === undefined) {
+      return { allowLoopback: isLoopbackHost(options.hostname ?? "127.0.0.1") };
+    }
+    const configured = options.accounts.baseUrl;
+    const origins = new Set<string>([new URL(server.url.toString()).origin]);
+    if (configured !== undefined && configured !== "") {
+      try {
+        origins.add(new URL(configured).origin);
+      } catch {
+        // A malformed baseUrl leaves only our own origin allowed; startAccounts logs it.
+      }
+    }
+    return { allowedOrigins: [...origins] };
+  };
   let accountsInstance: Promise<Accounts> | undefined;
   const accountsFor = (): Promise<Accounts> => {
     const configured = options.accounts as NonNullable<GatewayServerOptions["accounts"]>;
@@ -367,9 +403,12 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       log(`session refused: at the ${options.maxSessions}-session capacity`);
       throw new CapacityError();
     }
+    // Namespacing lives in the gateway; the session just applies it at the TTS boundary.
+    const ownerVoice = (displayName: string): string | null => toEngineVoiceId(owner, displayName);
     const session = new GatewaySession({
       config: options.config,
       owner,
+      mapVoiceId: ownerVoice,
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       ...(options.pcmDecoder === undefined ? {} : { pcmDecoder: options.pcmDecoder }),
       // The session tools see the same sanitized surfaces the facade serves.
@@ -379,12 +418,18 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // an anonymous visitor must not write the voice bank by talking at it.
       allowStudioTools: options.demoMode !== true,
       ...(options.persistPronunciations === undefined ? {} : { persistPronunciations: options.persistPronunciations }),
-      auditProfile: (id: string) => auditDesignProfile(new TtsClient(engine(options.config, "tts"), fetchImpl), id),
+      // An audit names a profile, so it is an ownership path too: the caller's display
+      // name is namespaced before the engine is asked about it (adversarial review
+      // 2026-07-26), which also keeps a self-audit working under accounts.
+      auditProfile: (id: string) => {
+        const engineId = ownerVoice(id);
+        if (engineId === null) throw new Error(`unknown profile ${id}`);
+        return auditDesignProfile(new TtsClient(engine(options.config, "tts"), fetchImpl), engineId);
+      },
       registerVoice: async (id, wav, transcript) => {
-        if (!voiceIdPattern.test(id)) throw new Error("voice id must match [A-Za-z0-9._-]{1,64}");
         // The session speaks its owner's namespace; the engine hears the mapped id.
-        const engineId = toEngineVoiceId(owner, id);
-        if (engineId === null) throw new Error("voice id too long for this account's namespace");
+        const engineId = ownerVoice(id);
+        if (engineId === null) throw new Error(`voice id ${id} cannot be used in this account's namespace`);
         const selected = engineByCapability(options.config, "tts", "clone")
           ?? ([roleInstance(options.config, "tts"), engine(options.config, "tts")] as const);
         const [engineName, target] = selected;
@@ -504,8 +549,9 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       if (ctx === null) return new Response("unauthorized", { status: 401 });
       if (url.pathname === "/v1/realtime") {
         // Browsers always send Origin on an upgrade; a cross-site one is refused before
-        // the socket exists (CSWSH today, CSRF once cookie sessions arrive).
-        if (!upgradeOriginAllowed(request)) return new Response("forbidden origin", { status: 403 });
+        // the socket exists (CSWSH under a token, CSRF under a cookie session). Hosted
+        // deployments match the full public origin and get no loopback exception.
+        if (!upgradeOriginAllowed(request, originPolicy())) return new Response("forbidden origin", { status: 403 });
         // Dialect detection (openai-realtime-adapter.md, decision 1): the OpenAI SDKs
         // derive this exact path from their baseURL and always carry ?model= plus a
         // `realtime` WebSocket subprotocol; native clients send neither. The choice must
@@ -539,25 +585,23 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         { error: { message: "registry writes are disabled in demo mode", code: "demo_mode" } },
         { status: 403 },
       );
-      // An account holder's name that cannot be namespaced (or is missing/invalid).
-      const badVoiceName = (): Response => Response.json(
-        { error: { message: "voice id must match [A-Za-z0-9._-] and fit the engine id limit with the account prefix", code: "bad_voice_id" } },
-        { status: 400 },
-      );
+      // One mapper for every path that names a voice — registry, design profiles,
+      // promote, and synthesis alike. Null is always the same 400: a display name that
+      // is malformed, unfittable, or a raw engine id (adversarial review 2026-07-26).
+      const engineVoice = (displayName: string): string | null => toEngineVoiceId(ctx.userId, displayName);
       if (url.pathname === "/v1/design-profiles") {
         if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
         if (options.demoMode === true) return demoRefusal();
         // Zero-shot voice design is an engine capability, not a given.
         const selected = selectEngine(url, "tts", "tts", "design");
         if (selected instanceof Response) return selected;
-        if (ctx.userId === OWNER_USER_ID) return proxy(request, selected[1], url.pathname, selected[0]);
-        // Account holders create into their namespace: the JSON id is mapped, the rest
-        // of the body rides through untouched.
+        // Profiles are created into the caller's namespace: the JSON id is mapped, the
+        // rest of the body rides through untouched.
         return (async (): Promise<Response> => {
           const body = await request.json().catch(() => null) as { id?: unknown } | null;
-          if (body === null || typeof body.id !== "string" || !voiceIdPattern.test(body.id)) return badVoiceName();
-          const engineId = toEngineVoiceId(ctx.userId, body.id);
-          if (engineId === null) return badVoiceName();
+          if (body === null || typeof body.id !== "string") return badVoiceId();
+          const engineId = engineVoice(body.id);
+          if (engineId === null) return badVoiceId();
           const rewritten = new Request(request.url, {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -573,13 +617,12 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         // Registration needs a registry: route to the clone-capable instance by default.
         const selected = selectEngine(url, "tts", "tts", "clone");
         if (selected instanceof Response) return selected;
-        if (ctx.userId === OWNER_USER_ID) return proxy(request, selected[1], url.pathname, selected[0]);
         return (async (): Promise<Response> => {
           const form = await request.formData().catch(() => null);
           const id = form?.get("id");
-          if (form === null || typeof id !== "string" || !voiceIdPattern.test(id)) return badVoiceName();
-          const engineId = toEngineVoiceId(ctx.userId, id);
-          if (engineId === null) return badVoiceName();
+          if (form === null || typeof id !== "string") return badVoiceId();
+          const engineId = engineVoice(id);
+          if (engineId === null) return badVoiceId();
           form.set("id", engineId);
           return proxy(new Request(request.url, { method: "POST", body: form }), selected[1], url.pathname, selected[0]);
         })();
@@ -589,13 +632,9 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         if (request.method === "DELETE" && options.demoMode === true) return demoRefusal();
         const selected = selectEngine(url, "tts", "tts", "clone");
         if (selected instanceof Response) return selected;
-        let enginePath = url.pathname;
-        if (ctx.userId !== OWNER_USER_ID) {
-          const engineId = toEngineVoiceId(ctx.userId, url.pathname.slice("/v1/voices/".length));
-          if (engineId === null) return badVoiceName();
-          enginePath = `/v1/voices/${engineId}`;
-        }
-        return proxy(request, selected[1], enginePath, selected[0]);
+        const engineId = engineVoice(url.pathname.slice("/v1/voices/".length));
+        if (engineId === null) return badVoiceId();
+        return proxy(request, selected[1], `/v1/voices/${engineId}`, selected[0]);
       }
       if (url.pathname === "/v1/library" || url.pathname.startsWith("/v1/library/")) {
         // Absent library = the deployment never opted into retention; the panel reads the
@@ -650,8 +689,8 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
               return Response.json({ error: { message: "voice_id must match [A-Za-z0-9._-]{1,64}", code: "bad_voice_id" } }, { status: 400 });
             }
             // The record keeps the display name; the engine hears the namespaced id.
-            const engineVoiceId = toEngineVoiceId(ctx.userId, voiceId);
-            if (engineVoiceId === null) return badVoiceName();
+            const engineVoiceId = engineVoice(voiceId);
+            if (engineVoiceId === null) return badVoiceId();
             // The whole flow — validate, engine round-trip, mark — holds the capture's
             // mutation lock: a concurrent delete waits its turn instead of leaving the
             // clone engine holding a voice the library no longer records.
@@ -730,6 +769,28 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         if (!route.methods.includes(request.method)) return new Response("method not allowed", { status: 405 });
         const selected = selectEngine(url, route.kind, route.role);
         if (selected instanceof Response) return selected;
+        // Synthesis names a voice, so it is an ownership path too: hiding a voice from
+        // the bank listing means nothing if the engine will still speak it for whoever
+        // guesses its id (adversarial review 2026-07-26). A voice-less request keeps
+        // the engine's default.
+        if (url.pathname === "/v1/audio/speech") {
+          return (async (): Promise<Response> => {
+            const body = await request.json().catch(() => null) as Record<string, unknown> | null;
+            if (body === null) return Response.json({ error: { message: "expected a JSON body", code: "bad_request" } }, { status: 400 });
+            if (body.voice !== undefined) {
+              if (typeof body.voice !== "string") return badVoiceId();
+              const engineId = engineVoice(body.voice);
+              if (engineId === null) return badVoiceId();
+              body.voice = engineId;
+            }
+            const rewritten = new Request(request.url, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            return proxy(rewritten, selected[1], url.pathname, selected[0]);
+          })();
+        }
         return proxy(request, selected[1], url.pathname, selected[0]);
       }
       return new Response("not found", { status: 404 });
@@ -799,7 +860,6 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // Draining: in-flight library work (a promote awaiting its engine) finishes
       // against an open database; only then does the store close.
       if (library) await library.close();
-      if (accountsInstance) (await accountsInstance).close();
       // Bounded: Bun's force-stop has been observed to never resolve when a client's
       // WebSocket close handshake is still in flight at stop time (reproduced 2026-07-19
       // with an MCP-configured gateway). The sockets are already torn down above; a stop
@@ -809,6 +869,11 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         new Promise<false>(resolve => { setTimeout(() => { resolve(false); }, 2_000); }),
       ]);
       if (!finished) log("gateway stop: server.stop did not settle within 2s; proceeding with shutdown");
+      // Last: the auth database outlives request admission. Closing it before the
+      // listener stops would let a login or a session lookup land on a closed handle
+      // (adversarial review 2026-07-26); the module's own closed-guard covers the
+      // remainder of the window when the stop above did not settle.
+      if (accountsInstance) (await accountsInstance).close();
     },
   };
 }

@@ -41,6 +41,14 @@ export interface GatewaySessionOptions {
    * credentials. Defaults to the self-hosted owner.
    */
   owner?: string;
+  /**
+   * Display voice name → the engine-side id for this session's owner, or null when the
+   * name may not be used. Injected by the gateway, which owns namespacing; the session
+   * applies it at the one place a voice reaches an engine, so `session.start`, the
+   * `set_voice` tool, and queued agent speech are covered by construction (adversarial
+   * review 2026-07-26). Absent, voices pass through unchanged.
+   */
+  mapVoiceId?: (displayName: string) => string | null;
   /** Decodes compressed (Opus) TTS streams; without it engines stream raw PCM. */
   pcmDecoder?: PcmStreamDecoder;
   /** The union voice bank, for the set_voice tool's validation and engine routing. */
@@ -198,6 +206,20 @@ export class GatewaySession {
     return this.conversation ?? Promise.resolve();
   }
 
+  /**
+   * The single place a voice name crosses into an engine: whatever chose it — the start
+   * options, the `set_voice` tool, a queued agent-speech override — is translated into
+   * the owner's namespace here, and a name that may not be used fails the synthesis
+   * instead of reaching somebody else's voice.
+   */
+  private ownedVoice(input: SpeechInput): SpeechInput {
+    const map = this.options.mapVoiceId;
+    if (map === undefined || input.voice === undefined) return input;
+    const engineVoice = map(input.voice);
+    if (engineVoice === null) throw new TypeError(`unknown voice ${input.voice}`);
+    return { ...input, voice: engineVoice };
+  }
+
   async start(start: SessionStartOptions, sink: EventSink): Promise<void> {
     this.sink = sink;
     this.playbackAck = start.playbackAck ?? false;
@@ -314,8 +336,8 @@ export class GatewaySession {
       asr: new AsrClient(pick("asr", "asr", start.asrEngine), this.options.fetch),
       llm: new LlmClient(pick("llm", "llm", start.llmEngine), this.options.fetch),
       tts: {
-        speech: (input: SpeechInput, signal?: AbortSignal) => ttsClient.speech(input, signal),
-        speechStream: (input: SpeechInput, signal?: AbortSignal) => ttsClient.speechStream(input, signal),
+        speech: (input: SpeechInput, signal?: AbortSignal) => ttsClient.speech(this.ownedVoice(input), signal),
+        speechStream: (input: SpeechInput, signal?: AbortSignal) => ttsClient.speechStream(this.ownedVoice(input), signal),
       },
     }, conversationOptions, {
       onTranscript: (text, turn) => this.emit({ type: "transcript.final", turnId: turn.id, revision: turn.revision, text }),

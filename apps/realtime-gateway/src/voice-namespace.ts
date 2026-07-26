@@ -15,12 +15,24 @@ import { OWNER_USER_ID } from "./auth/auth-context";
  */
 const namespaced = /^u[0-9a-f]{12}\./;
 
+/** The engine-side id contract every voice name must satisfy, prefix included. */
+const voiceIdPattern = /^[A-Za-z0-9._-]{1,64}$/;
+
 export function voicePrefix(userId: string): string {
   return `u${createHash("sha256").update(userId).digest("hex").slice(0, 12)}.`;
 }
 
-/** Display name → engine id. Null when the name cannot fit the engine contract prefixed. */
+/**
+ * Display name → engine id, or null when the name may not be used at all. Null covers
+ * three refusals, and callers turn every one of them into the same 400: a name outside
+ * the engine id contract, a name that would not fit its account prefix, and — for every
+ * caller including the self-hosted owner — a name shaped like the reserved namespace
+ * (`u<12 hex>.`). That last one is what stops a raw engine id from being presented as a
+ * display name to reach into somebody else's bank (adversarial review 2026-07-26).
+ */
 export function toEngineVoiceId(userId: string, displayName: string): string | null {
+  if (!voiceIdPattern.test(displayName)) return null;
+  if (namespaced.test(displayName)) return null;
   if (userId === OWNER_USER_ID) return displayName;
   const engineId = `${voicePrefix(userId)}${displayName}`;
   return engineId.length <= 64 ? engineId : null;

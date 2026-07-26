@@ -82,6 +82,37 @@ describe("hosted accounts (docs/auth.md phase 3)", () => {
       .toThrow("32 characters");
   });
 
+  test("an authResolver may not stand beside hosted accounts — the test seam cannot become a bypass", () => {
+    const dir = tempDir();
+    dirs.push(dir);
+    expect(() => startGateway({
+      config,
+      port: 0,
+      accounts: { dir, secret: SECRET },
+      authResolver: () => ({ userId: "anyone", via: "session" }),
+    })).toThrow("authResolver");
+  });
+
+  test("hosted mode refuses a loopback Origin: the dev-server exception is local-only", async () => {
+    gateway = accountsGateway();
+    const cookie = await signUp(gateway.url, "helen@test.dev");
+    const wsUrl = new URL("/v1/realtime", gateway.url).toString().replace(/^http/, "ws");
+    const connect = (origin: string): Promise<WebSocket> => new Promise((resolve, reject) => {
+      const socket = new WebSocket(wsUrl, { headers: { cookie, origin } } as never);
+      socket.addEventListener("open", () => resolve(socket));
+      socket.addEventListener("error", () => reject(new Error(`refused (${origin})`)));
+    });
+
+    // A hosted deployment's cookie must not be usable from a dev server or any other site.
+    await expect(connect("http://localhost:5173")).rejects.toThrow();
+    await expect(connect("https://evil.example")).rejects.toThrow();
+    // The scheme is part of the origin: http against an https deployment is not same-origin.
+    await expect(connect(new URL(gateway.url).origin.replace("http://", "https://"))).rejects.toThrow();
+
+    const allowed = await connect(new URL(gateway.url).origin);
+    allowed.close();
+  });
+
   test("no credential means 401 on /v1; signup mints a session that opens the same doors", async () => {
     gateway = accountsGateway();
     expect((await fetch(new URL("/v1/engines", gateway.url))).status).toBe(401);
@@ -198,6 +229,39 @@ describe("hosted accounts (docs/auth.md phase 3)", () => {
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     socket.close();
+  });
+
+  test("synthesis runs inside the account's namespace, and another holder's engine id is refused", async () => {
+    const bodies: { voice?: string }[] = [];
+    const dir = tempDir();
+    dirs.push(dir);
+    gateway = startGateway({
+      config,
+      port: 0,
+      accounts: { dir, secret: SECRET },
+      fetch: async (input, init) => {
+        const request = new Request(input instanceof Request ? input : String(input), init);
+        const path = new URL(request.url).pathname;
+        if (path === "/v1/audio/speech") {
+          bodies.push(await request.json() as { voice?: string });
+          return new Response(new Uint8Array(writeWav(new Float32Array(2_400).fill(0.1), 24_000)));
+        }
+        if (path === "/v1/voices") return Response.json({ voices: [] });
+        throw new Error(`unexpected engine path ${path}`);
+      },
+    });
+    const cookie = await signUp(gateway.url, "iris@test.dev");
+    const speak = (voice: string): Promise<Response> => fetch(new URL("/v1/audio/speech", gateway?.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ input: "你好", voice }),
+    });
+
+    expect((await speak("mine")).status).toBe(200);
+    expect(bodies[0]?.voice).toMatch(/^u[0-9a-f]{12}\.mine$/);
+    // A raw namespaced id (another holder's, or a guess) never reaches an engine.
+    expect((await speak(`${voicePrefix("someone-else")}mine`)).status).toBe(400);
+    expect(bodies).toHaveLength(1);
   });
 
   test("voice namespaces are per account: two users, same display name, no collision", async () => {

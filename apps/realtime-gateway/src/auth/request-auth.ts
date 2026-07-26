@@ -36,14 +36,30 @@ export function resolveAuthContext(request: Request, options: RequestAuthOptions
   return null;
 }
 
+export interface UpgradeOriginOptions {
+  /**
+   * The exact origins a hosted deployment accepts (scheme + host + port). When present,
+   * nothing else passes: no host-only match, no loopback exception.
+   */
+  allowedOrigins?: readonly string[] | undefined;
+  /**
+   * Whether the local-development exception applies — a loopback origin (the Vite dev
+   * server on another port) may open the socket. True only for a genuinely local
+   * deployment: never with hosted accounts, and never on a non-loopback bind
+   * (adversarial review 2026-07-26).
+   */
+  allowLoopback?: boolean;
+}
+
 /**
  * Cross-site WebSocket guard (docs/auth.md phase 1). Browsers always send Origin on an
- * upgrade; it must be same-origin with the request, or loopback (the Vite dev server
- * fronts the gateway from another loopback port). Non-browser clients send no Origin
- * and pass. Without this, any web page can open a socket against a token-less loopback
- * gateway today — and against a cookie session (phase 3) it would be CSRF.
+ * upgrade; non-browser clients send none and pass. A hosted deployment matches the full
+ * origin against its configured public origin — the scheme is part of identity, and the
+ * dev-server convenience below must never travel with a cookie session. A self-hosted
+ * gateway keeps the looser host comparison (a tunnel terminates TLS in front, so the
+ * browser's scheme legitimately differs from ours) plus the loopback exception.
  */
-export function upgradeOriginAllowed(request: Request): boolean {
+export function upgradeOriginAllowed(request: Request, options: UpgradeOriginOptions = {}): boolean {
   const raw = request.headers.get("origin");
   if (raw === null) return true;
   let origin: URL;
@@ -52,7 +68,17 @@ export function upgradeOriginAllowed(request: Request): boolean {
   } catch {
     return false;
   }
+  if (options.allowedOrigins !== undefined) {
+    return options.allowedOrigins.includes(origin.origin);
+  }
   if (origin.host === (request.headers.get("host") ?? new URL(request.url).host)) return true;
+  if (options.allowLoopback !== true) return false;
   const hostname = origin.hostname.replace(/^\[|\]$/g, "");
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+/** Whether a bind address is loopback — the precondition for the dev-server exception. */
+export function isLoopbackHost(hostname: string): boolean {
+  const bare = hostname.replace(/^\[|\]$/g, "");
+  return bare === "localhost" || bare === "127.0.0.1" || bare === "::1";
 }

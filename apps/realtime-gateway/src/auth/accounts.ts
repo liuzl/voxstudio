@@ -82,9 +82,23 @@ export async function startAccounts(options: AccountsOptions): Promise<Accounts>
   const { runMigrations } = await getMigrations(auth.options);
   await runMigrations();
 
+  // Shutdown guard: the gateway stops accepting before closing this, but a request
+  // already inside the handler — or one that arrives while a non-settling stop drains —
+  // must be refused rather than land on a closed SQLite handle (adversarial review
+  // 2026-07-26).
+  let closed = false;
   return {
-    handler: request => auth.handler(request),
+    handler: async request => {
+      if (closed) {
+        return Response.json(
+          { error: { message: "the gateway is shutting down", code: "accounts_closing" } },
+          { status: 503 },
+        );
+      }
+      return auth.handler(request);
+    },
     resolve: async request => {
+      if (closed) return null;
       // The explicit machine door first: an agent sending a key never depends on
       // cookie state. verifyApiKey also stamps lastRequest/usage bookkeeping.
       const key = request.headers.get("x-api-key");
@@ -97,6 +111,11 @@ export async function startAccounts(options: AccountsOptions): Promise<Accounts>
       const session = await auth.api.getSession({ headers: request.headers });
       return session === null ? null : { userId: session.user.id, via: "session" };
     },
-    close: () => { db.close(); },
+    close: () => {
+      // Idempotent: the drain may race the server stop.
+      if (closed) return;
+      closed = true;
+      db.close();
+    },
   };
 }

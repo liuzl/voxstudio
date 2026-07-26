@@ -1034,6 +1034,145 @@ describe("resource ownership (docs/auth.md phase 2)", () => {
   });
 });
 
+describe("voice namespace enforcement on every synthesis path (adversarial review 2026-07-26)", () => {
+  const asAlice = (request: Request): AuthContext => ({
+    userId: request.headers.get("x-test-user") ?? new URL(request.url).searchParams.get("user") ?? "alice",
+    via: "session",
+  });
+
+  test("the speech facade maps the caller's display voice onto their engine namespace", async () => {
+    const bodies: { voice?: string }[] = [];
+    gateway = startGateway({
+      config,
+      port: 0,
+      authResolver: asAlice,
+      fetch: engineFetch({
+        "/v1/audio/speech": async request => {
+          bodies.push(await request.json() as { voice?: string });
+          return new Response(new Uint8Array(writeWav(new Float32Array(2_400).fill(0.1), 24_000)));
+        },
+      }),
+    });
+    const speak = (voice: string | undefined, user = "alice"): Promise<Response> => fetch(new URL("/v1/audio/speech", gateway?.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-test-user": user },
+      body: JSON.stringify({ input: "你好", ...(voice === undefined ? {} : { voice }) }),
+    });
+
+    expect((await speak("myvoice")).status).toBe(200);
+    expect(bodies[0]?.voice).toBe(`${voicePrefix("alice")}myvoice`);
+
+    // A voice-less request still reaches the engine (its default voice).
+    expect((await speak(undefined)).status).toBe(200);
+    expect(bodies[1]?.voice).toBeUndefined();
+
+    // Another holder's engine id, presented raw, is refused rather than synthesized.
+    const stolen = await speak(`${voicePrefix("bob")}myvoice`);
+    expect(stolen.status).toBe(400);
+    expect((await stolen.json() as { error: { code: string } }).error.code).toBe("bad_voice_id");
+    expect(bodies).toHaveLength(2);
+  });
+
+  test("a realtime session synthesizes through its owner's namespace, at start and after set_voice", async () => {
+    const bodies: { voice?: string }[] = [];
+    let chatRound = 0;
+    gateway = startGateway({
+      config,
+      port: 0,
+      authResolver: asAlice,
+      fetch: engineFetch({
+        "/v1/voices": async () => Response.json({ voices: [{ id: `${voicePrefix("alice")}second` }] }),
+        "/v1/audio/speech": async request => {
+          bodies.push(await request.json() as { voice?: string });
+          return new Response(new Uint8Array(writeWav(new Float32Array(4_800).fill(0.1), 24_000)));
+        },
+        "/v1/chat/completions": async () => {
+          chatRound += 1;
+          if (chatRound === 1) {
+            return Response.json({ choices: [{ message: { content: "", tool_calls: [
+              { id: "c1", type: "function", function: { name: "set_voice", arguments: "{\"voice\":\"second\"}" } },
+            ] } }] });
+          }
+          return Response.json({ choices: [{ message: { content: "好的。" } }] });
+        },
+      }),
+    });
+    const client = new TestClient(gateway.url, "/v1/realtime?user=alice");
+    await client.ready();
+    client.command({ type: "session.start", idempotencyKey: "ns-1", options: { ...startOptions, voice: "first" } });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "snapshot");
+
+    client.sendPcm(2, 0.2);
+    client.sendPcm(2, 0);
+    await client.until(events => events.some(event => event.type === "turn.completed"), "tool turn");
+    // The session's own start voice was namespaced before it reached the engine.
+    expect(bodies[0]?.voice).toBe(`${voicePrefix("alice")}first`);
+
+    client.sendPcm(2, 0.2);
+    client.sendPcm(2, 0);
+    await client.until(events => events.filter(event => event.type === "turn.completed").length >= 2, "second turn");
+    // And so was the tool's retarget: the display name never reaches the engine bare.
+    expect(bodies[bodies.length - 1]?.voice).toBe(`${voicePrefix("alice")}second`);
+    client.close();
+  });
+
+  test("audit_profile audits inside the caller's namespace, never another holder's entry", async () => {
+    const audited: string[] = [];
+    let chatRound = 0;
+    gateway = startGateway({
+      config,
+      port: 0,
+      authResolver: asAlice,
+      fetch: engineFetch({
+        "/v1/voices": async () => Response.json({ voices: [] }),
+        "/v1/chat/completions": async () => {
+          chatRound += 1;
+          if (chatRound === 1) {
+            return Response.json({ choices: [{ message: { content: "", tool_calls: [
+              { id: "c1", type: "function", function: { name: "audit_profile", arguments: "{\"profile\":\"calm\"}" } },
+            ] } }] });
+          }
+          return Response.json({ choices: [{ message: { content: "审计完成。" } }] });
+        },
+        [`/v1/voices/${voicePrefix("alice")}calm`]: async request => {
+          audited.push(new URL(request.url).pathname);
+          return Response.json({ id: `${voicePrefix("alice")}calm`, design_profile: { description: "calm", seed: 1, cfg_value: 2, timesteps: 10, model: "m", model_manifest_sha256: "abc", audio_sha256: "def" } });
+        },
+        "/healthz": async () => Response.json({ ok: true, model: "m", model_manifest_sha256: "abc" }),
+      }),
+    });
+    const client = new TestClient(gateway.url, "/v1/realtime?user=alice");
+    await client.ready();
+    client.command({ type: "session.start", idempotencyKey: "aud-1", options: { ...startOptions, studioTools: true } });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "snapshot");
+    client.sendPcm(2, 0.2);
+    client.sendPcm(2, 0);
+    await client.until(events => events.some(event => event.type === "tool.result"), "audit result");
+
+    // The engine was asked about alice's namespaced entry, not the bare display name.
+    expect(audited).toEqual([`/v1/voices/${voicePrefix("alice")}calm`]);
+    client.close();
+  });
+
+  test("the reserved namespace pattern is never accepted as a display name, owner included", async () => {
+    const reached: string[] = [];
+    gateway = startGateway({
+      config,
+      port: 0,
+      fetch: engineFetch({
+        [`/v1/voices/${voicePrefix("alice")}myvoice`]: async request => {
+          reached.push(new URL(request.url).pathname);
+          return Response.json({ id: "leaked" });
+        },
+      }),
+    });
+    // The self-hosted owner cannot reach into an account holder's namespace by naming it.
+    const probe = await fetch(new URL(`/v1/voices/${voicePrefix("alice")}myvoice`, gateway.url));
+    expect(probe.status).toBe(400);
+    expect(reached).toEqual([]);
+  });
+});
+
 describe("guardrail parse hardening", () => {
   test("a stopped session's socket close does not re-arm the reconnect grace", async () => {
     gateway = startGateway({ config, fetch: engineFetch(), port: 0, reconnectGraceMs: 60_000 });
