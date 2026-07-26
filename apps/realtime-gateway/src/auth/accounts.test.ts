@@ -59,6 +59,22 @@ function accountsGateway(extra: { sendVerificationEmail?: (email: string, url: s
   });
 }
 
+/**
+ * Mint a key the way the Studio does — cookie plus Origin, since Better Auth enforces
+ * its own origin check on every mutation (a browser always sends one).
+ */
+async function mintKey(base: string, cookie: string, name = "agent"): Promise<string> {
+  const response = await fetch(new URL("/v1/auth/api-key/create", base), {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie, origin: new URL(base).origin },
+    body: JSON.stringify({ name }),
+  });
+  expect(response.status).toBe(200);
+  const { key } = await response.json() as { key: string };
+  expect(typeof key).toBe("string");
+  return key;
+}
+
 async function signUp(base: string, email: string): Promise<string> {
   const response = await fetch(new URL("/v1/auth/sign-up/email", base), {
     method: "POST",
@@ -140,15 +156,7 @@ describe("hosted accounts (docs/auth.md phase 3)", () => {
   test("an API key opens the same doors as its owner's session — machine parity", async () => {
     gateway = accountsGateway();
     const cookie = await signUp(gateway.url, "bob@test.dev");
-
-    const minted = await fetch(new URL("/v1/auth/api-key/create", gateway.url), {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie },
-      body: JSON.stringify({ name: "agent" }),
-    });
-    expect(minted.status).toBe(200);
-    const { key } = await minted.json() as { key: string };
-    expect(typeof key).toBe("string");
+    const key = await mintKey(gateway.url, cookie);
 
     // The key and the cookie resolve to the same user: same (empty) voice namespace,
     // and the speech facade answers both identically.
@@ -163,6 +171,78 @@ describe("hosted accounts (docs/auth.md phase 3)", () => {
     expect(spoken.status).toBe(200);
 
     expect((await fetch(new URL("/v1/engines", gateway.url), { headers: { "x-api-key": "vox_not_a_key" } })).status).toBe(401);
+  });
+
+  test("the machine door speaks Authorization: Bearer as well as x-api-key", async () => {
+    gateway = accountsGateway();
+    const cookie = await signUp(gateway.url, "agent-owner@test.dev");
+    const key = await mintKey(gateway.url, cookie);
+    const bearer = (path: string): Promise<Response> =>
+      fetch(new URL(path, gateway?.url), { headers: { authorization: `Bearer ${key}` } });
+
+    // The contract AI clients and CLIs already speak.
+    expect((await bearer("/v1/engines")).status).toBe(200);
+    const viaBearer = await bearer("/v1/voices");
+    expect(await viaBearer.json()).toEqual({ voices: [] });
+
+    // Same key, both headers, one identity: a voice registered through Bearer is
+    // visible through the native header, and vice versa.
+    const form = new FormData();
+    form.set("id", "bearer-made");
+    form.set("text", "参考音");
+    form.set("audio", new File([new Uint8Array(16)], "ref.wav", { type: "audio/wav" }));
+    const created = await fetch(new URL("/v1/voices", gateway.url), {
+      method: "POST",
+      headers: { authorization: `Bearer ${key}` },
+      body: form,
+    });
+    expect(created.status).toBe(201);
+    const engineId = (await created.json() as { id: string }).id;
+    expect(engineId).toMatch(/^u[0-9a-f]{12}\.bearer-made$/);
+
+    // A bad Bearer is refused, and never falls through to an ambient cookie: the same
+    // request with a valid cookie *and* a bogus Bearer stays 401 — an agent's broken
+    // credential must not silently borrow a browser's identity.
+    expect((await fetch(new URL("/v1/engines", gateway.url), { headers: { authorization: "Bearer nope" } })).status).toBe(401);
+    expect((await fetch(new URL("/v1/engines", gateway.url), {
+      headers: { authorization: "Bearer nope", cookie },
+    })).status).toBe(401);
+  });
+
+  test("healthz reports which door this deployment serves, without a credential", async () => {
+    gateway = accountsGateway();
+    const hosted = await fetch(new URL("/healthz", gateway.url));
+    expect(hosted.status).toBe(200);
+    expect((await hosted.json() as { auth: string }).auth).toBe("accounts");
+    await gateway.stop();
+
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0 });
+    const selfHosted = await fetch(new URL("/healthz", gateway.url));
+    expect((await selfHosted.json() as { auth: string }).auth).toBe("self");
+  });
+
+  test("keys can be listed and revoked, and a revoked key stops opening the door", async () => {
+    gateway = accountsGateway();
+    const cookie = await signUp(gateway.url, "revoker@test.dev");
+    const origin = new URL(gateway.url).origin;
+    const key = await mintKey(gateway.url, cookie);
+    expect((await fetch(new URL("/v1/engines", gateway.url), { headers: { authorization: `Bearer ${key}` } })).status).toBe(200);
+
+    const listed = await fetch(new URL("/v1/auth/api-key/list", gateway.url), { headers: { cookie } });
+    const keys = (await listed.json() as { apiKeys: { id: string; name: string; start: string }[] }).apiKeys;
+    expect(keys).toHaveLength(1);
+    expect(keys[0]?.name).toBe("agent");
+    // The list carries an id and a prefix to show, never the key itself.
+    expect(keys[0]?.id.length).toBeGreaterThan(0);
+    expect(JSON.stringify(keys)).not.toContain(key);
+
+    const revoked = await fetch(new URL("/v1/auth/api-key/delete", gateway.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie, origin },
+      body: JSON.stringify({ keyId: keys[0]?.id }),
+    });
+    expect(revoked.status).toBe(200);
+    expect((await fetch(new URL("/v1/engines", gateway.url), { headers: { authorization: `Bearer ${key}` } })).status).toBe(401);
   });
 
   test("with a verification sender wired, an unverified login is refused until the link is followed", async () => {
@@ -262,6 +342,82 @@ describe("hosted accounts (docs/auth.md phase 3)", () => {
     // A raw namespaced id (another holder's, or a guess) never reaches an engine.
     expect((await speak(`${voicePrefix("someone-else")}mine`)).status).toBe(400);
     expect(bodies).toHaveLength(1);
+  });
+
+  test("the Studio's own auth client drives the whole loop against a real gateway", async () => {
+    // The web client is same-origin `fetch` over /v1/auth/*; pointing global fetch at the
+    // live gateway runs the exact code the browser ships, contracts and all. A cookie jar
+    // stands in for the browser's, and Origin for what a browser always sends.
+    gateway = accountsGateway();
+    const base = gateway.url;
+    const origin = new URL(base).origin;
+    const realFetch = globalThis.fetch;
+    let jar = "";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const response = await realFetch(new URL(path, base), {
+        ...init,
+        headers: { ...(init?.headers ?? {}), origin, ...(jar === "" ? {} : { cookie: jar }) },
+      });
+      const issued = response.headers.getSetCookie().map(entry => entry.split(";")[0]);
+      if (issued.length > 0) jar = issued.join("; ");
+      return response;
+    }) as unknown as typeof fetch;
+
+    try {
+      const auth = await import("../../../web/src/lib/auth");
+      expect(await auth.fetchAuthMode()).toBe("accounts");
+      expect(await auth.fetchSession()).toBeNull();
+
+      await auth.signUp("studio@test.dev", "password1234");
+      const user = await auth.fetchSession();
+      expect(user?.email).toBe("studio@test.dev");
+      // No sender is configured on this gateway, so the account is usable unverified.
+      expect(user?.emailVerified).toBe(false);
+
+      expect(await auth.listApiKeys()).toEqual([]);
+      const key = await auth.createApiKey("from-studio");
+      const listed = await auth.listApiKeys();
+      expect(listed).toHaveLength(1);
+      expect(listed[0]?.name).toBe("from-studio");
+      expect(key.startsWith(listed[0]?.start ?? " ")).toBe(true);
+
+      // The key the Studio just minted is a working machine credential — Bearer, no cookie.
+      const machine = await realFetch(new URL("/v1/engines", base), { headers: { authorization: `Bearer ${key}` } });
+      expect(machine.status).toBe(200);
+
+      await auth.revokeApiKey(listed[0]?.id as string);
+      expect(await auth.listApiKeys()).toEqual([]);
+      expect((await realFetch(new URL("/v1/engines", base), { headers: { authorization: `Bearer ${key}` } })).status).toBe(401);
+
+      await auth.signOut();
+      jar = "";
+      expect(await auth.fetchSession()).toBeNull();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  test("a self-hosted gateway tells the Studio to stay exactly as it was", async () => {
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0 });
+    const base = gateway.url;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      return realFetch(new URL(path, base), init);
+    }) as unknown as typeof fetch;
+    try {
+      const auth = await import("../../../web/src/lib/auth");
+      // "self" is what keeps the login card unmounted and the studio unchanged.
+      expect(await auth.fetchAuthMode()).toBe("self");
+      // And the auth surface simply does not exist on this deployment — not a 401 to
+      // sign past, a 404: there is nothing to sign into.
+      expect((await realFetch(new URL("/v1/auth/get-session", base))).status).toBe(404);
+      // The studio's own routes stay open exactly as before accounts existed.
+      expect((await realFetch(new URL("/v1/engines", base))).status).toBe(200);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   test("voice namespaces are per account: two users, same display name, no collision", async () => {

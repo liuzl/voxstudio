@@ -1,7 +1,11 @@
 /** REST facade helpers: same-origin /v1 endpoints proxied by the gateway. */
 import { t, type MessageKey } from "../i18n";
+import { reportUnauthorized } from "./unauthorized";
 
 async function fail(response: Response, what: MessageKey): Promise<never> {
+  // A hosted session that expired (or was signed out elsewhere) must send the shell
+  // back to the sign-in card, not bury a 401 in a panel-shaped error.
+  if (response.status === 401) reportUnauthorized();
   let detail = "";
   try {
     const body = await response.json() as { error?: { message?: string } };

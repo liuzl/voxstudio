@@ -42,6 +42,20 @@ export interface Accounts {
 
 export const MIN_SECRET_LENGTH = 32;
 
+/**
+ * The API key a request presents, or null for a cookie-only (browser) request. Two
+ * accepted forms, one meaning — see the resolve() comment for why Bearer leads.
+ */
+export function apiKeyFrom(request: Request): string | null {
+  const header = request.headers.get("authorization");
+  if (header !== null) {
+    const match = /^Bearer\s+(.+)$/i.exec(header.trim());
+    if (match) return match[1] as string;
+  }
+  const native = request.headers.get("x-api-key");
+  return native === null || native === "" ? null : native;
+}
+
 export async function startAccounts(options: AccountsOptions): Promise<Accounts> {
   if (options.secret.length < MIN_SECRET_LENGTH) {
     throw new TypeError(`accounts: the auth secret must be at least ${MIN_SECRET_LENGTH} characters`);
@@ -99,11 +113,14 @@ export async function startAccounts(options: AccountsOptions): Promise<Accounts>
     },
     resolve: async request => {
       if (closed) return null;
-      // The explicit machine door first: an agent sending a key never depends on
-      // cookie state. verifyApiKey also stamps lastRequest/usage bookkeeping.
-      const key = request.headers.get("x-api-key");
-      if (key !== null) {
-        const verified = await auth.api.verifyApiKey({ body: { key } });
+      // The machine door first, and it is explicit: a presented key decides the
+      // request, so an agent never silently rides an ambient browser cookie.
+      // `Authorization: Bearer <key>` is the contract AI clients and CLIs already
+      // speak (docs/auth.md); `x-api-key` is the plugin's native header, kept for
+      // clients that prefer it. Both verify the same way.
+      const presented = apiKeyFrom(request);
+      if (presented !== null) {
+        const verified = await auth.api.verifyApiKey({ body: { key: presented } });
         return verified.valid && verified.key !== null
           ? { userId: verified.key.referenceId, via: "apiKey" }
           : null;

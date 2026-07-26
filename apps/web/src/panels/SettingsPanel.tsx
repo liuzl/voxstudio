@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { AccountSection } from "./AccountSection";
 import { listEngines, type EngineEntry } from "../lib/api";
 import { useStudio } from "../store";
 import { useI18n, useT, type Locale } from "../i18n";
@@ -254,6 +255,9 @@ export function SettingsPanel() {
       </section>
 
       <EtiquetteSection />
+
+      {/* Hosted deployments only; renders nothing in a self-hosted studio. */}
+      <AccountSection />
 
       <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
         <h2 className="text-sm font-medium text-ink-300">{t("语言")}</h2>

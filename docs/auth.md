@@ -78,6 +78,20 @@ The debts are not in authentication but in **ownership**:
    keys are created and revoked on the web settings page and ride
    `Authorization: Bearer` to the *existing* OpenAI-compatible `/v1` routes and the
    realtime WebSocket. Machine-door parity is a v1 acceptance gate, not a roadmap item.
+
+   The wire contract, as delivered:
+
+   ```text
+   Authorization: Bearer <key>   # preferred — what OpenAI-compatible clients,
+                                 # agent frameworks, and CLIs already send
+   x-api-key: <key>              # also accepted (the plugin's native header)
+   ```
+
+   A presented key decides the request: if it fails, the request is 401 even when a
+   browser cookie is also present, so an agent's broken credential can never silently
+   borrow a signed-in browser's identity. Cookies are the browser's alone — no machine
+   client is ever issued or expected to send one. Keys are shown once at creation, listed
+   afterwards by name and prefix only, and revocation takes effect on the next request.
 7. **WebSocket: authenticate at upgrade, verify Origin.** Browser upgrades carry the
    cookie, agents carry the bearer; both resolve to the same AuthContext once, cached on
    the socket — no per-frame database work. Origin checking ships in the same change
@@ -209,6 +223,20 @@ phase 3 is the only dependency-bearing step and is confined to one directory.
    `/v1/audio/speech` produces fingerprint-identical artifacts to the web path (the
    machine-parity gate); a binary without auth config demonstrably never loads
    better-auth.
+
+   **Delivered in two tracks.** *Gateway* (2026-07-26): accounts mount, both machine
+   headers, mutual exclusion with the shared token and with the resolver seam, hosted
+   origin strictness, and shutdown ordering. *Web* (same day): `/healthz` reports
+   `auth: "self" | "accounts"` so the shell knows its door without a credential; under
+   accounts an unauthenticated visitor gets a sign-in/sign-up card, an unverified
+   account gets a resend banner rather than a wall, any 401 anywhere returns the shell
+   to the card, and 设置 grows account and API-key sections. A self-hosted studio reads
+   `self` and renders exactly what it did before — the auth routes 404 there, and every
+   failure path (unreachable gateway, gateway predating the field) also reads `self`, so
+   a login wall can never appear where there is nothing to sign into. What remains for
+   launch is listed under phase 4 and in the boundaries above: a real verification
+   sender, the production secret, the public origin, and the discovery surface
+   (`/agent`, `/llms.txt`, `/openapi.json`, the Skill).
 4. **Launch hardening.** Per-user generation quota; `/healthz` stops disclosing session
    counts (or moves behind auth); the ops half (tunnel and edge configuration) stays in
    the internal repo per this repo's public-boundary rules.

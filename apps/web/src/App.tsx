@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { VerifyBanner } from "./AuthGate";
 import { ConversationPanel } from "./panels/ConversationPanel";
 import { GeneratePanel } from "./panels/GeneratePanel";
 import { LibraryPanel } from "./panels/LibraryPanel";
@@ -179,7 +180,10 @@ export function App() {
         <ConnectionDot />
       </header>
 
-      <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">{panel}</main>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <VerifyBanner />
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">{panel}</main>
+      </div>
       <Toasts />
 
       {/* Mobile: bottom tab bar */}

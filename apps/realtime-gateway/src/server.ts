@@ -530,7 +530,15 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     async fetch(request, server) {
       const url = new URL(request.url);
       if (url.pathname === "/healthz") {
-        return Response.json({ ok: true, protocol: protocolVersion, sessions: sessions.size });
+        // `auth` tells the app shell which door it is standing at — the one thing it
+        // cannot discover without a credential (docs/auth.md phase 3). "accounts" means
+        // sign in; "self" means the self-hosted studio, unchanged.
+        return Response.json({
+          ok: true,
+          protocol: protocolVersion,
+          sessions: sessions.size,
+          auth: options.accounts === undefined ? "self" : "accounts",
+        });
       }
       const page = serveStatic(request, url);
       if (page) return page;
