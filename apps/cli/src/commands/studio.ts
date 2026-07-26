@@ -20,6 +20,7 @@ options:
   --host HOST    bind address (default 127.0.0.1)
   --port PORT    listen port (default 8790)
   --token TOKEN  bearer token required on /v1 requests and the realtime socket
+                 (VOX_GATEWAY_TOKEN)
   --library DIR  retain every finalized utterance (WAV + transcript) in DIR and serve
                  the 素材库 panel at /v1/library; off by default (an explicit retention
                  opt-in; VOX_GATEWAY_LIBRARY), and demo mode keeps it off regardless
@@ -62,7 +63,9 @@ export async function runStudio(
 ): Promise<number> {
   let host: string | undefined;
   let port: number | undefined;
-  let token: string | undefined;
+  // The same environment contract as vox-gateway (docs/auth.md phase 1): the two
+  // entrypoints must not drift on where a token may come from.
+  let token: string | undefined = process.env.VOX_GATEWAY_TOKEN;
   let maxSessions = positiveEnv("VOX_GATEWAY_MAX_SESSIONS", true);
   let maxSessionSeconds = positiveEnv("VOX_GATEWAY_MAX_SESSION_SECONDS");
   let demoMode = process.env.VOX_GATEWAY_DEMO === "1";

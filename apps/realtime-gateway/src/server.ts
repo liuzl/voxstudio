@@ -6,6 +6,8 @@ import type { ServerWebSocket } from "bun";
 import type { ConversationTool } from "@voxstudio/conversation";
 import { connectMcpServers, type McpToolSource } from "@voxstudio/mcp";
 import { OpenAiRealtimeConnection } from "./openai-realtime";
+import type { AuthContext } from "./auth/auth-context";
+import { resolveAuthContext, upgradeOriginAllowed } from "./auth/request-auth";
 import { CaptureLibrary } from "./library";
 import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand } from "./protocol";
 import { studioToolNames } from "@voxstudio/conversation";
@@ -72,6 +74,8 @@ export interface GatewayServer {
 interface SocketData {
   session: GatewaySession | undefined;
   sink: EventSink | undefined;
+  /** Resolved once at upgrade (docs/auth.md phase 1); no per-frame credential work. */
+  ctx: AuthContext;
   /** Present when the connection speaks the OpenAI Realtime dialect instead of the native protocol. */
   openai?: OpenAiRealtimeConnection | undefined;
   /** The ?model= the OpenAI-dialect client asked for, captured at upgrade. */
@@ -140,14 +144,6 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     return new Response(Bun.file(file), {
       headers: { "cache-control": immutable ? "public, max-age=31536000, immutable" : "no-cache" },
     });
-  };
-
-  const authorized = (request: Request): boolean => {
-    if (!options.token) return true;
-    const url = new URL(request.url);
-    // Browser WebSocket clients cannot set headers; the token may ride the query string.
-    if (url.searchParams.get("token") === options.token) return true;
-    return request.headers.get("authorization") === `Bearer ${options.token}`;
   };
 
   /**
@@ -432,8 +428,14 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       }
       const page = serveStatic(request, url);
       if (page) return page;
-      if (!authorized(request)) return new Response("unauthorized", { status: 401 });
+      // The one place a credential becomes an identity; every /v1 handler below sees
+      // only the resolved context (docs/auth.md phase 1).
+      const ctx = resolveAuthContext(request, options);
+      if (ctx === null) return new Response("unauthorized", { status: 401 });
       if (url.pathname === "/v1/realtime") {
+        // Browsers always send Origin on an upgrade; a cross-site one is refused before
+        // the socket exists (CSWSH today, CSRF once cookie sessions arrive).
+        if (!upgradeOriginAllowed(request)) return new Response("forbidden origin", { status: 403 });
         // Dialect detection (openai-realtime-adapter.md, decision 1): the OpenAI SDKs
         // derive this exact path from their baseURL and always carry ?model= plus a
         // `realtime` WebSocket subprotocol; native clients send neither. The choice must
@@ -448,6 +450,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         const data: SocketData = {
           session: undefined,
           sink: undefined,
+          ctx,
           ...(openai ? { openaiModel: url.searchParams.get("model") ?? "voxstudio-realtime" } : {}),
         };
         // Clients that offer subprotocols (the OpenAI SDKs offer `realtime`) get their

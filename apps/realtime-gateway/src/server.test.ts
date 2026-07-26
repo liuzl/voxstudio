@@ -528,6 +528,26 @@ describe("realtime gateway", () => {
     allowedSocket.close();
   });
 
+  test("a cross-site Origin is refused at the WebSocket upgrade; same-origin and loopback pass", async () => {
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0 });
+    const wsUrl = new URL("/v1/realtime", gateway.url).toString().replace(/^http/, "ws");
+    const connect = (origin?: string): Promise<WebSocket> => new Promise((resolve, reject) => {
+      // Bun's WebSocket client accepts custom headers; browsers set Origin themselves.
+      const socket = new WebSocket(wsUrl, (origin === undefined ? {} : { headers: { origin } }) as never);
+      socket.addEventListener("open", () => resolve(socket));
+      socket.addEventListener("error", () => reject(new Error(`refused (origin ${origin ?? "none"})`)));
+    });
+
+    await expect(connect("https://evil.example")).rejects.toThrow();
+
+    const sameOrigin = await connect(new URL(gateway.url).origin);
+    sameOrigin.close();
+    const devServer = await connect("http://localhost:5173");
+    devServer.close();
+    const headerless = await connect();
+    headerless.close();
+  });
+
   test("serves the web app shell around the guarded API", async () => {
     const dir = `${import.meta.dir}/../node_modules/.test-static-${Date.now().toString(36)}`;
     await Bun.write(`${dir}/index.html`, "<html><body>studio-shell</body></html>");

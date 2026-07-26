@@ -47,6 +47,26 @@ describe("vox studio", () => {
     expect(io.outs.join("\n")).toContain("http://127.0.0.1:9999/");
   });
 
+  test("VOX_GATEWAY_TOKEN reaches the gateway when --token is absent; the flag wins", async () => {
+    const io = collectingIo();
+    const before = process.env.VOX_GATEWAY_TOKEN;
+    process.env.VOX_GATEWAY_TOKEN = "env-secret";
+    try {
+      let seen: GatewayServerOptions | undefined;
+      const capture = (options: GatewayServerOptions): GatewayServer => {
+        seen = options;
+        return fakeGateway();
+      };
+      expect(await runStudio([], config, io, capture, false)).toBe(0);
+      expect(seen?.token).toBe("env-secret");
+      expect(await runStudio(["--token", "flag-secret"], config, io, capture, false)).toBe(0);
+      expect(seen?.token).toBe("flag-secret");
+    } finally {
+      if (before === undefined) delete process.env.VOX_GATEWAY_TOKEN;
+      else process.env.VOX_GATEWAY_TOKEN = before;
+    }
+  });
+
   test("rejects a malformed port and unknown options", async () => {
     const io = collectingIo();
     await expect(runStudio(["--port", "not-a-port"], config, io, () => fakeGateway(), false))
