@@ -161,3 +161,32 @@ etiquette portion of the agent-abilities gap has fully converged both ways.
    **Not worth chasing**: PSTN telephony — that is their moat, not our battlefield.
    Ours is self-hosting + swappable engines + reproducibility, and the comparison
    table says that positioning is real.
+   *Refined 2026-07-26*: the moat is the **carrier relationship** (numbers
+   provisioned in-console), and that part stands unchallenged. But "no
+   telephony" overreached: a self-hosted deployment terminating calls through
+   **its own SIP trunk or Twilio account** is fully compatible with the
+   positioning — an adapter, not an infrastructure. Deprioritized, not
+   renounced.
+
+## Positioning clarifications — what self-hosting does and does not exclude (2026-07-26)
+
+Recorded because the boundary was mis-drawn twice in planning discussions
+before it was drawn right, and the error has a repeatable shape: taking the
+one true constraint — **we do not operate a hosted service that holds other
+people's voice data** — and over-extending it to adjacent capabilities that
+are orthogonal to who runs the servers.
+
+| Capability | Verdict |
+|---|---|
+| **Multi-tenancy** (workspaces, isolation, per-tenant quotas) | Compatible — the natural growth path of a self-hosted install (the GitLab/Nextcloud shape). An org running one instance for many teams strengthens the data-boundary pitch: *your organization's voice data never leaves your machines, and the whole organization can use it.* |
+| **A user system** (accounts, roles, identity) | Compatible — required, in fact, by the team/enterprise ladder. Design stance: an identity abstraction in the gateway, **OIDC-first** (Keycloak / Authentik / Cloudflare Access all speak it) with minimal local accounts; it is the first sub-piece of the tenancy milestone. |
+| **Compliance features** (audit logs, retention controls, encryption) | Aligned, not merely compatible — organizations choose self-hosting *because* of compliance; the software's job is to be compliance-ready, certification belongs to the deployment. |
+| **Usage accounting** | Split it: metering-for-billing external customers is the hosted business; internal quotas and chargeback are multi-tenant features. |
+| **Telephony** | See the refinement above: no carrier infrastructure of our own; SIP/Twilio adapters are fair game. |
+| **Operating voxstudio.cc with accounts** | Compatible while accounts hold identity + quota + downloads. The line is crossed only when visitor **voice assets** (recordings, cloned voices) persist on infrastructure we operate — that is a distinct business decision with retention, consent, and trust costs, not a side effect of adding login. |
+
+The ladder, each rung fully self-hosted: single operator (today) → team
+(external identity via Access/OIDC, the demo access model) → multi-tenant
+(built-in identity, owner-scoped voice bank / library / agents /
+pronunciations, per-tenant quotas). Agents ([agents.md](./agents.md)) slot in
+before tenancy and gain an owner dimension when it arrives.

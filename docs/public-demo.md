@@ -19,7 +19,13 @@ someone else's product, and three gateway guardrails that are ours.
    or when the operator deliberately opens the door wider.
 
 An open self-serve demo (per-visitor tokens with quotas) is a separate, real
-feature — priced only when the need is real.
+feature — priced only when the need is real. Its cheapest identity is Access's
+any-email-with-OTP policy plus a gateway that reads the asserted email for
+per-visitor caps — a deliberate transitional layer until the product's own
+identity abstraction lands (OIDC-first; see the positioning clarifications in
+[competitive-voice-agents.md](./competitive-voice-agents.md)). Accounts holding
+identity and quota are compatible with the positioning; visitor voice assets
+persisting on operator infrastructure are the line, and a separate decision.
 
 ## Gateway guardrails (this repo)
 
