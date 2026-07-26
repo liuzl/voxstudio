@@ -1034,6 +1034,66 @@ describe("resource ownership (docs/auth.md phase 2)", () => {
   });
 });
 
+describe("the JSON error contract the documents promise (adversarial review 2026-07-26)", () => {
+  /** Every API error must be `{"error":{"message","code"}}` — agents branch on `code`. */
+  const envelope = async (response: Response): Promise<{ status: number; code: string; message: string }> => {
+    expect(response.headers.get("content-type")).toContain("application/json");
+    const body = await response.json() as { error?: { code?: string; message?: string } };
+    return { status: response.status, code: body.error?.code ?? "", message: body.error?.message ?? "" };
+  };
+
+  test("an unauthenticated /v1 request is refused in the documented envelope", async () => {
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0, token: "gw-secret" });
+    const refused = await envelope(await fetch(new URL("/v1/engines", gateway.url)));
+    expect(refused.status).toBe(401);
+    expect(refused.code).toBe("unauthorized");
+    expect(refused.message.length).toBeGreaterThan(0);
+  });
+
+  test("a wrong method, an unknown /v1 path, and a non-upgrade socket all answer in the envelope", async () => {
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0 });
+    const wrongMethod = await envelope(await fetch(new URL("/v1/engines", gateway.url), { method: "POST" }));
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.code).toBe("method_not_allowed");
+
+    const unknown = await envelope(await fetch(new URL("/v1/nope", gateway.url)));
+    expect(unknown.status).toBe(404);
+    expect(unknown.code).toBe("not_found");
+
+    // A plain GET on the realtime path is not an upgrade.
+    const notUpgraded = await envelope(await fetch(new URL("/v1/realtime", gateway.url)));
+    expect(notUpgraded.status).toBe(426);
+    expect(notUpgraded.code).toBe("upgrade_required");
+  });
+
+  test("a cross-site upgrade is refused in the envelope too", async () => {
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0 });
+    const forbidden = await envelope(await fetch(new URL("/v1/realtime", gateway.url), {
+      headers: { origin: "https://evil.example", upgrade: "websocket", connection: "upgrade" },
+    }));
+    expect(forbidden.status).toBe(403);
+    expect(forbidden.code).toBe("forbidden_origin");
+  });
+
+  test("the app shell is still HTML — the envelope is for the API, not for pages", async () => {
+    const dir = `${import.meta.dir}/../node_modules/.test-envelope-${Date.now().toString(36)}`;
+    await Bun.write(`${dir}/index.html`, "<html><body>studio-shell</body></html>");
+    gateway = startGateway({
+      config,
+      fetch: engineFetch(),
+      port: 0,
+      staticAssets: { "/index.html": `${dir}/index.html` },
+    });
+    const page = await fetch(new URL("/settings", gateway.url));
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("studio-shell");
+    // But an API path under the same gateway keeps the JSON contract.
+    const api = await envelope(await fetch(new URL("/v1/nope", gateway.url)));
+    expect(api.code).toBe("not_found");
+    await Bun.$`rm -rf ${dir}`.quiet().nothrow();
+  });
+});
+
 describe("voice namespace enforcement on every synthesis path (adversarial review 2026-07-26)", () => {
   const asAlice = (request: Request): AuthContext => ({
     userId: request.headers.get("x-test-user") ?? new URL(request.url).searchParams.get("user") ?? "alice",

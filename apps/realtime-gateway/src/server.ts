@@ -45,6 +45,11 @@ export interface GatewayServerOptions {
     /** Public origin for links and origin checks; defaults to the gateway's own URL. */
     baseUrl?: string;
     sendVerificationEmail?: (email: string, url: string) => Promise<void>;
+    /**
+     * Relaxes the shipped brute-force limits on /v1/auth/*. A deployment should not set
+     * this; a test suite that signs up repeatedly must.
+     */
+    rateLimit?: { window: number; max: number };
   };
   /**
    * Per-account usage quota (docs/auth.md phase 4): `operations` chargeable calls per
@@ -131,6 +136,16 @@ const voiceEntryPattern = /^\/v1\/voices\/[A-Za-z0-9._-]{1,64}$/;
 const libraryEntryPattern = /^\/v1\/library\/([A-Za-z0-9-]{1,64})(\/audio|\/promote)?$/;
 const voiceIdPattern = /^[A-Za-z0-9._-]{1,64}$/;
 
+/**
+ * Every API error is `{"error":{"message","code"}}` — the contract `/agent` and the
+ * OpenAPI document state, and the one agents are told to branch on. Bare-string
+ * responses used to escape it (adversarial review 2026-07-26); this is the only way an
+ * API error leaves the gateway now. The app shell is unaffected: it is a page, not an API.
+ */
+function problem(status: number, code: string, message: string): Response {
+  return Response.json({ error: { message, code } }, { status });
+}
+
 /** Every 400 for an unusable voice name reads the same, whichever path refused it. */
 function badVoiceId(): Response {
   return Response.json(
@@ -143,7 +158,13 @@ function badEngine(reason: string): Response {
   return Response.json({ error: { message: reason, code: "unknown_engine" } }, { status: 400 });
 }
 
-function rejection(sessionId: string, reason: string, command?: GatewayCommand): string {
+function rejection(
+  sessionId: string,
+  reason: string,
+  command?: GatewayCommand,
+  /** Retry guidance, when the refusal is one the client can wait out (a spent quota). */
+  retry?: { retryAfterSeconds: number; requestId: string },
+): string {
   return JSON.stringify({
     v: protocolVersion,
     sequence: 0,
@@ -152,6 +173,7 @@ function rejection(sessionId: string, reason: string, command?: GatewayCommand):
     type: "command.rejected",
     reason,
     ...(command === undefined ? {} : { commandType: command.type, idempotencyKey: command.idempotencyKey }),
+    ...(retry === undefined ? {} : retry),
   });
 }
 
@@ -275,6 +297,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       secret: configured.secret,
       baseUrl: configured.baseUrl ?? server.url.toString().replace(/\/$/, ""),
       sendVerificationEmail: configured.sendVerificationEmail,
+      rateLimit: configured.rateLimit,
       log,
     }));
     return accountsInstance;
@@ -335,7 +358,14 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     }
   };
 
-  const proxy = async (request: Request, target: ResolvedEngineConfig, path: string, slot: string): Promise<Response> => {
+  const proxy = async (
+    request: Request,
+    target: ResolvedEngineConfig,
+    path: string,
+    slot: string,
+    /** Called when the engine could not be reached at all, so a charge can be undone. */
+    onUnreachable?: () => void,
+  ): Promise<Response> => {
     const headers = new Headers();
     const contentType = request.headers.get("content-type");
     if (contentType) headers.set("content-type", contentType);
@@ -351,6 +381,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       });
     } catch (error) {
       log(`facade: ${slot} unreachable: ${error instanceof Error ? error.message : String(error)}`);
+      onUnreachable?.();
       return Response.json({ error: { message: `${slot} engine unreachable`, code: "engine_unreachable" } }, { status: 502 });
     }
     // Status and body pass through; engine-identifying headers do not.
@@ -508,6 +539,10 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       config: options.config,
       owner,
       mapVoiceId: ownerVoice,
+      // A conversation is metered per turn: one charge at start bought the session, and
+      // each turn's model work costs one more (adversarial review 2026-07-26 — a single
+      // charge used to buy unbounded engine work).
+      ...(quota === undefined ? {} : { chargeTurn: () => quota.charge(owner) }),
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       ...(options.pcmDecoder === undefined ? {} : { pcmDecoder: options.pcmDecoder }),
       // The session tools see the same sanitized surfaces the facade serves.
@@ -529,6 +564,14 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         // The session speaks its owner's namespace; the engine hears the mapped id.
         const engineId = ownerVoice(id);
         if (engineId === null) throw new Error(`voice id ${id} cannot be used in this account's namespace`);
+        // Registering by voice reaches the same engine as POST /v1/voices, so it costs
+        // the same (adversarial review 2026-07-26: this path used to be free).
+        if (quota !== undefined) {
+          const verdict = quota.charge(owner);
+          if (!verdict.allowed) {
+            throw new Error(`quota exhausted: retry in ${verdict.retryAfterSeconds ?? 0}s`);
+          }
+        }
         const selected = engineByCapability(options.config, "tts", "clone")
           ?? ([roleInstance(options.config, "tts"), engine(options.config, "tts")] as const);
         const [engineName, target] = selected;
@@ -584,12 +627,15 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       try {
         session = createSession([], ws.data.ctx.userId);
       } catch (error) {
-        const reason = error instanceof CapacityError
-          ? "session_capacity"
-          : error instanceof QuotaError
-            ? "quota_exceeded"
-            : "session_unavailable";
-        sink.send(rejection("", reason, command));
+        if (error instanceof QuotaError) {
+          // The same contract the REST 429 carries: how long to wait, and an id to quote.
+          sink.send(rejection("", "quota_exceeded", command, {
+            retryAfterSeconds: error.retryAfterSeconds,
+            requestId: crypto.randomUUID(),
+          }));
+          return;
+        }
+        sink.send(rejection("", error instanceof CapacityError ? "session_capacity" : "session_unavailable", command));
         return;
       }
       ws.data.session = session;
@@ -649,7 +695,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // self-hosted studio mints no keys and its paths must stay as they were.
       if (options.accounts !== undefined && discoveryRoutes[url.pathname] !== undefined) {
         if (request.method !== "GET" && request.method !== "HEAD") {
-          return new Response("method not allowed", { status: 405 });
+          return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
         }
         return (discoveryRoutes[url.pathname] as () => Response)();
       }
@@ -667,21 +713,36 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         : options.accounts !== undefined
           ? await (await accountsFor()).resolve(request)
           : resolveAuthContext(request, options);
-      if (ctx === null) return new Response("unauthorized", { status: 401 });
+      if (ctx === null) return problem(401, "unauthorized", "a valid credential is required");
       // Charged after identity, before the work: the account is known, and nothing
       // upstream has been touched yet.
+      let charged = false;
       if (quota !== undefined && chargeable(request.method, url.pathname)) {
         const verdict = quota.charge(ctx.userId);
         if (!verdict.allowed) {
           log(`quota: ${request.method} ${url.pathname} refused — allowance spent`);
           return quotaRefusal(verdict.retryAfterSeconds as number);
         }
+        charged = true;
       }
+      /**
+       * A refusal this gateway makes itself, or an engine it could not reach, spent no
+       * model time — so it must spend no allowance either (adversarial review
+       * 2026-07-26). Wraps only the gateway's own pre-engine refusals; an error the
+       * engine itself returned is work that happened and stays charged.
+       */
+      const refund = (): void => {
+        if (charged && quota !== undefined) quota.refund(ctx.userId);
+      };
+      const refunded = (response: Response): Response => {
+        refund();
+        return response;
+      };
       if (url.pathname === "/v1/realtime") {
         // Browsers always send Origin on an upgrade; a cross-site one is refused before
         // the socket exists (CSWSH under a token, CSRF under a cookie session). Hosted
         // deployments match the full public origin and get no loopback exception.
-        if (!upgradeOriginAllowed(request, originPolicy())) return new Response("forbidden origin", { status: 403 });
+        if (!upgradeOriginAllowed(request, originPolicy())) return problem(403, "forbidden_origin", "this origin may not open a realtime socket");
         // Dialect detection (openai-realtime-adapter.md, decision 1): the OpenAI SDKs
         // derive this exact path from their baseURL and always carry ?model= plus a
         // `realtime` WebSocket subprotocol; native clients send neither. The choice must
@@ -703,10 +764,10 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         // first choice echoed back by Bun's upgrade; adding it manually here duplicates
         // the header and fails the handshake.
         if (server.upgrade(request, { data })) return undefined;
-        return new Response("expected a WebSocket upgrade", { status: 426 });
+        return problem(426, "upgrade_required", "/v1/realtime speaks WebSocket; upgrade the connection");
       }
       if (url.pathname === "/v1/engines") {
-        if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
+        if (request.method !== "GET") return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
         return engineList();
       }
       // Demo mode (docs/public-demo.md): the registry is read-only — picking voices is
@@ -720,8 +781,8 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // is malformed, unfittable, or a raw engine id (adversarial review 2026-07-26).
       const engineVoice = (displayName: string): string | null => toEngineVoiceId(ctx.userId, displayName);
       if (url.pathname === "/v1/design-profiles") {
-        if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
-        if (options.demoMode === true) return demoRefusal();
+        if (request.method !== "POST") return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
+        if (options.demoMode === true) return refunded(demoRefusal());
         // Zero-shot voice design is an engine capability, not a given.
         const selected = selectEngine(url, "tts", "tts", "design");
         if (selected instanceof Response) return selected;
@@ -729,36 +790,36 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         // rest of the body rides through untouched.
         return (async (): Promise<Response> => {
           const body = await request.json().catch(() => null) as { id?: unknown } | null;
-          if (body === null || typeof body.id !== "string") return badVoiceId();
+          if (body === null || typeof body.id !== "string") return refunded(badVoiceId());
           const engineId = engineVoice(body.id);
-          if (engineId === null) return badVoiceId();
+          if (engineId === null) return refunded(badVoiceId());
           const rewritten = new Request(request.url, {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ ...body, id: engineId }),
           });
-          return proxy(rewritten, selected[1], url.pathname, selected[0]);
+          return proxy(rewritten, selected[1], url.pathname, selected[0], refund);
         })();
       }
       if (url.pathname === "/v1/voices") {
         if (request.method === "GET") return aggregatedVoices(ctx.userId);
-        if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
-        if (options.demoMode === true) return demoRefusal();
+        if (request.method !== "POST") return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
+        if (options.demoMode === true) return refunded(demoRefusal());
         // Registration needs a registry: route to the clone-capable instance by default.
         const selected = selectEngine(url, "tts", "tts", "clone");
         if (selected instanceof Response) return selected;
         return (async (): Promise<Response> => {
           const form = await request.formData().catch(() => null);
           const id = form?.get("id");
-          if (form === null || typeof id !== "string") return badVoiceId();
+          if (form === null || typeof id !== "string") return refunded(badVoiceId());
           const engineId = engineVoice(id);
-          if (engineId === null) return badVoiceId();
+          if (engineId === null) return refunded(badVoiceId());
           form.set("id", engineId);
-          return proxy(new Request(request.url, { method: "POST", body: form }), selected[1], url.pathname, selected[0]);
+          return proxy(new Request(request.url, { method: "POST", body: form }), selected[1], url.pathname, selected[0], refund);
         })();
       }
       if (voiceEntryPattern.test(url.pathname)) {
-        if (!["GET", "DELETE"].includes(request.method)) return new Response("method not allowed", { status: 405 });
+        if (!["GET", "DELETE"].includes(request.method)) return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
         if (request.method === "DELETE" && options.demoMode === true) return demoRefusal();
         const selected = selectEngine(url, "tts", "tts", "clone");
         if (selected instanceof Response) return selected;
@@ -770,24 +831,24 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         // Absent library = the deployment never opted into retention; the panel reads the
         // structured code and explains instead of erroring.
         if (!library) {
-          return Response.json(
+          return refunded(Response.json(
             { error: { message: "the capture library is not enabled on this gateway (start with --library DIR)", code: "library_disabled" } },
             { status: 404 },
-          );
+          ));
         }
         // The shutdown window: close() is draining in-flight work; new work must not race it.
         if (library.isClosed) {
-          return Response.json(
+          return refunded(Response.json(
             { error: { message: "the capture library is shutting down", code: "library_closing" } },
             { status: 503 },
-          );
+          ));
         }
         const notFound = (): Response => Response.json(
           { error: { message: "no such capture", code: "unknown_capture" } },
           { status: 404 },
         );
         if (url.pathname === "/v1/library") {
-          if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
+          if (request.method !== "GET") return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
           const bounded = (name: string, fallback: number, max: number): number => {
             const parsed = Number(url.searchParams.get(name) ?? fallback);
             return Number.isInteger(parsed) && parsed >= 0 ? Math.min(parsed, max) : fallback;
@@ -795,11 +856,11 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           return Response.json(library.list(bounded("limit", 50, 200), bounded("offset", 0, Number.MAX_SAFE_INTEGER), ctx.userId));
         }
         const entry = libraryEntryPattern.exec(url.pathname);
-        if (!entry) return new Response("not found", { status: 404 });
+        if (!entry) return problem(404, "not_found", "no such route");
         const captureId = entry[1] as string;
         const sub = entry[2];
         if (sub === "/audio") {
-          if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
+          if (request.method !== "GET") return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
           if (!library.get(captureId, ctx.userId)) return notFound();
           return new Response(Bun.file(library.audioPath(captureId)), {
             headers: { "content-type": "audio/wav", "cache-control": "no-cache" },
@@ -811,29 +872,26 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           { status: 503 },
         );
         if (sub === "/promote") {
-          if (request.method !== "POST") return new Response("method not allowed", { status: 405 });
+          if (request.method !== "POST") return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
           return (async (): Promise<Response> => {
             const body = await request.json().catch(() => ({})) as { voice_id?: unknown };
             const voiceId = typeof body.voice_id === "string" ? body.voice_id.trim() : "";
             if (!voiceIdPattern.test(voiceId)) {
-              return Response.json({ error: { message: "voice_id must match [A-Za-z0-9._-]{1,64}", code: "bad_voice_id" } }, { status: 400 });
+              return refunded(problem(400, "bad_voice_id", "voice_id must match [A-Za-z0-9._-]{1,64}"));
             }
             // The record keeps the display name; the engine hears the namespaced id.
             const engineVoiceId = engineVoice(voiceId);
-            if (engineVoiceId === null) return badVoiceId();
+            if (engineVoiceId === null) return refunded(badVoiceId());
             // The whole flow — validate, engine round-trip, mark — holds the capture's
             // mutation lock: a concurrent delete waits its turn instead of leaving the
             // clone engine holding a voice the library no longer records.
             return library.runExclusive(captureId, async (): Promise<Response> => {
               const capture = library.get(captureId, ctx.userId);
-              if (!capture) return notFound();
+              if (!capture) return refunded(notFound());
               // A voice sample needs its verbatim text; the correction is the reference.
               const text = (capture.corrected ?? capture.transcript).trim();
               if (text === "") {
-                return Response.json(
-                  { error: { message: "the capture has no transcript; correct it before promoting", code: "empty_transcript" } },
-                  { status: 400 },
-                );
+                return refunded(problem(400, "empty_transcript", "the capture has no transcript; correct it before promoting"));
               }
               const selected = selectEngine(url, "tts", "tts", "clone");
               if (selected instanceof Response) return selected;
@@ -849,6 +907,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
                 upstream = await fetchImpl(new URL("/v1/voices", target.baseUrl), { method: "POST", headers, body: form });
               } catch (error) {
                 log(`library: promote to ${engineName} unreachable: ${error instanceof Error ? error.message : String(error)}`);
+                refund();
                 return Response.json({ error: { message: `${engineName} engine unreachable`, code: "engine_unreachable" } }, { status: 502 });
               }
               if (!upstream.ok) {
@@ -892,11 +951,11 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           const capture = library.get(captureId, ctx.userId);
           return capture ? Response.json(capture) : notFound();
         }
-        return new Response("method not allowed", { status: 405 });
+        return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
       }
       const route = facadeRoutes[url.pathname];
       if (route) {
-        if (!route.methods.includes(request.method)) return new Response("method not allowed", { status: 405 });
+        if (!route.methods.includes(request.method)) return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
         const selected = selectEngine(url, route.kind, route.role);
         if (selected instanceof Response) return selected;
         // Synthesis names a voice, so it is an ownership path too: hiding a voice from
@@ -906,11 +965,11 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         if (url.pathname === "/v1/audio/speech") {
           return (async (): Promise<Response> => {
             const body = await request.json().catch(() => null) as Record<string, unknown> | null;
-            if (body === null) return Response.json({ error: { message: "expected a JSON body", code: "bad_request" } }, { status: 400 });
+            if (body === null) return refunded(problem(400, "bad_request", "expected a JSON body"));
             if (body.voice !== undefined) {
-              if (typeof body.voice !== "string") return badVoiceId();
+              if (typeof body.voice !== "string") return refunded(badVoiceId());
               const engineId = engineVoice(body.voice);
-              if (engineId === null) return badVoiceId();
+              if (engineId === null) return refunded(badVoiceId());
               body.voice = engineId;
             }
             const rewritten = new Request(request.url, {
@@ -918,12 +977,12 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
               headers: { "content-type": "application/json" },
               body: JSON.stringify(body),
             });
-            return proxy(rewritten, selected[1], url.pathname, selected[0]);
+            return proxy(rewritten, selected[1], url.pathname, selected[0], refund);
           })();
         }
-        return proxy(request, selected[1], url.pathname, selected[0]);
+        return proxy(request, selected[1], url.pathname, selected[0], refund);
       }
-      return new Response("not found", { status: 404 });
+      return problem(404, "not_found", "no such route");
     },
     websocket: {
       open(ws) {

@@ -54,7 +54,8 @@ function accountsGateway(extra: { sendVerificationEmail?: (email: string, url: s
     config,
     fetch: engineFetch(),
     port: 0,
-    accounts: { dir, secret: SECRET, ...(extra.sendVerificationEmail === undefined ? {} : { sendVerificationEmail: extra.sendVerificationEmail }) },
+    // Signing up many times from one address is a test artifact, not a threat model.
+    accounts: { dir, secret: SECRET, rateLimit: { window: 60, max: 1_000 }, ...(extra.sendVerificationEmail === undefined ? {} : { sendVerificationEmail: extra.sendVerificationEmail }) },
     ...(extra.log === undefined ? {} : { log: extra.log }),
   });
 }
@@ -318,7 +319,7 @@ describe("hosted accounts (docs/auth.md phase 3)", () => {
     gateway = startGateway({
       config,
       port: 0,
-      accounts: { dir, secret: SECRET },
+      accounts: { dir, secret: SECRET, rateLimit: { window: 60, max: 1_000 } },
       fetch: async (input, init) => {
         const request = new Request(input instanceof Request ? input : String(input), init);
         const path = new URL(request.url).pathname;
@@ -461,7 +462,7 @@ describe("hosted accounts (docs/auth.md phase 3)", () => {
       fetch: engineFetch(),
       port: 0,
       libraryDir,
-      accounts: { dir, secret: SECRET, baseUrl: "https://voxstudio.example" },
+      accounts: { dir, secret: SECRET, baseUrl: "https://voxstudio.example", rateLimit: { window: 60, max: 1_000 } },
     });
 
     const document = await (await fetch(new URL("/openapi.json", gateway.url))).json() as { servers: { url: string }[]; paths: Record<string, unknown> };
@@ -504,7 +505,7 @@ describe("hosted accounts (docs/auth.md phase 3)", () => {
         config,
         fetch: engineFetch(),
         port: 0,
-        accounts: { dir, secret: SECRET },
+        accounts: { dir, secret: SECRET, rateLimit: { window: 60, max: 1_000 } },
         quota: { operations, windowSeconds },
       });
     }

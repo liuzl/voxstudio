@@ -49,6 +49,14 @@ export interface GatewaySessionOptions {
    * review 2026-07-26). Absent, voices pass through unchanged.
    */
   mapVoiceId?: (displayName: string) => string | null;
+  /**
+   * Asks whether this conversation may spend one more turn (docs/auth.md phase 4).
+   * Called once per conversational turn, when the user's utterance is finalized and
+   * before the reply's model work begins — never per audio frame. A refusal ends the
+   * session with a notice; the turn already in flight may finish, so a conversation
+   * overshoots its allowance by at most one turn.
+   */
+  chargeTurn?: (turnId: string) => { allowed: boolean; retryAfterSeconds?: number };
   /** Decodes compressed (Opus) TTS streams; without it engines stream raw PCM. */
   pcmDecoder?: PcmStreamDecoder;
   /** The union voice bank, for the set_voice tool's validation and engine routing. */
@@ -175,6 +183,8 @@ export class GatewaySession {
   private playbackWaiter: { turnId: string; resolve: () => void } | undefined;
   private lastAckedTurnId: string | undefined;
   private readonly sawDelta = new Set<string>();
+  /** Turns already charged, so a revision of one is not billed twice. */
+  private readonly chargedTurns = new Set<string>();
   /** Set by the end_call tool: hang up after the current turn finishes audibly. */
   private endAfterTurn = false;
   private controls: ConversationControls | undefined;
@@ -340,7 +350,21 @@ export class GatewaySession {
         speechStream: (input: SpeechInput, signal?: AbortSignal) => ttsClient.speechStream(this.ownedVoice(input), signal),
       },
     }, conversationOptions, {
-      onTranscript: (text, turn) => this.emit({ type: "transcript.final", turnId: turn.id, revision: turn.revision, text }),
+      onTranscript: (text, turn) => {
+        this.emit({ type: "transcript.final", turnId: turn.id, revision: turn.revision, text });
+        // The turn's model work starts right after this callback returns, so this is
+        // where a conversation's cost is metered — once per turn, not per revision.
+        const charge = this.options.chargeTurn;
+        if (charge === undefined || this.chargedTurns.has(turn.id)) return;
+        this.chargedTurns.add(turn.id);
+        const verdict = charge(turn.id);
+        if (verdict.allowed) return;
+        this.emit({
+          type: "session.notice",
+          message: `quota exhausted: this account's allowance is spent — retry in ${verdict.retryAfterSeconds ?? 0}s`,
+        });
+        this.stop();
+      },
       onReplyDelta: (text, turn) => {
         if (text.length > 0 && this.options.log && !this.sawDelta.has(`${turn.id}/${turn.revision}`)) {
           this.sawDelta.add(`${turn.id}/${turn.revision}`);

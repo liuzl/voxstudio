@@ -29,8 +29,38 @@ export interface AccountsOptions {
    * service). Absent: verification is disabled and loudly logged.
    */
   sendVerificationEmail?: ((email: string, url: string) => Promise<void>) | undefined;
+  /**
+   * Overrides the shipped brute-force limits. Set only to relax them deliberately (a
+   * test suite that signs up repeatedly); a deployment should keep the defaults.
+   */
+  rateLimit?: { window: number; max: number } | undefined;
   log?: (line: string) => void;
 }
+
+/**
+ * Brute-force protection, stated here rather than inherited from the environment.
+ * Better Auth enables its limiter only when NODE_ENV is "production", which made the
+ * only unauthenticated write surface — sign-up and sign-in — unprotected everywhere
+ * else (adversarial review 2026-07-26). These limits are per client address, applied
+ * whatever the environment says.
+ *
+ * Buckets are keyed on the client address, which behind a tunnel means the forwarded
+ * one: a deployment that does not pass the real client IP through puts every visitor in
+ * one bucket, and the limits below would then apply to the whole world at once.
+ */
+const authRateLimitDefaults = {
+  /** The blanket allowance across /v1/auth/*. */
+  window: 60,
+  max: 60,
+  customRules: {
+    // Password guessing: a human needs a handful of tries, an attacker needs thousands.
+    "/sign-in/email": { window: 60, max: 5 },
+    // Account creation on a public entrance, bounded without blocking a real signup.
+    "/sign-up/email": { window: 3_600, max: 5 },
+    "/send-verification-email": { window: 3_600, max: 5 },
+    "/forget-password": { window: 3_600, max: 5 },
+  },
+} as const;
 
 export interface Accounts {
   /** Handles /v1/auth/* — reachable without a resolved identity (login needs none). */
@@ -73,6 +103,19 @@ export async function startAccounts(options: AccountsOptions): Promise<Accounts>
     secret: options.secret,
     baseURL: options.baseUrl,
     basePath: "/v1/auth",
+    // Always on, never inherited from NODE_ENV. An override applies to the sensitive
+    // routes too: Better Auth ships its own stricter built-ins for sign-up and sign-in
+    // that a blanket `max` cannot raise, so a "relaxed" limiter that did not restate
+    // them would silently stay strict.
+    rateLimit: options.rateLimit === undefined
+      ? { enabled: true, ...authRateLimitDefaults }
+      : {
+          enabled: true,
+          ...options.rateLimit,
+          customRules: Object.fromEntries(
+            Object.keys(authRateLimitDefaults.customRules).map(route => [route, options.rateLimit as { window: number; max: number }]),
+          ),
+        },
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: sender !== undefined,

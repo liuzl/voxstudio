@@ -267,17 +267,49 @@ phase 3 is the only dependency-bearing step and is confined to one directory.
 
    **Charged** (each one unit): `POST /v1/audio/speech`,
    `/v1/audio/transcriptions`, `/v1/chat/completions`, `/v1/voices`,
-   `/v1/design-profiles`, `/v1/library/{id}/promote`, and starting a realtime
-   conversation (`session.start`, charged once — never per audio frame, which would both
-   mis-price a conversation and put work on the audio path). **Free**: every GET,
-   correcting or deleting a capture, deleting a voice, `/healthz`, `/v1/auth/*`, and the
-   discovery surface.
+   `/v1/design-profiles`, `/v1/library/{id}/promote`, starting a realtime conversation
+   (`session.start`), **each turn within a conversation**, and registering a voice
+   through the spoken Studio tool (it reaches the same engine as `POST /v1/voices`).
+   **Free**: every GET, correcting or deleting a capture, deleting a voice, `/healthz`,
+   `/v1/auth/*`, and the discovery surface.
+
+   A conversation is metered **per turn, never per audio frame** — per-frame accounting
+   would mis-price a conversation and put work on the audio path. The turn is charged
+   when the user's utterance is finalized, before the reply's model work begins; a
+   revision of the same turn (a barge-in) is not charged twice. When the allowance runs
+   out mid-conversation the session emits a notice and ends, so the turn already in
+   flight may finish: **a conversation overshoots by at most one turn**. Charging only at
+   `session.start` was the original design and it was wrong — one charge bought unbounded
+   engine work (adversarial review 2026-07-26).
+
+   **A refusal the gateway makes itself costs nothing.** A charge is taken before the
+   work, then given back when the gateway refuses the request on its own (a malformed
+   body, an unusable voice name, demo mode, a disabled or closing library, a capture that
+   is not the caller's) or could not reach the engine at all (`engine_unreachable`). An
+   error the *engine* returned is work that happened and stays charged.
 
    A refusal is one shape everywhere: HTTP 429 with `Retry-After` and `x-request-id`
    headers, and a body of `{"error":{"message","code":"quota_exceeded","requestId",
    "retryAfterSeconds"}}` — the same envelope as every other error here, plus the wait
    and an id to quote. On the realtime socket the refusal is a `command.rejected` with
-   reason `quota_exceeded`, the mechanism session capacity already used.
+   reason `quota_exceeded`, the mechanism session capacity already used, carrying the
+   same `retryAfterSeconds` and `requestId` (additive protocol fields) so a socket client
+   gets the same guidance a REST client does.
+
+   **Every API error uses that envelope.** `{"error":{"message","code"}}` is what `/agent`
+   and the Skill tell agents to branch on, so the gateway's own refusals — 401, 403, 404,
+   405, 426 — are JSON too, not bare strings (they were, until the adversarial review).
+   The app shell is unaffected: it is a page, not an API.
+
+   **Brute-force protection is stated, not inherited.** Better Auth enables its limiter
+   only when `NODE_ENV=production`, which left the one unauthenticated write surface —
+   sign-up and sign-in — unprotected everywhere else. The accounts module now configures
+   it explicitly and unconditionally: 60 requests/minute across `/v1/auth/*`, 5/minute on
+   `/sign-in/email`, and 5/hour each on `/sign-up/email`, `/send-verification-email`, and
+   `/forget-password`. A deployment may relax these deliberately (a test suite must), and
+   an override restates the per-route rules rather than silently leaving them strict.
+   **Buckets key on the client address**, so a tunnel that does not forward the real
+   client IP puts every visitor in one bucket — an ops requirement, listed below.
 
    Accounts-only and off by default: `--quota` without `--accounts` is refused at
    startup (a self-hosted studio would only be metering its own operator), a typo fails

@@ -72,6 +72,18 @@ export class QuotaLedger {
     return { allowed: true, remaining: this.operations - window.count };
   }
 
+  /**
+   * Give a charge back. Used when the gateway refused a request itself, or could not
+   * reach an engine: no model time was spent, so the allowance must not be either
+   * (adversarial review 2026-07-26). Never drops below zero and never moves the
+   * window — a refund undoes a charge, it does not extend anything.
+   */
+  refund(userId: string): void {
+    const window = this.windows.get(userId);
+    if (window === undefined || this.clock() >= window.resetAt) return;
+    window.count = Math.max(0, window.count - 1);
+  }
+
   /** Drop windows that have passed, so an idle account costs nothing to remember. */
   private sweep(now: number): void {
     for (const [userId, window] of this.windows) {

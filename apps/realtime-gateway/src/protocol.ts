@@ -84,7 +84,15 @@ export type GatewayEventPayload =
   | { type: "session.notice"; message: string }
   | { type: "command.accepted"; commandType: GatewayCommandType; idempotencyKey: string }
   | { type: "command.duplicate"; commandType: GatewayCommandType; idempotencyKey: string }
-  | { type: "command.rejected"; reason: string; commandType?: GatewayCommandType; idempotencyKey?: string }
+  | {
+      type: "command.rejected";
+      reason: string;
+      commandType?: GatewayCommandType;
+      idempotencyKey?: string;
+      /** Present when the refusal is one the client can wait out (a spent quota). */
+      retryAfterSeconds?: number;
+      requestId?: string;
+    }
   | { type: "error"; code: string; message: string; recoverable: boolean; turnId?: string };
 
 export type GatewayEvent = GatewayEventPayload & {
