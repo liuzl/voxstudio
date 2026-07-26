@@ -420,6 +420,81 @@ describe("hosted accounts (docs/auth.md phase 3)", () => {
     }
   });
 
+  test("the discovery surface is served without a credential, with the right content types", async () => {
+    gateway = accountsGateway();
+    const fetchDoc = (path: string): Promise<Response> => fetch(new URL(path, gateway?.url));
+
+    const page = await fetchDoc("/agent");
+    expect(page.status).toBe(200);
+    // Markdown as text/plain: inline in any browser, no markup for an agent to strip.
+    expect(page.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    const body = await page.text();
+    expect(body).toContain("Authorization: Bearer <key>");
+    expect(body).toContain("x-api-key");
+    expect(body).toContain("Retry-After");
+
+    const index = await fetchDoc("/llms.txt");
+    expect(index.status).toBe(200);
+    expect(index.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(await index.text()).toContain("# voxstudio");
+
+    const contract = await fetchDoc("/openapi.json");
+    expect(contract.status).toBe(200);
+    expect(contract.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    const document = await contract.json() as { openapi: string; servers: { url: string }[]; paths: Record<string, unknown> };
+    expect(document.openapi).toBe("3.1.0");
+    // The server URL is this deployment, and the library is off here so its paths are absent.
+    expect(document.servers[0]?.url).toBe(new URL(gateway.url).origin);
+    expect(Object.keys(document.paths).some(path => path.startsWith("/v1/library"))).toBe(false);
+
+    // Read-only: the surface is documentation, not an endpoint to poke.
+    expect((await fetch(new URL("/agent", gateway.url), { method: "POST" })).status).toBe(405);
+  });
+
+  test("the discovery documents describe the deployment they are served from", async () => {
+    const dir = tempDir();
+    dirs.push(dir);
+    const libraryDir = tempDir();
+    dirs.push(libraryDir);
+    gateway = startGateway({
+      config,
+      fetch: engineFetch(),
+      port: 0,
+      libraryDir,
+      accounts: { dir, secret: SECRET, baseUrl: "https://voxstudio.example" },
+    });
+
+    const document = await (await fetch(new URL("/openapi.json", gateway.url))).json() as { servers: { url: string }[]; paths: Record<string, unknown> };
+    // A tunnelled deployment documents its public origin, not the loopback bind.
+    expect(document.servers[0]?.url).toBe("https://voxstudio.example");
+    // With a library configured, its routes are part of the contract.
+    expect(document.paths["/v1/library"]).toBeDefined();
+    expect(document.paths["/v1/library/{id}/promote"]).toBeDefined();
+
+    const page = await (await fetch(new URL("/agent", gateway.url))).text();
+    expect(page).toContain("https://voxstudio.example/llms.txt");
+    expect(page).not.toContain("library is not enabled");
+  });
+
+  test("a self-hosted studio has no discovery surface — those paths stay the app shell", async () => {
+    const assets = tempDir();
+    dirs.push(assets);
+    await Bun.write(`${assets}/index.html`, "<html><body>studio-shell</body></html>");
+    gateway = startGateway({
+      config,
+      fetch: engineFetch(),
+      port: 0,
+      staticAssets: { "/index.html": `${assets}/index.html` },
+    });
+
+    // Not the agent page: the SPA fallback, exactly as before this feature existed.
+    for (const path of ["/agent", "/llms.txt", "/openapi.json"]) {
+      const response = await fetch(new URL(path, gateway.url));
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("studio-shell");
+    }
+  });
+
   test("voice namespaces are per account: two users, same display name, no collision", async () => {
     gateway = accountsGateway();
     const frank = await signUp(gateway.url, "frank@test.dev");

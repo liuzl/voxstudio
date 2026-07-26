@@ -12,6 +12,7 @@ import { isLoopbackHost, resolveAuthContext, upgradeOriginAllowed } from "./auth
 // only when a deployment configured accounts (docs/auth.md phase 3).
 import type { Accounts } from "./auth/accounts";
 import { fromEngineVoiceId, toEngineVoiceId } from "./voice-namespace";
+import { agentPage, llmsTxt, openApiDocument, type DiscoveryOptions } from "./discovery";
 import { CaptureLibrary } from "./library";
 import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand } from "./protocol";
 import { studioToolNames } from "@voxstudio/conversation";
@@ -185,6 +186,26 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       }
     }
     return { allowedOrigins: [...origins] };
+  };
+  /**
+   * The discovery documents, built per request so they always describe this deployment
+   * as it is now (library on or off, demo or not) rather than a snapshot of startup.
+   * Cache-Control is short: they are small, and a stale contract is worse than a fetch.
+   */
+  const discoveryOptions = (): DiscoveryOptions => ({
+    baseUrl: options.accounts?.baseUrl ?? server.url.toString(),
+    library: library !== undefined,
+    demo: options.demoMode === true,
+  });
+  const text = (body: string, contentType: string): Response => new Response(body, {
+    headers: { "content-type": contentType, "cache-control": "public, max-age=300" },
+  });
+  const discoveryRoutes: Record<string, () => Response> = {
+    // Markdown as text/plain: renders inline in every browser, and an agent gets the
+    // page with no markup to strip.
+    "/agent": () => text(agentPage(discoveryOptions()), "text/plain; charset=utf-8"),
+    "/llms.txt": () => text(llmsTxt(discoveryOptions()), "text/plain; charset=utf-8"),
+    "/openapi.json": () => text(JSON.stringify(openApiDocument(discoveryOptions()), null, 2), "application/json; charset=utf-8"),
   };
   let accountsInstance: Promise<Accounts> | undefined;
   const accountsFor = (): Promise<Accounts> => {
@@ -539,6 +560,15 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           sessions: sessions.size,
           auth: options.accounts === undefined ? "self" : "accounts",
         });
+      }
+      // The discovery surface (docs/auth.md): unauthenticated by necessity — an agent
+      // reads it to learn how to get a credential — and hosted-only, since a
+      // self-hosted studio mints no keys and its paths must stay as they were.
+      if (options.accounts !== undefined && discoveryRoutes[url.pathname] !== undefined) {
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          return new Response("method not allowed", { status: 405 });
+        }
+        return (discoveryRoutes[url.pathname] as () => Response)();
       }
       const page = serveStatic(request, url);
       if (page) return page;

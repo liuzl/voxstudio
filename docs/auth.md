@@ -133,6 +133,19 @@ What transfers is the shape, not the policy:
   Alongside them, a **thin Skill** that teaches only discovery and the invocation
   contract — obtain a key, call `/v1`, handle 401/429 — and carries no business logic;
   the API stays the single source of behavior.
+  **Delivered 2026-07-26.** All three are unauthenticated (an agent must be able to learn
+  how to get a credential before it has one), read-only (`405` on anything else), and
+  **hosted-only**: on a self-hosted deployment those paths remain the app shell, because a
+  studio with no accounts mints no keys and its behavior must not change. The documents are
+  built per request from the live configuration — the library's routes appear in the
+  OpenAPI paths only when the library is on, the demo-mode refusal is stated only when
+  demo mode is set, and the server URL is the deployment's public origin. `/agent` and
+  `/llms.txt` are markdown served as `text/plain; charset=utf-8`: inline in every browser,
+  no markup for an agent to strip. The OpenAPI document describes exactly the implemented
+  paths and deliberately omits two things — the realtime WebSocket (not an OpenAPI shape)
+  and `/v1/auth/*` (the authentication library's own browser surface, not a contract this
+  project stabilizes). The Skill lives at `skills/vox-api/`; a test holds it to the same
+  headers and error codes the gateway emits, and to carrying no install or run steps.
 - The doors do not change: humans keep the Better Auth cookie session; agents, CLI,
   and automation enter with an API key belonging to the same userId, at web parity on
   launch day (decision 6). The discovery artifacts only make that door findable.
