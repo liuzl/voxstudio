@@ -20,7 +20,12 @@ promoted ones never — ingest is refused instead once they alone fill the quota
 --accounts DIR (or VOX_GATEWAY_ACCOUNTS) turns on hosted accounts (docs/auth.md):
 auth.db in DIR, signup/login at /v1/auth, cookie sessions and API keys instead of
 the shared token (the two are mutually exclusive). Requires VOX_AUTH_SECRET
-(>= 32 chars); VOX_AUTH_BASE_URL sets the public origin behind a tunnel.`;
+(>= 32 chars); VOX_AUTH_BASE_URL sets the public origin behind a tunnel.
+--quota N (or VOX_GATEWAY_QUOTA) bounds each account to N chargeable operations
+per window — synthesis, transcription, chat, voice/profile creation, promote, and
+starting a realtime conversation; reads, deletes, health and the discovery surface
+are free. --quota-window SECONDS (VOX_GATEWAY_QUOTA_WINDOW, default 3600) sets the
+window. Requires --accounts; off by default.`;
 
 async function main(args: string[]): Promise<number> {
   let explicit: string | undefined;
@@ -33,6 +38,8 @@ async function main(args: string[]): Promise<number> {
   let libraryDir = process.env.VOX_GATEWAY_LIBRARY;
   let libraryMaxBytes = process.env.VOX_GATEWAY_LIBRARY_MAX_BYTES;
   let accountsDir = process.env.VOX_GATEWAY_ACCOUNTS;
+  let quotaOperations = process.env.VOX_GATEWAY_QUOTA;
+  let quotaWindow = process.env.VOX_GATEWAY_QUOTA_WINDOW;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
     const value = (): string => {
@@ -53,6 +60,8 @@ async function main(args: string[]): Promise<number> {
     else if (arg === "--library") libraryDir = value();
     else if (arg === "--library-max-bytes") libraryMaxBytes = value();
     else if (arg === "--accounts") accountsDir = value();
+    else if (arg === "--quota") quotaOperations = value();
+    else if (arg === "--quota-window") quotaWindow = value();
     else throw new TypeError(`vox-gateway: unknown option ${arg}`);
   }
   const config = explicit === undefined ? await loadConfig() : await loadConfig({ explicit });
@@ -91,6 +100,13 @@ async function main(args: string[]): Promise<number> {
     throw new TypeError("vox-gateway: --accounts and --token are mutually exclusive");
   }
   const authBaseUrl = process.env.VOX_AUTH_BASE_URL;
+  // A quota typo fails closed, and a quota without accounts is a config mistake: there
+  // would be exactly one account to meter, the operator's own.
+  const quotaCount = positive(quotaOperations, "--quota", true);
+  const quotaSeconds = positive(quotaWindow, "--quota-window") ?? 3_600;
+  if (quotaCount !== undefined && !hasAccounts) {
+    throw new TypeError("vox-gateway: --quota requires --accounts");
+  }
   const decoder = ffmpegPcmDecoder();
   const gateway = startGateway({
     config,
@@ -109,6 +125,7 @@ async function main(args: string[]): Promise<number> {
         ...(authBaseUrl === undefined || authBaseUrl === "" ? {} : { baseUrl: authBaseUrl }),
       },
     } : {}),
+    ...(quotaCount === undefined ? {} : { quota: { operations: quotaCount, windowSeconds: quotaSeconds } }),
     loadSileroVad: () => loadSileroVadModel(line => console.error(line)),
     ...(decoder === undefined ? {} : { pcmDecoder: decoder }),
     ...(configPath === undefined ? {} : {

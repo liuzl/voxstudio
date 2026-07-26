@@ -78,7 +78,7 @@ describe("agent onboarding page", () => {
     const page = agentPage(options);
     expect(page).toContain("no SLA");
     // Nothing about signup, organizations, scopes, or device authorization: they do not exist.
-    for (const absent of ["organization", "scope:", "device_code", "/v1/agents"]) {
+    for (const absent of ["organization", "scope:", "device_code", "/v1/agents", "billing"]) {
       expect(page.toLowerCase()).not.toContain(absent.toLowerCase());
     }
   });
@@ -105,6 +105,70 @@ describe("llms.txt", () => {
     expect(index).not.toContain("/v1/auth");
     const off = llmsTxt({ ...options, library: false });
     expect(off).toContain("not enabled on this deployment");
+  });
+});
+
+describe("quota in the documents (docs/auth.md phase 4)", () => {
+  const metered: DiscoveryOptions = { ...options, quota: { operations: 500, windowSeconds: 3_600 } };
+
+  test("the agent page states the real allowance and what it charges for", () => {
+    const page = agentPage(metered);
+    expect(page).toContain("500 chargeable operations per 3600 seconds, per account");
+    // Charged and free are both named — a pacing agent needs the boundary, not a warning.
+    expect(page).toContain("/v1/audio/speech");
+    expect(page).toContain("session.start");
+    expect(page).toContain("Free: every GET");
+    expect(page).toContain("quota_exceeded");
+    expect(page).toContain("requestId");
+    expect(page).toContain("anchored at your first charged call");
+    expect(page).toContain("Sharing an account with other agents shares the allowance");
+  });
+
+  test("an unmetered deployment says so instead of threatening a 429 it never sends", () => {
+    const page = agentPage(options);
+    expect(page).toContain("enforces no per-account quota");
+    expect(page).not.toContain("chargeable operations per");
+    // The honest caveat: something in front of the gateway may still refuse.
+    expect(page).toContain("Rate limiting may still exist in front of the gateway");
+  });
+
+  test("llms.txt carries the same numbers, compactly", () => {
+    const index = llmsTxt(metered);
+    expect(index).toContain("500 chargeable operations per 3600s");
+    expect(index).toContain("quota_exceeded");
+    expect(llmsTxt(options)).toContain("No per-account quota on this deployment");
+  });
+
+  test("the OpenAPI description and every charged route document the refusal", () => {
+    const document = openApiDocument(metered) as {
+      info: { description: string };
+      paths: Record<string, Record<string, { responses?: Record<string, unknown> }>>;
+      components: { schemas: Record<string, unknown> };
+    };
+    expect(document.info.description).toContain("500 chargeable operations per 3600s");
+
+    // Exactly the chargeable operations declare 429 — no more, no fewer.
+    const charged = [
+      ["/v1/audio/speech", "post"],
+      ["/v1/audio/transcriptions", "post"],
+      ["/v1/chat/completions", "post"],
+      ["/v1/voices", "post"],
+      ["/v1/design-profiles", "post"],
+      ["/v1/library/{id}/promote", "post"],
+    ] as const;
+    for (const [path, method] of charged) {
+      expect(Object.keys(document.paths[path]?.[method]?.responses ?? {})).toContain("429");
+    }
+    const free = [["/v1/voices", "get"], ["/v1/engines", "get"], ["/v1/library", "get"], ["/healthz", "get"]] as const;
+    for (const [path, method] of free) {
+      expect(Object.keys(document.paths[path]?.[method]?.responses ?? {})).not.toContain("429");
+    }
+
+    // The refusal's body and headers are typed, not prose.
+    const quotaError = document.components.schemas.QuotaError as { properties: { error: { properties: Record<string, unknown>; required: string[] } } };
+    expect(quotaError.properties.error.required.sort()).toEqual(["code", "message", "requestId", "retryAfterSeconds"]);
+    const refusal = document.paths["/v1/audio/speech"]?.post?.responses?.["429"] as { headers: Record<string, unknown> };
+    expect(Object.keys(refusal.headers).sort()).toEqual(["Retry-After", "x-request-id"]);
   });
 });
 

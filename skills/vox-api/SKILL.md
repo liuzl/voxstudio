@@ -104,14 +104,36 @@ full-duplex audio, and read the deployment's docs first.
 | 403 (other) | The action is refused, not unauthenticated | Do not retry. Report it. |
 | 404 `library_disabled` | The capture library is off here | Stop asking; it is a deployment choice, not a missing item. |
 | 400 `bad_voice_id` | Malformed, too long, or a raw internal id | Re-list `/v1/voices` and use a returned name. |
-| 429 | Over the deployment's limit | Honor `Retry-After` (seconds) exactly. Do not retry sooner, do not parallelize around it. |
+| 429 `quota_exceeded` | The account's quota for this window is spent | Honor `Retry-After` (seconds) exactly. Do not retry sooner, do not parallelize around it, do not switch keys to evade it — the quota follows the account, not the key. |
 | 502 `engine_unreachable` | The engine behind this route is down | Retry with exponential backoff, a few attempts, then report. |
 | 503 | The gateway is shutting down | Do not hammer; the connection will not recover. |
 
 Errors are JSON — `{"error":{"message":"...","code":"..."}}`. Branch on `code`, never on
-message text.
+message text. A 429 body adds `retryAfterSeconds` and a `requestId`; the same values ride
+the `Retry-After` and `x-request-id` headers, and the id is what to quote when reporting
+a refusal you believe is wrong.
 
-## 5. Etiquette
+## 5. Budget your calls
+
+A hosted deployment may enforce a **per-account quota**: N chargeable operations per
+window. Read the real numbers from `/agent` or `/openapi.json` — do not assume, and do not
+discover them by getting refused.
+
+- **Chargeable** (each costs one): `POST /v1/audio/speech`, `/v1/audio/transcriptions`,
+  `/v1/chat/completions`, `/v1/voices`, `/v1/design-profiles`,
+  `/v1/library/{id}/promote`, and starting a realtime session (`session.start`).
+- **Free**: every GET (listing voices, engines, captures, fetching audio), correcting or
+  deleting a capture, deleting a voice, `/healthz`, and the discovery pages.
+- The window is anchored at your first charged call, and a refusal does not extend it.
+- The allowance belongs to the **account**, so a human and all their agents share one
+  budget. Minting another key does not buy more.
+
+Plan work against this: list before you synthesize, reuse a take instead of regenerating
+it, and prefer one realtime session over repeated one-shot calls when the task is
+conversational. If you are refused mid-task, report what remains undone rather than
+retrying in a loop.
+
+## 6. Etiquette
 
 - Poll no faster than once per 60 seconds. Nothing here needs tailing; `/v1/realtime`
   exists for anything that must be live.

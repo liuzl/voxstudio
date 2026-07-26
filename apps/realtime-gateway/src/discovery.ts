@@ -17,6 +17,30 @@ export interface DiscoveryOptions {
   library: boolean;
   /** Demo mode makes the registry read-only; worth stating rather than surprising. */
   demo: boolean;
+  /**
+   * The per-account quota this deployment enforces, when it enforces one. Stated with
+   * its real numbers: an agent that knows the allowance can pace itself instead of
+   * discovering it by being refused (docs/auth.md phase 4).
+   */
+  quota?: { operations: number; windowSeconds: number } | undefined;
+}
+
+/** The chargeable operations, named once and reused by every document. */
+const chargeableList = "POST /v1/audio/speech, /v1/audio/transcriptions, /v1/chat/completions, /v1/voices, /v1/design-profiles, /v1/library/{id}/promote, and starting a realtime session (session.start)";
+
+function quotaProse(options: DiscoveryOptions): string {
+  if (options.quota === undefined) {
+    return `This deployment enforces no per-account quota, so 429 will not be returned for usage.
+Rate limiting may still exist in front of the gateway (a proxy or tunnel), so honor
+\`Retry-After\` if you ever receive one.`;
+  }
+  const { operations, windowSeconds } = options.quota;
+  return `This deployment allows **${operations} chargeable operations per ${windowSeconds} seconds, per account**.
+Chargeable: ${chargeableList}.
+Free: every GET, correcting or deleting a capture, deleting a voice, \`/healthz\`, and
+this page. Over the allowance you get 429 with \`Retry-After\` (seconds) and
+\`code: "quota_exceeded"\`; the window is anchored at your first charged call, and a
+refusal does not extend it. Sharing an account with other agents shares the allowance.`;
 }
 
 /**
@@ -79,7 +103,10 @@ Realtime dialect. Authenticate the upgrade with the same header.
 
 - **401** — missing, malformed, revoked, or expired key. Do not retry the same key;
   a human must mint a new one.
-- **429** — you are over the deployment's rate or usage limit. Honor \`Retry-After\`
+- **429** — you are over this deployment's per-account quota (see "Quota" below), or a
+  proxy in front of it refused you. The body carries \`code: "quota_exceeded"\`,
+  \`retryAfterSeconds\`, and a \`requestId\` worth quoting in a report; the same values
+  are in the \`Retry-After\` and \`x-request-id\` headers. Honor \`Retry-After\`
   (seconds) exactly; do not retry sooner, and do not parallelize around it.
 - **403** — the action is refused rather than unauthenticated: demo mode
   (\`demo_mode\`), or a resource you may not write.
@@ -92,7 +119,11 @@ Realtime dialect. Authenticate the upgrade with the same header.
 
 Errors are JSON: \`{"error":{"message":"...","code":"..."}}\`. Read \`code\`, not prose.
 
-## 5. Etiquette
+## 5. Quota
+
+${quotaProse(options)}
+
+## 6. Etiquette
 
 - Poll no faster than once every 60 seconds. Nothing here is a stream you must tail;
   the realtime socket exists for anything that needs to be live.
@@ -101,7 +132,7 @@ Errors are JSON: \`{"error":{"message":"...","code":"..."}}\`. Read \`code\`, no
 - This is a self-hosted deployment, not a metered cloud: there is no SLA. Cache what
   you fetched, back off on failure, and degrade rather than hammer.
 
-## 6. Ownership and privacy — the part that constrains you
+## 7. Ownership and privacy — the part that constrains you
 
 - Every voice, design profile, and capture belongs to the account that made it. Your
   key sees exactly its owner's resources. There is no shared pool and no admin scope.
@@ -146,6 +177,14 @@ export function llmsTxt(options: DiscoveryOptions): string {
 - POST /v1/design-profiles — reproducible designed voice
 ${options.library ? "- GET /v1/library, GET|PATCH|DELETE /v1/library/{id}, GET /v1/library/{id}/audio, POST /v1/library/{id}/promote — captures\n" : "- /v1/library — not enabled on this deployment (404 library_disabled)\n"}- WS /v1/realtime — live session protocol; same auth header
 
+## Quota
+
+${options.quota === undefined
+    ? "- No per-account quota on this deployment; a fronting proxy may still return 429."
+    : `- ${options.quota.operations} chargeable operations per ${options.quota.windowSeconds}s, per account.
+- Chargeable: ${chargeableList}. Everything else (GETs, corrections, deletes, health) is free.
+- Over the allowance: 429, \`code: "quota_exceeded"\`, \`Retry-After\` in seconds, \`x-request-id\`.`}
+
 ## Rules
 
 - Poll at most once per 60s; honor \`Retry-After\` on 429.
@@ -179,6 +218,17 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
     content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
   });
   const secured = [{ bearerAuth: [] }, { apiKeyHeader: [] }];
+  /** The quota refusal, described once: same body and headers on every charged route. */
+  const quota429 = {
+    description: options.quota === undefined
+      ? "Refused by a limiter in front of the gateway (this deployment enforces no per-account quota). Honor `Retry-After`."
+      : `The account's quota is spent (${options.quota.operations} chargeable operations per ${options.quota.windowSeconds}s). Retry after the stated delay.`,
+    headers: {
+      "Retry-After": { description: "Whole seconds to wait before retrying.", schema: { type: "integer", minimum: 1 } },
+      "x-request-id": { description: "Identifier for this refusal, worth quoting in a report.", schema: { type: "string" } },
+    },
+    content: { "application/json": { schema: { $ref: "#/components/schemas/QuotaError" } } },
+  };
 
   const capture = {
     type: "object",
@@ -310,6 +360,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
           },
           "400": errorResponse("`bad_voice_id` or `empty_transcript`."),
           "404": errorResponse("No such capture (`unknown_capture`)."),
+          "429": quota429,
           "502": errorResponse("The clone engine is unreachable (`engine_unreachable`)."),
         },
       },
@@ -335,6 +386,10 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
         "",
         "Etiquette: poll at most once per 60s, honor `Retry-After` on 429, and issue",
         "synthesis serially — it runs on a GPU that serializes. There is no SLA.",
+        "",
+        options.quota === undefined
+          ? "This deployment enforces no per-account quota; a proxy in front of it may still return 429."
+          : `Quota: ${options.quota.operations} chargeable operations per ${options.quota.windowSeconds}s per account. Chargeable: ${chargeableList}. Everything else is free. A 429 carries code "quota_exceeded", retryAfterSeconds, and a requestId, mirrored in the Retry-After and x-request-id headers.`,
       ].join("\n"),
     },
     servers: [{ url: base }],
@@ -402,7 +457,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
             },
             "400": errorResponse("`bad_voice_id`, or a malformed body."),
             "401": errorResponse("Missing or invalid key."),
-            "429": errorResponse("Over the deployment's limit; honor `Retry-After`."),
+            "429": quota429,
             "502": errorResponse("The TTS engine is unreachable (`engine_unreachable`)."),
           },
         },
@@ -435,7 +490,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
               content: { "application/json": { schema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } } },
             },
             "401": errorResponse("Missing or invalid key."),
-            "429": errorResponse("Over the deployment's limit; honor `Retry-After`."),
+            "429": quota429,
             "502": errorResponse("The ASR engine is unreachable (`engine_unreachable`)."),
           },
         },
@@ -473,7 +528,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
           responses: {
             "200": { description: "An OpenAI-shaped completion, or an SSE stream when `stream` is true.", content: { "application/json": { schema: { type: "object" } }, "text/event-stream": { schema: { type: "string" } } } },
             "401": errorResponse("Missing or invalid key."),
-            "429": errorResponse("Over the deployment's limit; honor `Retry-After`."),
+            "429": quota429,
             "502": errorResponse("The LLM engine is unreachable (`engine_unreachable`)."),
           },
         },
@@ -566,6 +621,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
             "400": errorResponse("`bad_voice_id`."),
             "401": errorResponse("Missing or invalid key."),
             "403": errorResponse("Demo mode refuses registry writes (`demo_mode`)."),
+            "429": quota429,
             "502": errorResponse("The clone engine is unreachable (`engine_unreachable`)."),
           },
         },
@@ -622,6 +678,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
             "400": errorResponse("`bad_voice_id`, or an engine validation failure."),
             "403": errorResponse("Demo mode refuses registry writes (`demo_mode`)."),
             "409": { description: "The id already exists — profiles are never silently overwritten." },
+            "429": quota429,
             "502": errorResponse("The design-capable engine is unreachable (`engine_unreachable`)."),
           },
         },
@@ -644,6 +701,23 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
       },
       schemas: {
         Error: error,
+        QuotaError: {
+          type: "object",
+          description: "A quota refusal: the standard envelope plus the wait and an id.",
+          properties: {
+            error: {
+              type: "object",
+              properties: {
+                message: { type: "string" },
+                code: { type: "string", const: "quota_exceeded" },
+                requestId: { type: "string" },
+                retryAfterSeconds: { type: "integer", minimum: 1 },
+              },
+              required: ["message", "code", "requestId", "retryAfterSeconds"],
+            },
+          },
+          required: ["error"],
+        },
         Voice: {
           type: "object",
           properties: {

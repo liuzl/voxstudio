@@ -87,6 +87,45 @@ describe("vox studio", () => {
     }
   });
 
+  test("--quota needs accounts, fails closed on a typo, and defaults its window", async () => {
+    const io = collectingIo();
+    const beforeSecret = process.env.VOX_AUTH_SECRET;
+    const beforeQuota = process.env.VOX_GATEWAY_QUOTA;
+    delete process.env.VOX_GATEWAY_QUOTA;
+    try {
+      // A quota with no accounts would meter the only person there is.
+      await expect(runStudio(["--quota", "100"], config, io, () => fakeGateway(), false))
+        .rejects.toThrow("requires --accounts");
+      // A typo must not silently run unmetered.
+      await expect(runStudio(["--quota", "lots"], config, io, () => fakeGateway(), false))
+        .rejects.toThrow("positive integer");
+      await expect(runStudio(["--quota", "10", "--quota-window", "-5"], config, io, () => fakeGateway(), false))
+        .rejects.toThrow("positive");
+      process.env.VOX_GATEWAY_QUOTA = "not-a-number";
+      await expect(runStudio([], config, io, () => fakeGateway(), false))
+        .rejects.toThrow("VOX_GATEWAY_QUOTA");
+      delete process.env.VOX_GATEWAY_QUOTA;
+
+      process.env.VOX_AUTH_SECRET = "an-adequately-long-test-secret-0123456789";
+      let seen: GatewayServerOptions | undefined;
+      const capture = (options: GatewayServerOptions): GatewayServer => { seen = options; return fakeGateway(); };
+      expect(await runStudio(["--accounts", "/tmp/vox-auth", "--quota", "500"], config, io, capture, false)).toBe(0);
+      // One hour unless told otherwise — stated in the help, not a hidden constant.
+      expect(seen?.quota).toEqual({ operations: 500, windowSeconds: 3_600 });
+      expect(await runStudio(["--accounts", "/tmp/vox-auth", "--quota", "5", "--quota-window", "60"], config, io, capture, false)).toBe(0);
+      expect(seen?.quota).toEqual({ operations: 5, windowSeconds: 60 });
+
+      // Absent by default: an existing deployment gains no limit by upgrading.
+      expect(await runStudio(["--accounts", "/tmp/vox-auth"], config, io, capture, false)).toBe(0);
+      expect(seen?.quota).toBeUndefined();
+    } finally {
+      if (beforeSecret === undefined) delete process.env.VOX_AUTH_SECRET;
+      else process.env.VOX_AUTH_SECRET = beforeSecret;
+      if (beforeQuota === undefined) delete process.env.VOX_GATEWAY_QUOTA;
+      else process.env.VOX_GATEWAY_QUOTA = beforeQuota;
+    }
+  });
+
   test("rejects a malformed port and unknown options", async () => {
     const io = collectingIo();
     await expect(runStudio(["--port", "not-a-port"], config, io, () => fakeGateway(), false))

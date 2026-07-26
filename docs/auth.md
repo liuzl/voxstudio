@@ -254,6 +254,38 @@ phase 3 is the only dependency-bearing step and is confined to one directory.
    counts (or moves behind auth); the ops half (tunnel and edge configuration) stays in
    the internal repo per this repo's public-boundary rules.
 
+   **Quota delivered 2026-07-26.** `--quota N` / `VOX_GATEWAY_QUOTA` with
+   `--quota-window SECONDS` (default 3600) bounds each **account** to N chargeable
+   operations per window, counted per `AuthContext.userId` — so a human and every agent
+   holding their keys share one allowance, and minting another key buys nothing. A fixed
+   window anchored at the account's first charge; a refusal is not a charge, so being
+   over quota never pushes the reset away. State is one in-memory counter per account,
+   swept when its window passes: no storage, no buckets, no billing, no per-route policy
+   (the non-goals above). It is therefore **process-local** — it resets on restart and
+   does not span replicas, which is the thing to revisit before this runs behind more
+   than one gateway.
+
+   **Charged** (each one unit): `POST /v1/audio/speech`,
+   `/v1/audio/transcriptions`, `/v1/chat/completions`, `/v1/voices`,
+   `/v1/design-profiles`, `/v1/library/{id}/promote`, and starting a realtime
+   conversation (`session.start`, charged once — never per audio frame, which would both
+   mis-price a conversation and put work on the audio path). **Free**: every GET,
+   correcting or deleting a capture, deleting a voice, `/healthz`, `/v1/auth/*`, and the
+   discovery surface.
+
+   A refusal is one shape everywhere: HTTP 429 with `Retry-After` and `x-request-id`
+   headers, and a body of `{"error":{"message","code":"quota_exceeded","requestId",
+   "retryAfterSeconds"}}` — the same envelope as every other error here, plus the wait
+   and an id to quote. On the realtime socket the refusal is a `command.rejected` with
+   reason `quota_exceeded`, the mechanism session capacity already used.
+
+   Accounts-only and off by default: `--quota` without `--accounts` is refused at
+   startup (a self-hosted studio would only be metering its own operator), a typo fails
+   closed, and an existing deployment gains no limit by upgrading. `/agent`, `/llms.txt`,
+   and `/openapi.json` state the deployment's **real** numbers when a quota is set and
+   say plainly that there is none when it is not — the contract and the enforcement are
+   generated from the same configuration, so they cannot drift.
+
 ## References
 
 - [web-studio.md](./web-studio.md) — the hosted surface, single-binary serving, and the

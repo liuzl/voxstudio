@@ -495,6 +495,179 @@ describe("hosted accounts (docs/auth.md phase 3)", () => {
     }
   });
 
+  describe("per-user quota (docs/auth.md phase 4)", () => {
+    /** A gateway whose allowance is small enough to exhaust in a test. */
+    function quotaGateway(operations: number, windowSeconds = 60): GatewayServer {
+      const dir = tempDir();
+      dirs.push(dir);
+      return startGateway({
+        config,
+        fetch: engineFetch(),
+        port: 0,
+        accounts: { dir, secret: SECRET },
+        quota: { operations, windowSeconds },
+      });
+    }
+
+    const speak = (base: string, credential: Record<string, string>): Promise<Response> =>
+      fetch(new URL("/v1/audio/speech", base), {
+        method: "POST",
+        headers: { "content-type": "application/json", ...credential },
+        body: JSON.stringify({ input: "你好" }),
+      });
+
+    test("an exhausted allowance answers 429 with Retry-After, a request id, and a stable code", async () => {
+      gateway = quotaGateway(2);
+      const cookie = await signUp(gateway.url, "quota-a@test.dev");
+
+      expect((await speak(gateway.url, { cookie })).status).toBe(200);
+      expect((await speak(gateway.url, { cookie })).status).toBe(200);
+
+      const refused = await speak(gateway.url, { cookie });
+      expect(refused.status).toBe(429);
+      const retryAfter = Number(refused.headers.get("retry-after"));
+      expect(Number.isInteger(retryAfter)).toBe(true);
+      expect(retryAfter).toBeGreaterThan(0);
+      expect(retryAfter).toBeLessThanOrEqual(60);
+      const requestId = refused.headers.get("x-request-id") ?? "";
+      expect(requestId.length).toBeGreaterThan(0);
+      const body = await refused.json() as { error: { code: string; message: string; requestId: string; retryAfterSeconds: number } };
+      expect(body.error.code).toBe("quota_exceeded");
+      // The body agrees with the headers — a client may read either.
+      expect(body.error.requestId).toBe(requestId);
+      expect(body.error.retryAfterSeconds).toBe(retryAfter);
+      // Two refusals never share a request id.
+      const second = await speak(gateway.url, { cookie });
+      expect((await second.json() as { error: { requestId: string } }).error.requestId).not.toBe(requestId);
+    });
+
+    test("one user's exhaustion leaves another user untouched", async () => {
+      gateway = quotaGateway(1);
+      const alice = await signUp(gateway.url, "quota-alice@test.dev");
+      const bob = await signUp(gateway.url, "quota-bob@test.dev");
+
+      expect((await speak(gateway.url, { cookie: alice })).status).toBe(200);
+      expect((await speak(gateway.url, { cookie: alice })).status).toBe(429);
+      // Bob's allowance is his own.
+      expect((await speak(gateway.url, { cookie: bob })).status).toBe(200);
+      expect((await speak(gateway.url, { cookie: bob })).status).toBe(429);
+    });
+
+    test("a key and its owner's cookie draw on one allowance", async () => {
+      gateway = quotaGateway(2);
+      const cookie = await signUp(gateway.url, "quota-shared@test.dev");
+      const key = await mintKey(gateway.url, cookie);
+
+      expect((await speak(gateway.url, { cookie })).status).toBe(200);
+      // The agent spends the same budget as the human — one account, one quota.
+      expect((await speak(gateway.url, { authorization: `Bearer ${key}` })).status).toBe(200);
+      expect((await speak(gateway.url, { authorization: `Bearer ${key}` })).status).toBe(429);
+      expect((await speak(gateway.url, { cookie })).status).toBe(429);
+    });
+
+    test("the window recovers: a short window lets the same user through again", async () => {
+      gateway = quotaGateway(1, 1);
+      const cookie = await signUp(gateway.url, "quota-window@test.dev");
+      expect((await speak(gateway.url, { cookie })).status).toBe(200);
+      expect((await speak(gateway.url, { cookie })).status).toBe(429);
+      await new Promise(resolve => setTimeout(resolve, 1_100));
+      expect((await speak(gateway.url, { cookie })).status).toBe(200);
+    });
+
+    test("expensive work counts; browsing does not", async () => {
+      gateway = quotaGateway(1);
+      const cookie = await signUp(gateway.url, "quota-reads@test.dev");
+
+      // Reads and deletes are free: they cost no engine time.
+      for (const path of ["/v1/voices", "/v1/engines"]) {
+        expect((await fetch(new URL(path, gateway.url), { headers: { cookie } })).status).toBe(200);
+      }
+      // The discovery surface and health are free and need no credential at all.
+      expect((await fetch(new URL("/agent", gateway.url))).status).toBe(200);
+      expect((await fetch(new URL("/healthz", gateway.url))).status).toBe(200);
+      // Signing in again is not a charge either.
+      expect((await fetch(new URL("/v1/auth/get-session", gateway.url), { headers: { cookie } })).status).toBe(200);
+
+      // The allowance is still intact for the one thing that costs.
+      expect((await speak(gateway.url, { cookie })).status).toBe(200);
+      expect((await speak(gateway.url, { cookie })).status).toBe(429);
+    });
+
+    test("transcription and chat draw on the same allowance as synthesis", async () => {
+      gateway = quotaGateway(2);
+      const cookie = await signUp(gateway.url, "quota-mixed@test.dev");
+
+      const form = new FormData();
+      form.set("file", new File([new Uint8Array(16)], "clip.wav", { type: "audio/wav" }));
+      expect((await fetch(new URL("/v1/audio/transcriptions", gateway.url), { method: "POST", headers: { cookie }, body: form })).status).toBe(200);
+      expect((await fetch(new URL("/v1/chat/completions", gateway.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
+      })).status).toBe(200);
+      // Two charges spent: synthesis now refuses.
+      expect((await speak(gateway.url, { cookie })).status).toBe(429);
+    });
+
+    test("starting a realtime conversation is a charge, and an exhausted user is rejected at session.start", async () => {
+      gateway = quotaGateway(1);
+      const cookie = await signUp(gateway.url, "quota-ws@test.dev");
+      const wsUrl = new URL("/v1/realtime", gateway.url).toString().replace(/^http/, "ws");
+      const origin = new URL(gateway.url).origin;
+
+      const open = async (): Promise<{ socket: WebSocket; events: { type: string; reason?: string }[] }> => {
+        const events: { type: string; reason?: string }[] = [];
+        const socket = new WebSocket(wsUrl, { headers: { cookie, origin } } as never);
+        await new Promise<void>((resolve, reject) => {
+          socket.addEventListener("open", () => resolve());
+          socket.addEventListener("error", () => reject(new Error("upgrade refused")));
+        });
+        socket.addEventListener("message", event => {
+          if (typeof event.data === "string") events.push(JSON.parse(event.data) as { type: string; reason?: string });
+        });
+        return { socket, events };
+      };
+      const until = async (events: { type: string }[], type: string): Promise<void> => {
+        const deadline = Date.now() + 5_000;
+        while (!events.some(event => event.type === type)) {
+          if (Date.now() > deadline) throw new Error(`no ${type}; saw ${events.map(event => event.type).join(", ")}`);
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+      };
+
+      const first = await open();
+      first.socket.send(JSON.stringify({
+        v: protocolVersion,
+        type: "session.start",
+        idempotencyKey: "q-1",
+        options: { language: "zh", voice: "demo", vad: "energy", threshold: 0.1, minSpeechMs: 40, silenceMs: 20, turnTaking: "conservative", bargeIn: true },
+      }));
+      await until(first.events, "session.snapshot");
+      first.socket.close();
+
+      // The allowance is spent; the next conversation is refused at start, not at upgrade.
+      const second = await open();
+      second.socket.send(JSON.stringify({
+        v: protocolVersion,
+        type: "session.start",
+        idempotencyKey: "q-2",
+        options: { language: "zh", voice: "demo", vad: "energy", threshold: 0.1, minSpeechMs: 40, silenceMs: 20, turnTaking: "conservative", bargeIn: true },
+      }));
+      await until(second.events, "command.rejected");
+      expect(second.events.find(event => event.type === "command.rejected")?.reason).toBe("quota_exceeded");
+      second.socket.close();
+    });
+
+    test("a self-hosted gateway ignores the quota entirely — nothing to meter, nobody to meter it for", async () => {
+      // The flag is refused without accounts (see the entrypoint tests); passing the
+      // option directly proves the enforcement itself is hosted-only.
+      gateway = startGateway({ config, fetch: engineFetch(), port: 0, quota: { operations: 1, windowSeconds: 60 } });
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        expect((await speak(gateway.url, {})).status).toBe(200);
+      }
+    });
+  });
+
   test("voice namespaces are per account: two users, same display name, no collision", async () => {
     gateway = accountsGateway();
     const frank = await signUp(gateway.url, "frank@test.dev");

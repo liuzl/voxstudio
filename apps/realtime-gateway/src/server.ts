@@ -13,6 +13,7 @@ import { isLoopbackHost, resolveAuthContext, upgradeOriginAllowed } from "./auth
 import type { Accounts } from "./auth/accounts";
 import { fromEngineVoiceId, toEngineVoiceId } from "./voice-namespace";
 import { agentPage, llmsTxt, openApiDocument, type DiscoveryOptions } from "./discovery";
+import { QuotaLedger } from "./quota";
 import { CaptureLibrary } from "./library";
 import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand } from "./protocol";
 import { studioToolNames } from "@voxstudio/conversation";
@@ -45,6 +46,16 @@ export interface GatewayServerOptions {
     baseUrl?: string;
     sendVerificationEmail?: (email: string, url: string) => Promise<void>;
   };
+  /**
+   * Per-account usage quota (docs/auth.md phase 4): `operations` chargeable calls per
+   * `windowSeconds`, counted per account. Only expensive work is charged — synthesis,
+   * transcription, chat, voice/profile creation, promote, and starting a realtime
+   * conversation — never reads, deletes, health, or the discovery surface.
+   *
+   * Enforced only under hosted accounts: a self-hosted studio has one owner and nothing
+   * to meter. Absent, no quota applies (the default everywhere).
+   */
+  quota?: { operations: number; windowSeconds: number };
   reconnectGraceMs?: number;
   /** OpenAI-dialect connections: how long a client may take to answer a function call. */
   openAiFunctionCallTimeoutMs?: number;
@@ -196,6 +207,8 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     baseUrl: options.accounts?.baseUrl ?? server.url.toString(),
     library: library !== undefined,
     demo: options.demoMode === true,
+    // The real allowance, so an agent can pace itself instead of learning it by refusal.
+    ...(quota === undefined ? {} : { quota: { operations: quota.operations, windowSeconds: quota.windowSeconds } }),
   });
   const text = (body: string, contentType: string): Response => new Response(body, {
     headers: { "content-type": contentType, "cache-control": "public, max-age=300" },
@@ -206,6 +219,53 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     "/agent": () => text(agentPage(discoveryOptions()), "text/plain; charset=utf-8"),
     "/llms.txt": () => text(llmsTxt(discoveryOptions()), "text/plain; charset=utf-8"),
     "/openapi.json": () => text(JSON.stringify(openApiDocument(discoveryOptions()), null, 2), "application/json; charset=utf-8"),
+  };
+  /**
+   * The quota is an accounts feature: a self-hosted studio has one owner, so metering
+   * it would only limit the person who runs it. Constructed only when both are set, and
+   * the entrypoints refuse the flag without --accounts (docs/auth.md phase 4).
+   */
+  const quota = options.quota !== undefined && options.accounts !== undefined
+    ? new QuotaLedger(options.quota)
+    : undefined;
+  if (options.quota !== undefined && options.accounts === undefined) {
+    log("quota: ignored — a per-account quota needs accounts; a self-hosted studio has nothing to meter");
+  }
+
+  /**
+   * Which operations cost engine time. Reads, corrections, deletes, health, and the
+   * discovery surface are free; everything here occupies a GPU or an upstream model.
+   * Starting a realtime conversation is charged once at `session.start` — never per
+   * frame, which would both mis-price a conversation and put work on the audio path.
+   */
+  const chargeable = (method: string, pathname: string): boolean => {
+    if (method !== "POST") return false;
+    if (pathname === "/v1/audio/speech" || pathname === "/v1/audio/transcriptions") return true;
+    if (pathname === "/v1/chat/completions") return true;
+    if (pathname === "/v1/voices" || pathname === "/v1/design-profiles") return true;
+    return pathname.startsWith("/v1/library/") && pathname.endsWith("/promote");
+  };
+
+  /** One shape for every quota refusal, REST or realtime, with an id to quote in a report. */
+  const quotaRefusal = (retryAfterSeconds: number): Response => {
+    const requestId = crypto.randomUUID();
+    return Response.json(
+      {
+        error: {
+          message: `quota exhausted: ${options.quota?.operations} operations per ${options.quota?.windowSeconds}s — retry in ${retryAfterSeconds}s`,
+          code: "quota_exceeded",
+          requestId,
+          retryAfterSeconds,
+        },
+      },
+      {
+        status: 429,
+        headers: {
+          "retry-after": String(retryAfterSeconds),
+          "x-request-id": requestId,
+        },
+      },
+    );
   };
   let accountsInstance: Promise<Accounts> | undefined;
   const accountsFor = (): Promise<Accounts> => {
@@ -419,10 +479,28 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     }
   }
 
+  /** Thrown by createSession when the owner's allowance is spent; translated the same way. */
+  class QuotaError extends Error {
+    readonly retryAfterSeconds: number;
+
+    constructor(retryAfterSeconds: number) {
+      super("quota_exceeded");
+      this.retryAfterSeconds = retryAfterSeconds;
+    }
+  }
+
   const createSession = (extraTools: ConversationTool[] = [], owner: string = OWNER_USER_ID): GatewaySession => {
     if (options.maxSessions !== undefined && sessions.size >= options.maxSessions) {
       log(`session refused: at the ${options.maxSessions}-session capacity`);
       throw new CapacityError();
+    }
+    // A conversation is the most expensive thing here: charged once, at its start.
+    if (quota !== undefined) {
+      const verdict = quota.charge(owner);
+      if (!verdict.allowed) {
+        log("session refused: the account's quota allowance is spent");
+        throw new QuotaError(verdict.retryAfterSeconds as number);
+      }
     }
     // Namespacing lives in the gateway; the session just applies it at the TTS boundary.
     const ownerVoice = (displayName: string): string | null => toEngineVoiceId(owner, displayName);
@@ -506,7 +584,12 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       try {
         session = createSession([], ws.data.ctx.userId);
       } catch (error) {
-        sink.send(rejection("", error instanceof CapacityError ? "session_capacity" : "session_unavailable", command));
+        const reason = error instanceof CapacityError
+          ? "session_capacity"
+          : error instanceof QuotaError
+            ? "quota_exceeded"
+            : "session_unavailable";
+        sink.send(rejection("", reason, command));
         return;
       }
       ws.data.session = session;
@@ -585,6 +668,15 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           ? await (await accountsFor()).resolve(request)
           : resolveAuthContext(request, options);
       if (ctx === null) return new Response("unauthorized", { status: 401 });
+      // Charged after identity, before the work: the account is known, and nothing
+      // upstream has been touched yet.
+      if (quota !== undefined && chargeable(request.method, url.pathname)) {
+        const verdict = quota.charge(ctx.userId);
+        if (!verdict.allowed) {
+          log(`quota: ${request.method} ${url.pathname} refused — allowance spent`);
+          return quotaRefusal(verdict.retryAfterSeconds as number);
+        }
+      }
       if (url.pathname === "/v1/realtime") {
         // Browsers always send Origin on an upgrade; a cross-site one is refused before
         // the socket exists (CSWSH under a token, CSRF under a cookie session). Hosted
