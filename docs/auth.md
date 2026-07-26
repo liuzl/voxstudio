@@ -107,6 +107,34 @@ Four concrete, testable properties — not a framework:
 4. **Parity on day one.** The API key works the day the login form works. Machine
    access is an acceptance criterion of v1, not a fast-follow.
 
+## The AI-native access surface
+
+Shaped by a study of AI HOT's agent onboarding page (see References), which pairs one
+human-readable entry point with machine-readable contracts and an install-once Skill.
+What transfers is the shape, not the policy:
+
+- Hosted v1 serves three discovery artifacts: **`/agent`** — a single onboarding page
+  (how to get a key, where the contracts live, client etiquette) — plus **`/llms.txt`**
+  and **`/openapi.json`** describing the `/v1` contract the gateway already speaks.
+  Alongside them, a **thin Skill** that teaches only discovery and the invocation
+  contract — obtain a key, call `/v1`, handle 401/429 — and carries no business logic;
+  the API stays the single source of behavior.
+- The doors do not change: humans keep the Better Auth cookie session; agents, CLI,
+  and automation enter with an API key belonging to the same userId, at web parity on
+  launch day (decision 6). The discovery artifacts only make that door findable.
+- **AI HOT's anonymous read-only access does not transfer.** Its API serves cheap,
+  read-only content; voxstudio's calls are GPU-expensive, include writes (voice
+  registration, library mutations), and touch voice data under per-user ownership.
+  Every machine call here is authenticated, quota-bound, and isolated to its owner —
+  the anonymous tier is zero.
+- What does transfer from its client contract: polling floors and honoring
+  `Retry-After` on 429 — stated as etiquette in `/agent` and the Skill, enforced by
+  the per-user quota (phase 4).
+- Unchanged non-goals: device authorization / remote `vox login` (revisit when a
+  remote interactive CLI is a real product entrance), agent-specific identities, agent
+  auth frameworks, RBAC, scopes. These artifacts add no milestone — they slot into the
+  existing phases below.
+
 ## Data model and boundaries
 
 Three stores, each with one owner, no new frameworks:
@@ -173,7 +201,10 @@ phase 3 is the only dependency-bearing step and is confined to one directory.
    single-owner self-hosted deployment notices nothing.
 3. **Better Auth mount.** `src/auth/` with `auth.db`; email + password + verification;
    api-key plugin; upgrade-time cookie/bearer resolution; web login page, 401 handling,
-   and settings-page key management. Gates: signup → login → conversation → generate →
+   and settings-page key management. The discovery surface ships here, next to key
+   management: `/agent`, `/llms.txt`, `/openapi.json`, and the thin Skill — an agent's
+   onboarding path (read `/agent`, obtain a key, call `/v1`) is part of the
+   machine-parity gate. Gates: signup → login → conversation → generate →
    library passes the existing suites; the same user's API key hitting
    `/v1/audio/speech` produces fingerprint-identical artifacts to the web path (the
    machine-parity gate); a binary without auth config demonstrably never loads
@@ -193,3 +224,8 @@ phase 3 is the only dependency-bearing step and is confined to one directory.
   packages platform- and auth-free.
 - [competitive-voice-agents.md](./competitive-voice-agents.md) — the superseded
   OIDC-first identity note, retained for the enterprise-SSO future.
+- [AI HOT agent onboarding](https://aihot.virxact.com/agent) and its
+  [public access terms](https://aihot.virxact.com/terms) — inspiration for the
+  discovery-surface shape (one onboarding page + `llms.txt` + OpenAPI + a thin Skill).
+  An inspiration source only, not a normative dependency — and its anonymous
+  read-only access policy is explicitly not adopted here.
