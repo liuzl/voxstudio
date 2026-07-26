@@ -16,7 +16,11 @@ transcript in DIR, served at /v1/library for the Web Studio 素材库 panel. Off
 default; demo mode keeps it off regardless. --library-max-bytes SIZE (or
 VOX_GATEWAY_LIBRARY_MAX_BYTES; plain bytes or K/M/G, e.g. 512M) bounds retained
 audio: oldest uncorrected/unpromoted captures are evicted first, corrected or
-promoted ones never — ingest is refused instead once they alone fill the quota.`;
+promoted ones never — ingest is refused instead once they alone fill the quota.
+--accounts DIR (or VOX_GATEWAY_ACCOUNTS) turns on hosted accounts (docs/auth.md):
+auth.db in DIR, signup/login at /v1/auth, cookie sessions and API keys instead of
+the shared token (the two are mutually exclusive). Requires VOX_AUTH_SECRET
+(>= 32 chars); VOX_AUTH_BASE_URL sets the public origin behind a tunnel.`;
 
 async function main(args: string[]): Promise<number> {
   let explicit: string | undefined;
@@ -28,6 +32,7 @@ async function main(args: string[]): Promise<number> {
   let demoMode = process.env.VOX_GATEWAY_DEMO === "1";
   let libraryDir = process.env.VOX_GATEWAY_LIBRARY;
   let libraryMaxBytes = process.env.VOX_GATEWAY_LIBRARY_MAX_BYTES;
+  let accountsDir = process.env.VOX_GATEWAY_ACCOUNTS;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
     const value = (): string => {
@@ -47,6 +52,7 @@ async function main(args: string[]): Promise<number> {
     else if (arg === "--demo") demoMode = true;
     else if (arg === "--library") libraryDir = value();
     else if (arg === "--library-max-bytes") libraryMaxBytes = value();
+    else if (arg === "--accounts") accountsDir = value();
     else throw new TypeError(`vox-gateway: unknown option ${arg}`);
   }
   const config = explicit === undefined ? await loadConfig() : await loadConfig({ explicit });
@@ -74,6 +80,17 @@ async function main(args: string[]): Promise<number> {
   if (quotaBytes !== undefined && !hasLibrary) {
     throw new TypeError("vox-gateway: --library-max-bytes requires --library");
   }
+  // Hosted accounts fail closed at startup: a weak or missing secret must never boot,
+  // and accounts + token is two products in one config (docs/auth.md decision 1).
+  const hasAccounts = accountsDir !== undefined && accountsDir !== "";
+  const authSecret = process.env.VOX_AUTH_SECRET ?? "";
+  if (hasAccounts && authSecret.length < 32) {
+    throw new TypeError("vox-gateway: --accounts requires VOX_AUTH_SECRET (at least 32 characters)");
+  }
+  if (hasAccounts && token !== undefined && token !== "") {
+    throw new TypeError("vox-gateway: --accounts and --token are mutually exclusive");
+  }
+  const authBaseUrl = process.env.VOX_AUTH_BASE_URL;
   const decoder = ffmpegPcmDecoder();
   const gateway = startGateway({
     config,
@@ -85,6 +102,13 @@ async function main(args: string[]): Promise<number> {
     ...(demoMode ? { demoMode } : {}),
     ...(hasLibrary ? { libraryDir: libraryDir as string } : {}),
     ...(quotaBytes === undefined ? {} : { libraryMaxBytes: quotaBytes }),
+    ...(hasAccounts ? {
+      accounts: {
+        dir: accountsDir as string,
+        secret: authSecret,
+        ...(authBaseUrl === undefined || authBaseUrl === "" ? {} : { baseUrl: authBaseUrl }),
+      },
+    } : {}),
     loadSileroVad: () => loadSileroVadModel(line => console.error(line)),
     ...(decoder === undefined ? {} : { pcmDecoder: decoder }),
     ...(configPath === undefined ? {} : {

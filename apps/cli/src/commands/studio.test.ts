@@ -67,6 +67,26 @@ describe("vox studio", () => {
     }
   });
 
+  test("--accounts fails closed without a real secret, and refuses to share the door with --token", async () => {
+    const io = collectingIo();
+    const before = process.env.VOX_AUTH_SECRET;
+    delete process.env.VOX_AUTH_SECRET;
+    try {
+      await expect(runStudio(["--accounts", "/tmp/vox-auth"], config, io, () => fakeGateway(), false))
+        .rejects.toThrow("VOX_AUTH_SECRET");
+      process.env.VOX_AUTH_SECRET = "an-adequately-long-test-secret-0123456789";
+      await expect(runStudio(["--accounts", "/tmp/vox-auth", "--token", "sesame"], config, io, () => fakeGateway(), false))
+        .rejects.toThrow("mutually exclusive");
+      let seen: GatewayServerOptions | undefined;
+      expect(await runStudio(["--accounts", "/tmp/vox-auth"], config, io, options => { seen = options; return fakeGateway(); }, false)).toBe(0);
+      expect(seen?.accounts?.dir).toBe("/tmp/vox-auth");
+      expect(seen?.accounts?.secret?.length).toBeGreaterThanOrEqual(32);
+    } finally {
+      if (before === undefined) delete process.env.VOX_AUTH_SECRET;
+      else process.env.VOX_AUTH_SECRET = before;
+    }
+  });
+
   test("rejects a malformed port and unknown options", async () => {
     const io = collectingIo();
     await expect(runStudio(["--port", "not-a-port"], config, io, () => fakeGateway(), false))

@@ -5,7 +5,7 @@ import { webAssets } from "../generated/web-assets";
 import type { CliIo } from "../io";
 
 export const studioUsage = `usage: vox studio [--host HOST] [--port PORT] [--token TOKEN]
-                 [--library DIR] [--library-max-bytes SIZE]
+                 [--library DIR] [--library-max-bytes SIZE] [--accounts DIR]
                  [--max-sessions N] [--max-session-seconds N] [--demo]
 
 Serve the Web Studio: the browser app, the realtime WebSocket (/v1/realtime), and the
@@ -30,6 +30,11 @@ options:
                  captures are evicted to stay under it; corrected or promoted captures
                  are curated work and are never auto-deleted — once they alone fill
                  the quota, new captures are refused instead. Unbounded when unset
+  --accounts DIR hosted accounts (docs/auth.md): auth.db in DIR, signup/login at
+                 /v1/auth, cookie sessions and API keys instead of the shared token
+                 (mutually exclusive with --token). Requires VOX_AUTH_SECRET (>= 32
+                 chars); VOX_AUTH_BASE_URL sets the public origin behind a tunnel;
+                 VOX_GATEWAY_ACCOUNTS is the environment fallback
 
 Demo guardrails (docs/public-demo.md), all off by default; environment fallbacks
 VOX_GATEWAY_MAX_SESSIONS, VOX_GATEWAY_MAX_SESSION_SECONDS, VOX_GATEWAY_DEMO=1:
@@ -70,6 +75,7 @@ export async function runStudio(
   let maxSessionSeconds = positiveEnv("VOX_GATEWAY_MAX_SESSION_SECONDS");
   let demoMode = process.env.VOX_GATEWAY_DEMO === "1";
   let libraryDir = process.env.VOX_GATEWAY_LIBRARY;
+  let accountsDir = process.env.VOX_GATEWAY_ACCOUNTS;
   const quotaEnv = process.env.VOX_GATEWAY_LIBRARY_MAX_BYTES;
   // A quota typo must fail closed too, exactly like the guardrail envs above.
   let libraryMaxBytes = quotaEnv === undefined || quotaEnv === ""
@@ -95,12 +101,24 @@ export async function runStudio(
     else if (arg === "--demo") demoMode = true;
     else if (arg === "--library") libraryDir = value();
     else if (arg === "--library-max-bytes") libraryMaxBytes = parseByteSize(value(), `studio: ${arg}`);
+    else if (arg === "--accounts") accountsDir = value();
     else throw new TypeError(`studio: unknown option ${arg}`);
   }
   // A quota with no library is a config mistake; failing closed beats silently ignoring it.
   if (libraryMaxBytes !== undefined && (libraryDir === undefined || libraryDir === "")) {
     throw new TypeError("studio: --library-max-bytes requires --library");
   }
+  // Hosted accounts fail closed at startup (docs/auth.md): no weak secrets, no
+  // accounts + token double-door.
+  const hasAccounts = accountsDir !== undefined && accountsDir !== "";
+  const authSecret = process.env.VOX_AUTH_SECRET ?? "";
+  if (hasAccounts && authSecret.length < 32) {
+    throw new TypeError("studio: --accounts requires VOX_AUTH_SECRET (at least 32 characters)");
+  }
+  if (hasAccounts && token !== undefined && token !== "") {
+    throw new TypeError("studio: --accounts and --token are mutually exclusive");
+  }
+  const authBaseUrl = process.env.VOX_AUTH_BASE_URL;
   // The manifest is baked at build time; an API-only binary is a build outcome worth
   // saying out loud, not a runtime surprise.
   if (Object.keys(webAssets).length === 0) {
@@ -121,6 +139,13 @@ export async function runStudio(
     ...(demoMode ? { demoMode } : {}),
     ...(libraryDir === undefined || libraryDir === "" ? {} : { libraryDir }),
     ...(libraryMaxBytes === undefined ? {} : { libraryMaxBytes }),
+    ...(hasAccounts ? {
+      accounts: {
+        dir: accountsDir as string,
+        secret: authSecret,
+        ...(authBaseUrl === undefined || authBaseUrl === "" ? {} : { baseUrl: authBaseUrl }),
+      },
+    } : {}),
     loadSileroVad: () => loadSileroVadModel(line => io.err(line)),
     ...(configPath === undefined ? {} : {
       persistPronunciations: (entries: Record<string, string>) => persistPronunciationsFile(configPath, entries),

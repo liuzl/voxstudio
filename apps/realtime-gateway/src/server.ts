@@ -8,6 +8,9 @@ import { connectMcpServers, type McpToolSource } from "@voxstudio/mcp";
 import { OpenAiRealtimeConnection } from "./openai-realtime";
 import { OWNER_USER_ID, type AuthContext } from "./auth/auth-context";
 import { resolveAuthContext, upgradeOriginAllowed } from "./auth/request-auth";
+// Type-only: the accounts module (and better-auth with it) loads dynamically, and
+// only when a deployment configured accounts (docs/auth.md phase 3).
+import type { Accounts } from "./auth/accounts";
 import { fromEngineVoiceId, toEngineVoiceId } from "./voice-namespace";
 import { CaptureLibrary } from "./library";
 import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand } from "./protocol";
@@ -28,6 +31,19 @@ export interface GatewayServerOptions {
    * Absent, the self-hosted rule applies: the optional shared token, owner identity.
    */
   authResolver?: (request: Request) => AuthContext | null;
+  /**
+   * Hosted accounts (docs/auth.md phase 3): Better Auth behind the identity seam,
+   * auth.db in `dir`. Mutually exclusive with `token` — hosted is session or API key,
+   * nothing else. The secret and any verification-email sender come from the
+   * deployment; nothing here invents either.
+   */
+  accounts?: {
+    dir: string;
+    secret: string;
+    /** Public origin for links and origin checks; defaults to the gateway's own URL. */
+    baseUrl?: string;
+    sendVerificationEmail?: (email: string, url: string) => Promise<void>;
+  };
   reconnectGraceMs?: number;
   /** OpenAI-dialect connections: how long a client may take to answer a function call. */
   openAiFunctionCallTimeoutMs?: number;
@@ -123,6 +139,29 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const log = options.log ?? (() => {});
   const sessions = new Map<string, GatewaySession>();
+
+  // Hosted accounts and the shared token are different products (docs/auth.md
+  // decision 1); a deployment that configures both is a mistake, said at startup.
+  if (options.accounts !== undefined && options.token !== undefined && options.token !== "") {
+    throw new TypeError("accounts and --token are mutually exclusive: hosted deployments take a session or an API key, nothing else");
+  }
+  // Fail at startup, not on the first request: a hosted deployment with a weak or
+  // missing secret must never come up. 32 is Better Auth's own floor.
+  if (options.accounts !== undefined && options.accounts.secret.length < 32) {
+    throw new TypeError("accounts: the auth secret must be at least 32 characters (set VOX_AUTH_SECRET)");
+  }
+  let accountsInstance: Promise<Accounts> | undefined;
+  const accountsFor = (): Promise<Accounts> => {
+    const configured = options.accounts as NonNullable<GatewayServerOptions["accounts"]>;
+    accountsInstance ??= import("./auth/accounts").then(module => module.startAccounts({
+      dir: configured.dir,
+      secret: configured.secret,
+      baseUrl: configured.baseUrl ?? server.url.toString().replace(/\/$/, ""),
+      sendVerificationEmail: configured.sendVerificationEmail,
+      log,
+    }));
+    return accountsInstance;
+  };
 
   // Demo mode wins over a configured library: hardening a deployment must never quietly
   // start retaining its visitors' audio.
@@ -443,18 +482,25 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   const server = Bun.serve<SocketData>({
     hostname: options.hostname ?? "127.0.0.1",
     port: options.port ?? 8790,
-    fetch(request, server) {
+    async fetch(request, server) {
       const url = new URL(request.url);
       if (url.pathname === "/healthz") {
         return Response.json({ ok: true, protocol: protocolVersion, sessions: sessions.size });
       }
       const page = serveStatic(request, url);
       if (page) return page;
+      // Better Auth's own routes sit before the identity gate — logging in requires
+      // no identity, and the module handles its own CSRF/origin discipline.
+      if (options.accounts !== undefined && (url.pathname === "/v1/auth" || url.pathname.startsWith("/v1/auth/"))) {
+        return (await accountsFor()).handler(request);
+      }
       // The one place a credential becomes an identity; every /v1 handler below sees
       // only the resolved context (docs/auth.md phase 1).
-      const ctx = options.authResolver === undefined
-        ? resolveAuthContext(request, options)
-        : options.authResolver(request);
+      const ctx = options.authResolver !== undefined
+        ? options.authResolver(request)
+        : options.accounts !== undefined
+          ? await (await accountsFor()).resolve(request)
+          : resolveAuthContext(request, options);
       if (ctx === null) return new Response("unauthorized", { status: 401 });
       if (url.pathname === "/v1/realtime") {
         // Browsers always send Origin on an upgrade; a cross-site one is refused before
@@ -753,6 +799,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // Draining: in-flight library work (a promote awaiting its engine) finishes
       // against an open database; only then does the store close.
       if (library) await library.close();
+      if (accountsInstance) (await accountsInstance).close();
       // Bounded: Bun's force-stop has been observed to never resolve when a client's
       // WebSocket close handshake is still in flight at stop time (reproduced 2026-07-19
       // with an MCP-configured gateway). The sockets are already torn down above; a stop

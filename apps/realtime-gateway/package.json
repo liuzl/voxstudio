@@ -11,6 +11,7 @@
     "./protocol": "./src/protocol.ts"
   },
   "dependencies": {
+    "@better-auth/api-key": "^1.6.25",
     "@voxstudio/audio": "workspace:*",
     "@voxstudio/clients": "workspace:*",
     "@voxstudio/config": "workspace:*",
@@ -19,7 +20,8 @@
     "@voxstudio/duplex-session": "workspace:*",
     "@voxstudio/mcp": "workspace:*",
     "@voxstudio/platform-bun": "workspace:*",
-    "@voxstudio/text": "workspace:*"
+    "@voxstudio/text": "workspace:*",
+    "better-auth": "^1.6.25"
   },
   "devDependencies": {
     "openai": "^6.48.0"
