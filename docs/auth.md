@@ -33,7 +33,7 @@ unbuilt work rather than a value someone has to supply:
 | `VOX_AUTH_SECRET` (≥32 chars) | Comes from the deployment. A short or missing secret refuses to boot. |
 | `VOX_AUTH_BASE_URL` | The public origin. Better Auth's own origin check keys on it, and the discovery documents publish it; missing, the gateway warns at startup. |
 | Quota numbers | No production default exists. Pick them from measured GPU throughput. |
-| **Operator capability (unbuilt)** | No way to ban an abusive account through the product. Implementation plus tests, not configuration — see [Operator capability](#operator-capability). |
+| **Operator capability (unbuilt)** | No way to ban an abusive account through the product. Implementation plus tests, not configuration. Required before signups open, and sequenced after the tunnel — see [Operator capability](#operator-capability). |
 | **Password recovery (unbuilt)** | Only if the password door opens. `/forget-password` is rate-limited but has no reset-email callback, so a user who forgets their password has no way back. A social-only launch does not need it: no password, nothing to recover. |
 
 ## How it works
@@ -283,24 +283,63 @@ including the person running the deployment, whose privileged access today is th
 itself: `auth.db`, `library.db`, and the audio on disk.
 
 That is a real gap for a public entrance, and the missing capability is narrow: stop an
-abusive account, revoke its keys, see who exists. It is not a role hierarchy and should not
-become one — an operator is the party holding the machine, not a kind of user.
+abusive account, cut its sessions and keys, see who exists. It is not a role hierarchy and
+should not become one — an operator is the party holding the machine, not a kind of user.
 
-The likely implementation is Better Auth's admin plugin rather than a hand-written CLI, for
-a reason worth recording: **a ban only means something if the auth path enforces it.**
-Flipping a column from a script leaves existing sessions and keys working, which is a wish
-rather than a ban; the plugin checks it where sessions are validated. Three things must be
-decided rather than inherited when it lands:
+**A ban only means something if the auth path enforces it.** Flipping a column from a
+script leaves existing sessions and API keys working, which is a wish rather than a ban.
+That is the whole argument for Better Auth's admin plugin (already shipped inside
+`better-auth`, so no new dependency) over a hand-written CLI: its `banned` check runs where
+sessions are validated.
 
-- **Which of its endpoints are exposed.** It ships more than ban and list.
-- **Whether impersonation is enabled**, and whether it can be disabled — unverified. The
-  privacy argument against it is weaker than it first appears (an operator with the host
-  can already read every capture, so impersonation adds convenience, not reach), but a
-  stolen admin credential reaching the app is a different exposure from a compromised host;
-  2FA on that account belongs in the same decision.
-- **Audit from the first day.** Who banned whom, when, and which keys were revoked. There
-  is no audit trail today because there are no privileged actions; the day one exists, its
-  history cannot be reconstructed afterwards.
+### Admin identity comes from the deployment, not the database
+
+The plugin adds `role`, `banned`, `banReason`, and `banExpires` to the user table, but it
+also accepts **`adminUserIds`** — a fixed list of user ids from configuration. Use that.
+Administrator then means "named in this deployment's environment", which is what an
+operator actually is, and the `role` column stays inert. An earlier revision of this
+document claimed the plugin necessarily puts a role in the request path; that was wrong.
+
+### Expose four verbs, not fifteen
+
+Every exposed endpoint is a capability to defend, audit, and explain. The needed action is
+one — stop this account — plus what it takes to see and enforce it.
+
+| Expose | Why |
+|---|---|
+| `ban-user`, `unban-user` | The capability itself, reversible. |
+| `list-users`, `get-user` | You cannot act on abuse you cannot see. |
+| `list-user-sessions`, `revoke-user-sessions` | The enforcement half: cut what is already open. |
+
+| Do not expose | Why not |
+|---|---|
+| `create-user`, `set-user-password` | Both re-open the password door this deployment deliberately closed, server-side and bypassing signup. Setting a password on an account that has none is impersonation without even impersonation's audit trail. |
+| `update-user` | Arbitrary writes to a user row, email included. Changing someone's address to your own is account takeover. Unclear blast radius. |
+| `remove-user` | Captures are recordings of humans and voices are curated work, both keyed on userId. Deleting the row without deciding their fate orphans or destroys them. **A ban is not a deletion** — that is a data-lifecycle decision, not a moderation one. |
+| `set-role` | Roles stay unused (above). An inert-but-writable field is worse than an absent one: harmless today, a privilege path the moment anything starts reading it. |
+| `has-permission` | Only meaningful with the role and permission system we are not adopting. Dead surface. |
+| `impersonate-user`, `stop-impersonating` | A separate decision, below. |
+
+### Three things to decide, and one to verify first
+
+- **Verify before building: does a ban stop API keys?** The plugin's check lives in session
+  validation, while our machine door goes through `verifyApiKey`. If keys survive a ban, a
+  banned account's agents keep working and the ban leaks. This is the first thing to test,
+  not the last.
+- **Impersonation: on or off**, and whether it can be disabled outright — still unverified;
+  the plugin exposes `impersonationSessionDuration`, which implies configurability but not
+  a switch. The privacy argument against it is weaker than it first appears — an operator
+  with the host can already read every capture, so it adds convenience, not reach — but a
+  stolen admin credential reaching the app is a different exposure from a compromised host,
+  and 2FA on that account belongs in the same decision.
+- **Audit from the first day.** Who banned whom, when, and which keys were revoked. There is
+  no audit trail today because there are no privileged actions; the day one exists, its
+  history cannot be reconstructed afterwards. Where it is written is a public-repo boundary
+  question: the events belong with the deployment, not in this repository.
+
+**When.** This is "required before signups open", not "missing now": until voxstudio.cc has
+DNS and a tunnel, nobody can reach the deployment to abuse it. It sequences after the
+tunnel, before the entrance opens.
 
 ## Not built yet, and what would change that
 
@@ -312,7 +351,7 @@ condition rather than a debate with a slogan.
 | Not built | What would justify it |
 |---|---|
 | Organizations, teams, multi-principal ownership | A customer who needs shared resources. Ownership is one userId column precisely so this stays a widening, not a rewrite. |
-| Roles | An organization to attach them to, or an admin surface reachable over HTTP. A role with nothing to govern is a column that does nothing. |
+| Roles | An organization to attach them to. Not an admin surface: operator identity comes from `adminUserIds` in the deployment's configuration, so administration needs no role at all — see [Operator capability](#operator-capability). A role with nothing to govern is a column that does nothing. |
 | Scoped credentials (read-only or synthesis-only keys) | Users handing keys to agents they did not write. Today the key's holder is its author; when that stops being true, "your key carries your owner's full authority" becomes a hazard we invited. Closest of these to justified. |
 | Device authorization / remote `vox login` | A remote interactive CLI as a real product entrance. Pasting a key is enough while the developer has a browser open. |
 | OIDC / SSO | An enterprise deployment. The plugin exists; the work is integration, not architecture. |
