@@ -8,7 +8,8 @@
     "platforms/*"
   ],
   "scripts": {
-    "build:cli": "bun run build:web && bun tools/ensure-silero-model.ts --fetch && bun run --cwd apps/cli build",
+    "build:cli": "bun run build:web && bun tools/ensure-silero-model.ts --fetch && bun run --cwd apps/cli build && bun run smoke:cli",
+    "smoke:cli": "bun tools/smoke-cli.ts",
     "measure:aec": "./platforms/macos-audio/build.sh && bun run platforms/macos-audio/aec-measure.ts",
     "test:macos-audio": "./platforms/macos-audio/build.sh && bun run platforms/macos-audio/smoke-test.ts",
     "test:ts": "bun tools/ensure-web-assets.ts && bun tools/ensure-silero-model.ts && bun test packages platforms apps/cli/src apps/realtime-gateway/src apps/mcp/src apps/web/src",
