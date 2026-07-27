@@ -386,3 +386,44 @@ describe("H-2: brute-force protection does not depend on NODE_ENV", () => {
     }
   });
 });
+
+describe("M-2: the OpenAI dialect reports a quota refusal as one", () => {
+  test("an exhausted allowance is quota_exceeded with a retry, not session_capacity", async () => {
+    gateway = hostedGateway({ operations: 1, windowSeconds: 60 });
+    const cookie = await signUp(gateway.url, "openai-dialect@test.dev");
+    const origin = new URL(gateway.url).origin;
+    // The OpenAI SDKs derive this URL and carry ?model=; that is what selects the dialect.
+    const url = `${new URL("/v1/realtime", gateway.url).toString().replace(/^http/, "ws")}?model=voxstudio-realtime`;
+
+    const connect = async (): Promise<{ type: string; error?: { code?: string; message?: string; retry_after_seconds?: number } }[]> => {
+      const events: { type: string; error?: { code?: string; message?: string; retry_after_seconds?: number } }[] = [];
+      const socket = new WebSocket(url, { headers: { cookie, origin } } as never);
+      await new Promise<void>((resolve, reject) => {
+        socket.addEventListener("open", () => resolve());
+        socket.addEventListener("error", () => reject(new Error("upgrade refused")));
+      });
+      socket.addEventListener("message", event => {
+        if (typeof event.data === "string") events.push(JSON.parse(event.data) as { type: string });
+      });
+      // The dialect starts its session on the first appended audio.
+      const pcm16 = Buffer.from(new Int16Array(320).fill(200).buffer).toString("base64");
+      socket.send(JSON.stringify({ type: "input_audio_buffer.append", audio: pcm16 }));
+      const deadline = Date.now() + 5_000;
+      while (!events.some(entry => entry.type === "error" || entry.type === "session.created")) {
+        if (Date.now() > deadline) break;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      socket.close();
+      return events;
+    };
+
+    // The first connection spends the allowance.
+    await connect();
+    const refused = await connect();
+    const failure = refused.find(entry => entry.type === "error");
+    expect(failure?.error?.code).toBe("quota_exceeded");
+    // And it says when to come back, like every other refusal does.
+    expect(failure?.error?.retry_after_seconds).toBeGreaterThan(0);
+    expect(failure?.error?.message ?? "").toContain("quota");
+  });
+});

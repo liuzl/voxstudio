@@ -139,7 +139,13 @@ What transfers is the shape, not the policy:
   studio with no accounts mints no keys and its behavior must not change. The documents are
   built per request from the live configuration — the library's routes appear in the
   OpenAPI paths only when the library is on, the demo-mode refusal is stated only when
-  demo mode is set, and the server URL is the deployment's public origin. `/agent` and
+  demo mode is set, and the server URL is the deployment's public origin: the configured
+  one when `VOX_AUTH_BASE_URL` is set, otherwise the origin the request actually arrived
+  on (a tunnel's forwarded host and scheme), falling back to the bind address only when
+  nothing was forwarded. Publishing that bind address unconditionally used to leak the
+  internal port and hand agents instructions they could not follow. Setting the variable
+  is still required for anything tunnelled — the authentication library's own origin
+  check keys on it, and the gateway now says so at startup when it is missing. `/agent` and
   `/llms.txt` are markdown served as `text/plain; charset=utf-8`: inline in every browser,
   no markup for an agent to strip. The OpenAPI document describes exactly the implemented
   paths and deliberately omits two things — the realtime WebSocket (not an OpenAPI shape)
@@ -294,7 +300,10 @@ phase 3 is the only dependency-bearing step and is confined to one directory.
    and an id to quote. On the realtime socket the refusal is a `command.rejected` with
    reason `quota_exceeded`, the mechanism session capacity already used, carrying the
    same `retryAfterSeconds` and `requestId` (additive protocol fields) so a socket client
-   gets the same guidance a REST client does.
+   gets the same guidance a REST client does. The OpenAI-Realtime dialect reports it in
+   its own vocabulary — an `error` event with `code: "quota_exceeded"` and
+   `retry_after_seconds` — rather than flattening it into `session_capacity`: a full
+   gateway and a spent allowance are different answers, and only one is worth waiting out.
 
    **Every API error uses that envelope.** `{"error":{"message","code"}}` is what `/agent`
    and the Skill tell agents to branch on, so the gateway's own refusals — 401, 403, 404,

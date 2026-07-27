@@ -120,8 +120,16 @@ export class OpenAiRealtimeConnection {
     this.options.send(JSON.stringify({ type, event_id: `event_${this.eventCounter}`, ...payload }));
   }
 
-  private sendError(code: string, message: string): void {
-    this.emit("error", { error: { type: "invalid_request_error", code, message } });
+  private sendError(code: string, message: string, retryAfterSeconds?: number): void {
+    this.emit("error", {
+      error: {
+        type: "invalid_request_error",
+        code,
+        message,
+        // Snake case, like every other field in this dialect's wire shape.
+        ...(retryAfterSeconds === undefined ? {} : { retry_after_seconds: retryAfterSeconds }),
+      },
+    });
   }
 
   /** Both the GA nested shape and the flat beta fields: harmless to over-describe, fatal to under-describe. */
@@ -308,8 +316,15 @@ export class OpenAiRealtimeConnection {
     try {
       session = this.options.createSession(this.clientTools.map(tool => this.bridgeTool(tool)));
     } catch (error) {
-      // The capacity guardrail (docs/public-demo.md), in this dialect's vocabulary.
-      this.sendError("session_capacity", error instanceof Error ? error.message : String(error));
+      // The guardrail that refused, in this dialect's vocabulary: a spent quota and a
+      // full gateway are different answers, and only one of them is worth retrying
+      // (adversarial review 2026-07-26 — both used to read as session_capacity).
+      const refusal = error as { code?: string; retryAfterSeconds?: number };
+      this.sendError(
+        refusal.code ?? "session_capacity",
+        error instanceof Error ? error.message : String(error),
+        refusal.retryAfterSeconds,
+      );
       this.starting = Promise.resolve();
       this.options.close();
       return this.starting;

@@ -225,8 +225,26 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
    * as it is now (library on or off, demo or not) rather than a snapshot of startup.
    * Cache-Control is short: they are small, and a stale contract is worse than a fetch.
    */
-  const discoveryOptions = (): DiscoveryOptions => ({
-    baseUrl: options.accounts?.baseUrl ?? server.url.toString(),
+  /**
+   * The origin to publish in the discovery documents. The configured public origin wins;
+   * without one we describe the origin the request actually arrived on (a tunnel's
+   * forwarded host and scheme), and only fall back to our own bind address when nothing
+   * forwarded anything — which is the truth for a local run and a leak for a tunnelled
+   * one (adversarial review 2026-07-26).
+   */
+  const publicOrigin = (request: Request): string => {
+    const configured = options.accounts?.baseUrl;
+    if (configured !== undefined && configured !== "") return configured;
+    const forwardedHost = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+    if (forwardedHost !== null && forwardedHost !== "") {
+      const scheme = request.headers.get("x-forwarded-proto") ?? new URL(request.url).protocol.replace(":", "");
+      // A Host header is caller-supplied, so keep it to a host[:port] shape.
+      if (/^[A-Za-z0-9.\-]+(:\d{1,5})?$/.test(forwardedHost)) return `${scheme.split(",")[0]}://${forwardedHost}`;
+    }
+    return server.url.toString();
+  };
+  const discoveryOptions = (request: Request): DiscoveryOptions => ({
+    baseUrl: publicOrigin(request),
     library: library !== undefined,
     demo: options.demoMode === true,
     // The real allowance, so an agent can pace itself instead of learning it by refusal.
@@ -235,12 +253,12 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   const text = (body: string, contentType: string): Response => new Response(body, {
     headers: { "content-type": contentType, "cache-control": "public, max-age=300" },
   });
-  const discoveryRoutes: Record<string, () => Response> = {
+  const discoveryRoutes: Record<string, (request: Request) => Response> = {
     // Markdown as text/plain: renders inline in every browser, and an agent gets the
     // page with no markup to strip.
-    "/agent": () => text(agentPage(discoveryOptions()), "text/plain; charset=utf-8"),
-    "/llms.txt": () => text(llmsTxt(discoveryOptions()), "text/plain; charset=utf-8"),
-    "/openapi.json": () => text(JSON.stringify(openApiDocument(discoveryOptions()), null, 2), "application/json; charset=utf-8"),
+    "/agent": request => text(agentPage(discoveryOptions(request)), "text/plain; charset=utf-8"),
+    "/llms.txt": request => text(llmsTxt(discoveryOptions(request)), "text/plain; charset=utf-8"),
+    "/openapi.json": request => text(JSON.stringify(openApiDocument(discoveryOptions(request)), null, 2), "application/json; charset=utf-8"),
   };
   /**
    * The quota is an accounts feature: a self-hosted studio has one owner, so metering
@@ -289,6 +307,9 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       },
     );
   };
+  if (options.accounts !== undefined && (options.accounts.baseUrl === undefined || options.accounts.baseUrl === "")) {
+    log("accounts: no public origin configured — set VOX_AUTH_BASE_URL before putting this behind a tunnel, or the authentication library's own origin check refuses API-key creation");
+  }
   let accountsInstance: Promise<Accounts> | undefined;
   const accountsFor = (): Promise<Accounts> => {
     const configured = options.accounts as NonNullable<GatewayServerOptions["accounts"]>;
@@ -505,6 +526,8 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
 
   /** Thrown by createSession at the capacity guardrail; both dialects translate it. */
   class CapacityError extends Error {
+    readonly code = "session_capacity";
+
     constructor() {
       super("session_capacity");
     }
@@ -512,10 +535,11 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
 
   /** Thrown by createSession when the owner's allowance is spent; translated the same way. */
   class QuotaError extends Error {
+    readonly code = "quota_exceeded";
     readonly retryAfterSeconds: number;
 
     constructor(retryAfterSeconds: number) {
-      super("quota_exceeded");
+      super(`quota exhausted: retry in ${retryAfterSeconds}s`);
       this.retryAfterSeconds = retryAfterSeconds;
     }
   }
@@ -697,7 +721,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         if (request.method !== "GET" && request.method !== "HEAD") {
           return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
         }
-        return (discoveryRoutes[url.pathname] as () => Response)();
+        return (discoveryRoutes[url.pathname] as (request: Request) => Response)(request);
       }
       const page = serveStatic(request, url);
       if (page) return page;
