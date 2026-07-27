@@ -25,6 +25,8 @@ export interface DiscoveryOptions {
    * discovering it by being refused (docs/auth.md phase 4).
    */
   quota?: { operations: number; windowSeconds: number } | undefined;
+  /** Ceiling on one synthesis, in estimated seconds of speech; absent when unbounded. */
+  maxSynthesisSeconds?: number | undefined;
 }
 
 /**
@@ -47,7 +49,8 @@ Rate limiting may still exist in front of the gateway (a proxy or tunnel), so ho
   return `This deployment allows **${operations} chargeable operations per ${windowSeconds} seconds, per account**.
 Chargeable: ${chargeableList}.
 Free: every GET, correcting or deleting a capture, deleting a voice, \`/healthz\`, and
-this page. Over the allowance you get 429 with \`Retry-After\` (seconds) and
+this page.${options.maxSynthesisSeconds === undefined ? "" : ` One charge is one request, not a fixed amount of work, so a single
+synthesis is capped at ${options.maxSynthesisSeconds}s of estimated speech (\`input_too_long\`).`} Over the allowance you get 429 with \`Retry-After\` (seconds) and
 \`code: "quota_exceeded"\`; the window is anchored at your first charged call, and a
 refusal does not extend it. Sharing an account with other agents shares the allowance.`;
 }
@@ -128,7 +131,10 @@ Realtime dialect. Authenticate the upgrade with the same header.
 - **404 with \`library_disabled\`** — the feature is off on this deployment, not a
   missing item. Stop asking.
 - **400 with \`bad_voice_id\`** — the voice name is malformed, too long, or a raw
-  internal id. Use the names \`GET /v1/voices\` returned.
+  internal id. Use the names \`GET /v1/voices\` returned.${options.maxSynthesisSeconds === undefined ? "" : `
+- **400 with \`input_too_long\`** — one synthesis may be at most
+  ${options.maxSynthesisSeconds}s of estimated speech here. Split the text and send the
+  parts; the refusal costs no quota.`}
 - **502/503** — an engine is unreachable or the gateway is shutting down. Retry with
   backoff; a 503 during shutdown will not clear on this connection.
 

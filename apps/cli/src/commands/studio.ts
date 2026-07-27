@@ -6,7 +6,7 @@ import type { CliIo } from "../io";
 
 export const studioUsage = `usage: vox studio [--host HOST] [--port PORT] [--token TOKEN]
                  [--library DIR] [--library-max-bytes SIZE] [--accounts DIR]
-                 [--quota N] [--quota-window SECONDS]
+                 [--quota N] [--quota-window SECONDS] [--max-synthesis-seconds N]
                  [--max-sessions N] [--max-session-seconds N] [--demo]
 
 Serve the Web Studio: the browser app, the realtime WebSocket (/v1/realtime), and the
@@ -47,6 +47,11 @@ options:
                  (VOX_GATEWAY_QUOTA)
   --quota-window SECONDS
                  the quota window, default 3600 (VOX_GATEWAY_QUOTA_WINDOW)
+  --max-synthesis-seconds N
+                 refuse a single /v1/audio/speech longer than N estimated seconds of
+                 speech (VOX_GATEWAY_MAX_SYNTHESIS_SECONDS). A quota counts requests,
+                 not engine time, so without this one unit buys an unbounded synthesis.
+                 Off by default
 
 Demo guardrails (docs/public-demo.md), all off by default; environment fallbacks
 VOX_GATEWAY_MAX_SESSIONS, VOX_GATEWAY_MAX_SESSION_SECONDS, VOX_GATEWAY_DEMO=1:
@@ -113,6 +118,7 @@ export async function runStudio(
   // A quota typo fails closed, exactly like the guardrail envs above.
   let quotaOperations = positiveEnv("VOX_GATEWAY_QUOTA", true);
   let quotaWindow = positiveEnv("VOX_GATEWAY_QUOTA_WINDOW");
+  let maxSynthesisSeconds = positiveEnv("VOX_GATEWAY_MAX_SYNTHESIS_SECONDS");
   const quotaEnv = process.env.VOX_GATEWAY_LIBRARY_MAX_BYTES;
   // A quota typo must fail closed too, exactly like the guardrail envs above.
   let libraryMaxBytes = quotaEnv === undefined || quotaEnv === ""
@@ -141,6 +147,7 @@ export async function runStudio(
     else if (arg === "--accounts") accountsDir = value();
     else if (arg === "--quota") quotaOperations = positiveNumber(value(), arg, true);
     else if (arg === "--quota-window") quotaWindow = positiveNumber(value(), arg);
+    else if (arg === "--max-synthesis-seconds") maxSynthesisSeconds = positiveNumber(value(), arg);
     else throw new TypeError(`studio: unknown option ${arg}`);
   }
   // A quota with no library is a config mistake; failing closed beats silently ignoring it.
@@ -194,6 +201,7 @@ export async function runStudio(
     ...(quotaOperations === undefined
       ? {}
       : { quota: { operations: quotaOperations, windowSeconds: quotaWindow ?? 3_600 } }),
+    ...(maxSynthesisSeconds === undefined ? {} : { maxSynthesisSeconds }),
     loadSileroVad: () => loadSileroVadModel(line => io.err(line)),
     ...(configPath === undefined ? {} : {
       persistPronunciations: (entries: Record<string, string>) => persistPronunciationsFile(configPath, entries),

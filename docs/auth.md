@@ -210,6 +210,19 @@ Three semantics are worth stating because each replaced a wrong answer:
 - **The allowance belongs to the account.** A human and every agent holding their keys
   share one; minting another key buys nothing.
 
+**A charge is a request, not an amount of work.** Measured on a live engine: one unit
+bought 29 seconds of audio and 10 seconds of GPU, where a short sentence costs about one
+second. `--max-synthesis-seconds N` bounds a single `/v1/audio/speech` by estimated speech
+duration — the same script-aware estimate the Studio shows before generating — and refuses
+past it with `input_too_long` before touching an engine, so the refusal costs neither GPU
+nor quota. Without it no quota number predicts load, and the gateway says so at startup
+when a quota is configured alone. Off by default, like every other guardrail here.
+
+Two things the quota still does not bound, both worth knowing before signups open:
+**concurrency** (nothing limits simultaneous REST synthesis; `--max-sessions` caps only
+realtime conversations) and **transcription input** (an uploaded file's length is
+unbounded, the same gap on the ASR side).
+
 State is process-local: it resets on restart and does not span replicas. That is honest for
 one gateway and wrong for two — see triggers.
 

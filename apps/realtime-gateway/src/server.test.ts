@@ -1250,3 +1250,67 @@ describe("guardrail parse hardening", () => {
     expect(gateway.sessionCount()).toBe(0);
   });
 });
+
+describe("a single synthesis cannot buy unbounded engine time", () => {
+  /** Roughly one minute of Chinese speech, per the estimator the UI shows. */
+  const longText = "这是一段用于测试的长文本。".repeat(120);
+
+  test("over the ceiling is refused before any engine is touched", async () => {
+    const reached: string[] = [];
+    gateway = startGateway({
+      config,
+      port: 0,
+      maxSynthesisSeconds: 30,
+      fetch: engineFetch({
+        "/v1/audio/speech": async request => {
+          reached.push(new URL(request.url).pathname);
+          return new Response(new Uint8Array(writeWav(new Float32Array(2_400).fill(0.1), 24_000)));
+        },
+      }),
+    });
+    const speak = (input: string): Promise<Response> => fetch(new URL("/v1/audio/speech", gateway?.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input }),
+    });
+
+    const refused = await speak(longText);
+    expect(refused.status).toBe(400);
+    const body = await refused.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("input_too_long");
+    // The message says both numbers, so a caller can split the text without guessing.
+    expect(body.error.message).toMatch(/\d+s/);
+    expect(reached).toEqual([]);
+
+    // A normal request still goes through.
+    expect((await speak("你好，世界。")).status).toBe(200);
+    expect(reached).toHaveLength(1);
+  });
+
+  test("without a ceiling configured, nothing is bounded — today's behaviour", async () => {
+    gateway = startGateway({ config, port: 0, fetch: engineFetch() });
+    const long = await fetch(new URL("/v1/audio/speech", gateway.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: longText }),
+    });
+    expect(long.status).toBe(200);
+  });
+
+  test("a quota with no synthesis ceiling is called out at startup", () => {
+    const lines: string[] = [];
+    const dir = `${import.meta.dir}/../node_modules/.test-ceiling-${Date.now().toString(36)}`;
+    expect(() => {
+      gateway = startGateway({
+        config,
+        port: 0,
+        fetch: engineFetch(),
+        accounts: { dir, secret: "an-adequately-long-test-secret-0123456789" },
+        quota: { operations: 100, windowSeconds: 3_600 },
+        log: line => lines.push(line),
+      });
+    }).not.toThrow();
+    // The quota counts requests; without a ceiling one request is unbounded work.
+    expect(lines.some(line => line.includes("--max-synthesis-seconds"))).toBe(true);
+  });
+});

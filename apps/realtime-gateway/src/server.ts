@@ -19,6 +19,7 @@ import { discoveryPaths, isCharged, routeFor } from "./routes";
 import { CaptureLibrary } from "./library";
 import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand } from "./protocol";
 import { studioToolNames } from "@voxstudio/conversation";
+import { estSeconds } from "@voxstudio/text";
 import { builtinToolNames, GatewaySession, type EventSink } from "./session";
 
 export interface GatewayServerOptions {
@@ -72,6 +73,16 @@ export interface GatewayServerOptions {
    * to meter. Absent, no quota applies (the default everywhere).
    */
   quota?: { operations: number; windowSeconds: number };
+  /**
+   * Ceiling on one synthesis request, in estimated seconds of speech — the same
+   * script-aware estimate the Studio shows before generating.
+   *
+   * The quota counts requests, and a request is not a fixed amount of work: measured on a
+   * live engine, one unit bought 29 seconds of audio and 10 seconds of GPU where a short
+   * sentence costs about one. Without this, no quota number predicts load. Absent, nothing
+   * is bounded — hardening stays a deployment decision, as with the demo guardrails.
+   */
+  maxSynthesisSeconds?: number;
   reconnectGraceMs?: number;
   /** OpenAI-dialect connections: how long a client may take to answer a function call. */
   openAiFunctionCallTimeoutMs?: number;
@@ -267,6 +278,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     demo: options.demoMode === true,
     // The real allowance, so an agent can pace itself instead of learning it by refusal.
     ...(quota === undefined ? {} : { quota: { operations: quota.operations, windowSeconds: quota.windowSeconds } }),
+    ...(options.maxSynthesisSeconds === undefined ? {} : { maxSynthesisSeconds: options.maxSynthesisSeconds }),
   });
   const text = (body: string, contentType: string): Response => new Response(body, {
     headers: { "content-type": contentType, "cache-control": "public, max-age=300" },
@@ -321,6 +333,11 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   };
   if (options.accounts !== undefined && (options.accounts.baseUrl === undefined || options.accounts.baseUrl === "")) {
     log("accounts: no public origin configured — set VOX_AUTH_BASE_URL before putting this behind a tunnel, or the authentication library's own origin check refuses API-key creation");
+  }
+  // A quota bounds how many requests an account makes, not how much work each one is.
+  // An operator who set one and stopped there has not bounded load (see maxSynthesisSeconds).
+  if (options.quota !== undefined && options.maxSynthesisSeconds === undefined) {
+    log("quota: set without --max-synthesis-seconds — the quota counts requests, not engine time, so one unit can buy an arbitrarily long synthesis");
   }
   let accountsInstance: Promise<Accounts> | undefined;
   const accountsFor = (): Promise<Accounts> => {
@@ -1038,6 +1055,18 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
               const engineId = engineVoice(body.voice);
               if (engineId === null) return refunded(badVoiceId());
               body.voice = engineId;
+            }
+            // Refused before the engine is touched, so it costs no quota and no GPU. The
+            // estimate is the one the Studio displays, so a caller sees the same number.
+            if (options.maxSynthesisSeconds !== undefined && typeof body.input === "string") {
+              const seconds = Math.round(estSeconds(body.input));
+              if (seconds > options.maxSynthesisSeconds) {
+                return refunded(problem(
+                  400,
+                  "input_too_long",
+                  `this text is about ${seconds}s of speech; this deployment synthesizes at most ${options.maxSynthesisSeconds}s per request — split it and send the parts`,
+                ));
+              }
             }
             const rewritten = new Request(request.url, {
               method: "POST",

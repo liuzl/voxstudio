@@ -310,3 +310,16 @@ describe("openapi document", () => {
     expect(capture.required).toContain("owner_user_id");
   });
 });
+
+describe("the synthesis ceiling is published, not discovered by refusal", () => {
+  const capped: DiscoveryOptions = { ...options, quota: { operations: 500, windowSeconds: 3_600 }, maxSynthesisSeconds: 120 };
+
+  test("/agent states the number and that the refusal is free", () => {
+    const page = agentPage(capped);
+    expect(page).toContain("input_too_long");
+    expect(page).toContain("120s");
+    expect(page).toContain("costs no quota");
+    // A deployment without a ceiling must not imply one.
+    expect(agentPage(options)).not.toContain("input_too_long");
+  });
+});

@@ -27,7 +27,11 @@ VOX_AUTH_PASSWORD=off closes the email-and-password door.
 per window — synthesis, transcription, chat, voice/profile creation, promote, and
 starting a realtime conversation; reads, deletes, health and the discovery surface
 are free. --quota-window SECONDS (VOX_GATEWAY_QUOTA_WINDOW, default 3600) sets the
-window. Requires --accounts; off by default.`;
+window. Requires --accounts; off by default.
+--max-synthesis-seconds N (or VOX_GATEWAY_MAX_SYNTHESIS_SECONDS) refuses a single
+/v1/audio/speech request longer than N estimated seconds of speech. A quota counts
+requests, not engine time, so without this one unit can buy an arbitrarily long
+synthesis. Off by default.`;
 
 /**
  * OAuth providers from the environment. Credentials never travel in argv, where a
@@ -64,6 +68,7 @@ async function main(args: string[]): Promise<number> {
   let accountsDir = process.env.VOX_GATEWAY_ACCOUNTS;
   let quotaOperations = process.env.VOX_GATEWAY_QUOTA;
   let quotaWindow = process.env.VOX_GATEWAY_QUOTA_WINDOW;
+  let maxSynthesisSeconds = process.env.VOX_GATEWAY_MAX_SYNTHESIS_SECONDS;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
     const value = (): string => {
@@ -86,6 +91,7 @@ async function main(args: string[]): Promise<number> {
     else if (arg === "--accounts") accountsDir = value();
     else if (arg === "--quota") quotaOperations = value();
     else if (arg === "--quota-window") quotaWindow = value();
+    else if (arg === "--max-synthesis-seconds") maxSynthesisSeconds = value();
     else throw new TypeError(`vox-gateway: unknown option ${arg}`);
   }
   const config = explicit === undefined ? await loadConfig() : await loadConfig({ explicit });
@@ -128,6 +134,7 @@ async function main(args: string[]): Promise<number> {
   // would be exactly one account to meter, the operator's own.
   const quotaCount = positive(quotaOperations, "--quota", true);
   const quotaSeconds = positive(quotaWindow, "--quota-window") ?? 3_600;
+  const synthesisCeiling = positive(maxSynthesisSeconds, "--max-synthesis-seconds");
   if (quotaCount !== undefined && !hasAccounts) {
     throw new TypeError("vox-gateway: --quota requires --accounts");
   }
@@ -152,6 +159,7 @@ async function main(args: string[]): Promise<number> {
       },
     } : {}),
     ...(quotaCount === undefined ? {} : { quota: { operations: quotaCount, windowSeconds: quotaSeconds } }),
+    ...(synthesisCeiling === undefined ? {} : { maxSynthesisSeconds: synthesisCeiling }),
     loadSileroVad: () => loadSileroVadModel(line => console.error(line)),
     ...(decoder === undefined ? {} : { pcmDecoder: decoder }),
     ...(configPath === undefined ? {} : {
