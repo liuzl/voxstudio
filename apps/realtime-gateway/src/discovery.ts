@@ -10,6 +10,8 @@
  * aspirational: if a route is not in the switch in server.ts, it is not in here.
  */
 
+import { apiRoutes, type ApiRoute } from "./routes";
+
 export interface DiscoveryOptions {
   /** Public origin the deployment is reached at; links and the OpenAPI server use it. */
   baseUrl: string;
@@ -218,6 +220,36 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
     content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
   });
   const secured = [{ bearerAuth: [] }, { apiKeyHeader: [] }];
+  /**
+   * What every authenticated operation can answer regardless of what it does, derived
+   * from the catalog rather than repeated per operation (adversarial review 2026-07-26:
+   * 401 was missing from seven of them and 405 from all of them).
+   */
+  const commonResponses = (route: ApiRoute, method: string): Record<string, unknown> => ({
+    "401": errorResponse("Missing or invalid key (`unauthorized`)."),
+    "405": errorResponse(`Method not allowed on this route (\`method_not_allowed\`); it serves ${route.methods.join(", ")}.`),
+    ...(route.engineParam === true
+      ? { "400": errorResponse("A named `?engine=` that does not exist or is the wrong kind (`unknown_engine`), or a malformed request (`bad_request`).") }
+      : {}),
+    ...(route.demoRefusable?.includes(method) === true
+      ? { "403": errorResponse("Demo mode refuses registry writes (`demo_mode`).") }
+      : {}),
+    ...(route.library === true
+      ? {
+          "404": errorResponse("The library is not enabled on this deployment (`library_disabled`), or no such capture (`unknown_capture`)."),
+          "503": errorResponse("The library is shutting down (`library_closing`)."),
+        }
+      : {}),
+    ...(route.charged?.includes(method) === true ? { "429": quota429 } : {}),
+  });
+  /** `?engine=` wherever the router reads it — one declaration, not five. */
+  const engineParameter = {
+    name: "engine",
+    in: "query",
+    required: false,
+    schema: { type: "string" },
+    description: "Target a named engine instance instead of the role default.",
+  };
   /** The quota refusal, described once: same body and headers on every charged route. */
   const quota429 = {
     description: options.quota === undefined
@@ -341,7 +373,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
           required: true,
           content: {
             "application/json": {
-              schema: { type: "object", properties: { voice_id: { type: "string", pattern: "^[A-Za-z0-9._-]{1,64}$" } }, required: ["voice_id"] },
+              schema: { type: "object", properties: { voice_id: { type: "string", pattern: "^(?!u[0-9a-f]{12}\\.)[A-Za-z0-9._-]{1,64}$" } }, required: ["voice_id"] },
             },
           },
         },
@@ -365,6 +397,42 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
         },
       },
     },
+  };
+
+  /**
+   * The catalog completes what the hand-written detail leaves out: security, the shared
+   * responses, and `?engine=` land on every operation the router actually serves, and a
+   * documented path that no longer exists is dropped rather than published. Specific
+   * detail always wins — this fills gaps, it does not overwrite.
+   */
+  const reconcile = (paths: Record<string, Record<string, unknown>>): Record<string, Record<string, unknown>> => {
+    const reconciled: Record<string, Record<string, unknown>> = {};
+    for (const route of apiRoutes) {
+      if (route.library === true && !options.library) continue;
+      const documented = paths[route.path];
+      if (documented === undefined) continue;
+      const entry: Record<string, unknown> = {};
+      if (documented.parameters !== undefined) entry.parameters = documented.parameters;
+      for (const method of route.methods) {
+        const verb = method.toLowerCase();
+        const operation = documented[verb] as Record<string, unknown> | undefined;
+        if (operation === undefined) continue;
+        const parameters = (operation.parameters ?? []) as { name?: string }[];
+        entry[verb] = {
+          ...operation,
+          ...(route.public === true ? { security: [] } : { security: secured }),
+          ...(route.engineParam === true && !parameters.some(parameter => parameter.name === "engine")
+            ? { parameters: [...parameters, engineParameter] }
+            : {}),
+          responses: {
+            ...(route.public === true ? {} : commonResponses(route, method)),
+            ...(operation.responses as Record<string, unknown>),
+          },
+        };
+      }
+      reconciled[route.path] = entry;
+    }
+    return reconciled;
   };
 
   return {
@@ -394,7 +462,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
     },
     servers: [{ url: base }],
     security: secured,
-    paths: {
+    paths: reconcile({
       "/healthz": {
         get: {
           summary: "Liveness and which door this deployment serves",
@@ -607,7 +675,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
                 schema: {
                   type: "object",
                   properties: {
-                    id: { type: "string", pattern: "^[A-Za-z0-9._-]{1,64}$", description: "Your display name for the voice." },
+                    id: { type: "string", pattern: "^(?!u[0-9a-f]{12}\\.)[A-Za-z0-9._-]{1,64}$", description: "Your display name for the voice." },
                     text: { type: "string", description: "Verbatim transcript of the reference audio." },
                     audio: { type: "string", format: "binary" },
                   },
@@ -627,7 +695,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
         },
       },
       "/v1/voices/{id}": {
-        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", pattern: "^[A-Za-z0-9._-]{1,64}$" }, description: "A display name in the caller's namespace." }],
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", pattern: "^(?!u[0-9a-f]{12}\\.)[A-Za-z0-9._-]{1,64}$" }, description: "A display name in the caller's namespace. Names shaped like an internal engine id are refused, and under a hosted account the prefix leaves 50 usable characters." }],
         get: {
           summary: "One voice",
           security: secured,
@@ -661,7 +729,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
                 schema: {
                   type: "object",
                   properties: {
-                    id: { type: "string", pattern: "^[A-Za-z0-9._-]{1,64}$" },
+                    id: { type: "string", pattern: "^(?!u[0-9a-f]{12}\\.)[A-Za-z0-9._-]{1,64}$" },
                     description: { type: "string", description: "The voice being asked for, in words." },
                     anchor_text: { type: "string" },
                     seed: { type: "integer" },
@@ -683,8 +751,8 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
           },
         },
       },
-      ...(options.library ? libraryPaths : {}),
-    },
+      ...libraryPaths,
+    }),
     components: {
       securitySchemes: {
         bearerAuth: {

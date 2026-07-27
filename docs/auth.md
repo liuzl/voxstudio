@@ -145,7 +145,12 @@ What transfers is the shape, not the policy:
   nothing was forwarded. Publishing that bind address unconditionally used to leak the
   internal port and hand agents instructions they could not follow. Setting the variable
   is still required for anything tunnelled — the authentication library's own origin
-  check keys on it, and the gateway now says so at startup when it is missing. `/agent` and
+  check keys on it, and the gateway now says so at startup when it is missing.
+  The OpenAPI document is generated from the router's own route catalog
+  (`apps/realtime-gateway/src/routes.ts`), which is also what dispatches methods and what
+  the quota asks whether an operation is charged. A route cannot gain a method, a query
+  parameter, or a charge without the document following, because there is one list rather
+  than a hand-written copy — the copy is how four drifts accumulated unnoticed. `/agent` and
   `/llms.txt` are markdown served as `text/plain; charset=utf-8`: inline in every browser,
   no markup for an agent to strip. The OpenAPI document describes exactly the implemented
   paths and deliberately omits two things — the realtime WebSocket (not an OpenAPI shape)

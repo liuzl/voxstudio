@@ -3,22 +3,6 @@ import { agentPage, llmsTxt, openApiDocument, type DiscoveryOptions } from "./di
 
 const options: DiscoveryOptions = { baseUrl: "https://voxstudio.example/", library: true, demo: false };
 
-/** Every path the gateway actually serves under /v1, as of this commit. */
-const implementedPaths = [
-  "/healthz",
-  "/v1/audio/speech",
-  "/v1/audio/transcriptions",
-  "/v1/chat/completions",
-  "/v1/engines",
-  "/v1/voices",
-  "/v1/voices/{id}",
-  "/v1/design-profiles",
-  "/v1/library",
-  "/v1/library/{id}",
-  "/v1/library/{id}/audio",
-  "/v1/library/{id}/promote",
-];
-
 describe("agent onboarding page", () => {
   test("teaches the credential path, both headers, and their precedence", () => {
     const page = agentPage(options);
@@ -200,9 +184,9 @@ describe("openapi document", () => {
     expect(speech.security).toEqual([{ bearerAuth: [] }, { apiKeyHeader: [] }]);
   });
 
-  test("covers exactly the implemented paths — nothing missing, nothing invented", () => {
-    expect(Object.keys(document.paths).sort()).toEqual([...implementedPaths].sort());
-    // The realtime socket and the auth library's browser surface are deliberately absent.
+  test("the realtime socket and the auth library's surface stay deliberately absent", () => {
+    // Which paths *are* present is pinned against the router's catalog in
+    // openapi-fidelity.test.ts; these two are the documented omissions.
     expect(document.paths["/v1/realtime"]).toBeUndefined();
     expect(Object.keys(document.paths).some(path => path.startsWith("/v1/auth"))).toBe(false);
   });
@@ -268,7 +252,9 @@ describe("openapi document", () => {
     };
     const registerForm = register.requestBody.content["multipart/form-data"]?.schema;
     expect(registerForm?.required.sort()).toEqual(["audio", "id", "text"]);
-    expect(registerForm?.properties.id?.pattern).toBe("^[A-Za-z0-9._-]{1,64}$");
+    // The pattern now excludes names shaped like an internal engine id, which the
+    // gateway refuses with bad_voice_id (adversarial review 2026-07-26, M-10).
+    expect(registerForm?.properties.id?.pattern).toBe("^(?!u[0-9a-f]{12}\\.)[A-Za-z0-9._-]{1,64}$");
   });
 
   test("documents the error envelope and the codes callers branch on", () => {

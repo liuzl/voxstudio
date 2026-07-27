@@ -14,6 +14,7 @@ import type { Accounts } from "./auth/accounts";
 import { fromEngineVoiceId, toEngineVoiceId } from "./voice-namespace";
 import { agentPage, llmsTxt, openApiDocument, type DiscoveryOptions } from "./discovery";
 import { QuotaLedger } from "./quota";
+import { discoveryPaths, isCharged, routeFor } from "./routes";
 import { CaptureLibrary } from "./library";
 import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand } from "./protocol";
 import { studioToolNames } from "@voxstudio/conversation";
@@ -278,13 +279,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
    * Starting a realtime conversation is charged once at `session.start` — never per
    * frame, which would both mis-price a conversation and put work on the audio path.
    */
-  const chargeable = (method: string, pathname: string): boolean => {
-    if (method !== "POST") return false;
-    if (pathname === "/v1/audio/speech" || pathname === "/v1/audio/transcriptions") return true;
-    if (pathname === "/v1/chat/completions") return true;
-    if (pathname === "/v1/voices" || pathname === "/v1/design-profiles") return true;
-    return pathname.startsWith("/v1/library/") && pathname.endsWith("/promote");
-  };
+  const chargeable = (method: string, pathname: string): boolean => isCharged(pathname, method);
 
   /** One shape for every quota refusal, REST or realtime, with an id to quote in a report. */
   const quotaRefusal = (retryAfterSeconds: number): Response => {
@@ -703,6 +698,12 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     port: options.port ?? 8790,
     async fetch(request, server) {
       const url = new URL(request.url);
+      // The catalog decides which methods exist, so the document and the router cannot
+      // disagree about it (adversarial review 2026-07-26: /healthz answered anything).
+      const known = routeFor(url.pathname);
+      if (known !== undefined && !known.methods.includes(request.method)) {
+        return problem(405, "method_not_allowed", `${request.method} is not allowed on ${known.path}`);
+      }
       if (url.pathname === "/healthz") {
         // `auth` tells the app shell which door it is standing at — the one thing it
         // cannot discover without a credential (docs/auth.md phase 3). "accounts" means
@@ -717,7 +718,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // The discovery surface (docs/auth.md): unauthenticated by necessity — an agent
       // reads it to learn how to get a credential — and hosted-only, since a
       // self-hosted studio mints no keys and its paths must stay as they were.
-      if (options.accounts !== undefined && discoveryRoutes[url.pathname] !== undefined) {
+      if (options.accounts !== undefined && (discoveryPaths as readonly string[]).includes(url.pathname)) {
         if (request.method !== "GET" && request.method !== "HEAD") {
           return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
         }
@@ -791,7 +792,6 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         return problem(426, "upgrade_required", "/v1/realtime speaks WebSocket; upgrade the connection");
       }
       if (url.pathname === "/v1/engines") {
-        if (request.method !== "GET") return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
         return engineList();
       }
       // Demo mode (docs/public-demo.md): the registry is read-only — picking voices is
@@ -805,7 +805,6 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // is malformed, unfittable, or a raw engine id (adversarial review 2026-07-26).
       const engineVoice = (displayName: string): string | null => toEngineVoiceId(ctx.userId, displayName);
       if (url.pathname === "/v1/design-profiles") {
-        if (request.method !== "POST") return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
         if (options.demoMode === true) return refunded(demoRefusal());
         // Zero-shot voice design is an engine capability, not a given.
         const selected = selectEngine(url, "tts", "tts", "design");
@@ -827,7 +826,6 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       }
       if (url.pathname === "/v1/voices") {
         if (request.method === "GET") return aggregatedVoices(ctx.userId);
-        if (request.method !== "POST") return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
         if (options.demoMode === true) return refunded(demoRefusal());
         // Registration needs a registry: route to the clone-capable instance by default.
         const selected = selectEngine(url, "tts", "tts", "clone");
@@ -872,7 +870,6 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           { status: 404 },
         );
         if (url.pathname === "/v1/library") {
-          if (request.method !== "GET") return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
           const bounded = (name: string, fallback: number, max: number): number => {
             const parsed = Number(url.searchParams.get(name) ?? fallback);
             return Number.isInteger(parsed) && parsed >= 0 ? Math.min(parsed, max) : fallback;
@@ -884,7 +881,6 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         const captureId = entry[1] as string;
         const sub = entry[2];
         if (sub === "/audio") {
-          if (request.method !== "GET") return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
           if (!library.get(captureId, ctx.userId)) return notFound();
           return new Response(Bun.file(library.audioPath(captureId)), {
             headers: { "content-type": "audio/wav", "cache-control": "no-cache" },
@@ -896,7 +892,6 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           { status: 503 },
         );
         if (sub === "/promote") {
-          if (request.method !== "POST") return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
           return (async (): Promise<Response> => {
             const body = await request.json().catch(() => ({})) as { voice_id?: unknown };
             const voiceId = typeof body.voice_id === "string" ? body.voice_id.trim() : "";
@@ -979,7 +974,6 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       }
       const route = facadeRoutes[url.pathname];
       if (route) {
-        if (!route.methods.includes(request.method)) return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
         const selected = selectEngine(url, route.kind, route.role);
         if (selected instanceof Response) return selected;
         // Synthesis names a voice, so it is an ownership path too: hiding a voice from
