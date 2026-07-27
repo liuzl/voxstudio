@@ -34,3 +34,6 @@ voxstudio.*.yaml
 apps/cli/src/generated/
 platforms/bun/src/generated/
 docs/technical-report.html
+
+# Credentials never belong in the repo (docs/auth.md, CLAUDE.md).
+*.env
