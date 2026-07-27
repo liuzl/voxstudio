@@ -13,7 +13,17 @@
  */
 import { existsSync } from "node:fs";
 
-const binary = `${import.meta.dir}/../apps/cli/dist/vox`;
+/**
+ * The artifact, wherever this platform put it. `bun build --compile` appends `.exe` on
+ * Windows, and CI passes the matrix path through VOX.
+ */
+function findBinary(): string | undefined {
+  const override = process.env.VOX;
+  const candidates = override
+    ? [override]
+    : [`${import.meta.dir}/../apps/cli/dist/vox`, `${import.meta.dir}/../apps/cli/dist/vox.exe`];
+  return candidates.find(candidate => existsSync(candidate));
+}
 
 /** An import-time death looks nothing like a usage error; say which one happened. */
 const crashMarkers = [
@@ -33,16 +43,20 @@ interface Check {
 }
 
 const checks: Check[] = [
-  // Reaching the usage text means every top-level import evaluated.
-  { what: "vox --help", args: ["--help"], expectExit: 0, expectOutput: "usage" },
+  // Reaching the banner means every top-level import evaluated.
+  { what: "vox --help", args: ["--help"], expectExit: 0, expectOutput: "voxstudio: self-hosted voice i/o" },
+  // Per-command usage: the command modules resolved, not just the entrypoint.
+  { what: "vox say --help", args: ["say", "--help"], expectExit: 0, expectOutput: "usage: vox say" },
+  { what: "vox voices --help", args: ["voices", "--help"], expectExit: 0, expectOutput: "usage: vox voices" },
   // An unknown command must be *rejected* — usage on stderr, exit 2 — not crashed on:
   // the difference between a program that started and one that died loading.
   { what: "vox nonesuch", args: ["nonesuch"], expectExit: 2, expectOutput: "usage" },
 ];
 
 async function main(): Promise<number> {
-  if (!existsSync(binary)) {
-    console.error(`smoke-cli: no binary at ${binary} — run \`bun run build:cli\` first`);
+  const binary = findBinary();
+  if (binary === undefined) {
+    console.error("smoke-cli: no compiled binary found (apps/cli/dist/vox[.exe], or $VOX) — run `bun run build:cli` first");
     return 2;
   }
   const started = Date.now();

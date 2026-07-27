@@ -42,20 +42,12 @@ jobs:
         run: bun run test:ts
       - name: Build native executable
         run: bun run build:cli
+      # One definition of "the binary works", shared with local builds: build:cli runs
+      # this too, so a developer sees the same failure before pushing.
       - name: Smoke test executable
-        shell: bash
         env:
           VOX: ${{ matrix.executable }}
-        run: |
-          set -euo pipefail
-          "$VOX" --help | grep -q "voxstudio: self-hosted voice I/O"
-          "$VOX" say --help | grep -q "usage: vox say"
-          "$VOX" voices --help | grep -q "usage: vox voices"
-          set +e
-          "$VOX" invalid-command >/dev/null 2>&1
-          status=$?
-          set -e
-          test "$status" -eq 2
+        run: bun run smoke:cli
 
   python:
     name: Python tools

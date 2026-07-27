@@ -16,7 +16,10 @@ function tempDir(): string {
 
 describe("accounts lifecycle (adversarial review 2026-07-26)", () => {
   test("after close, resolving and handling refuse cleanly instead of hitting a closed database", async () => {
-    const accounts = await startAccounts({ dir: tempDir(), secret: SECRET, baseUrl: "http://127.0.0.1:8790" });
+    // Better Auth's limiter buckets per client address in a process-global store, so a
+    // suite that signs up in several files would throttle itself; the limits themselves
+    // are covered in quota-integrity.test.ts.
+    const accounts = await startAccounts({ dir: tempDir(), secret: SECRET, baseUrl: "http://127.0.0.1:8790", rateLimit: { window: 60, max: 1_000 } });
     const signup = await accounts.handler(new Request("http://127.0.0.1:8790/v1/auth/sign-up/email", {
       method: "POST",
       headers: { "content-type": "application/json" },
