@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { fetchAuthMode, fetchSession, signOut as signOutRequest, type AccountUser, type AuthMode } from "./lib/auth";
+import { fetchDoor, fetchSession, signOut as signOutRequest, type AccountUser, type AuthMode, type LoginDoors } from "./lib/auth";
 import { onUnauthorized } from "./lib/unauthorized";
 
 /**
@@ -14,6 +14,8 @@ export type AccountStatus = "loading" | "self" | "signed-in" | "signed-out";
 interface AccountState {
   status: AccountStatus;
   mode: AuthMode | undefined;
+  /** Which ways in the deployment offers; the card renders exactly these. */
+  doors: LoginDoors;
   user: AccountUser | null;
   /** Probe the door, then the session. Safe to call again after signing in or out. */
   refresh: () => Promise<void>;
@@ -25,16 +27,17 @@ interface AccountState {
 export const useAccount = create<AccountState>((set, get) => ({
   status: "loading",
   mode: undefined,
+  doors: { password: false, providers: [] },
   user: null,
 
   refresh: async () => {
-    const mode = get().mode ?? await fetchAuthMode();
+    const { mode, doors } = await fetchDoor();
     if (mode === "self") {
-      set({ status: "self", mode, user: null });
+      set({ status: "self", mode, doors, user: null });
       return;
     }
     const user = await fetchSession().catch(() => null);
-    set({ status: user === null ? "signed-out" : "signed-in", mode, user });
+    set({ status: user === null ? "signed-out" : "signed-in", mode, doors, user });
   },
 
   signOut: async () => {

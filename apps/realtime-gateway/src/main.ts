@@ -21,11 +21,35 @@ promoted ones never — ingest is refused instead once they alone fill the quota
 auth.db in DIR, signup/login at /v1/auth, cookie sessions and API keys instead of
 the shared token (the two are mutually exclusive). Requires VOX_AUTH_SECRET
 (>= 32 chars); VOX_AUTH_BASE_URL sets the public origin behind a tunnel.
+Social login: VOX_AUTH_GITHUB_ID/_SECRET or VOX_AUTH_GOOGLE_ID/_SECRET;
+VOX_AUTH_PASSWORD=off closes the email-and-password door.
 --quota N (or VOX_GATEWAY_QUOTA) bounds each account to N chargeable operations
 per window — synthesis, transcription, chat, voice/profile creation, promote, and
 starting a realtime conversation; reads, deletes, health and the discovery surface
 are free. --quota-window SECONDS (VOX_GATEWAY_QUOTA_WINDOW, default 3600) sets the
 window. Requires --accounts; off by default.`;
+
+/**
+ * OAuth providers from the environment. Credentials never travel in argv, where a
+ * process listing would show them, and never enter the repository.
+ */
+function socialProvidersFromEnv(): Record<string, { clientId: string; clientSecret: string }> | undefined {
+  const providers: Record<string, { clientId: string; clientSecret: string }> = {};
+  for (const name of ["github", "google"]) {
+    const clientId = process.env[`VOX_AUTH_${name.toUpperCase()}_ID`];
+    const clientSecret = process.env[`VOX_AUTH_${name.toUpperCase()}_SECRET`];
+    if (clientId && clientSecret) providers[name] = { clientId, clientSecret };
+    else if (clientId || clientSecret) {
+      throw new TypeError(`${name} login needs both VOX_AUTH_${name.toUpperCase()}_ID and VOX_AUTH_${name.toUpperCase()}_SECRET`);
+    }
+  }
+  return Object.keys(providers).length > 0 ? providers : undefined;
+}
+
+/** The password door, closed with VOX_AUTH_PASSWORD=off. Open unless said otherwise. */
+function passwordLoginFromEnv(): boolean {
+  return (process.env.VOX_AUTH_PASSWORD ?? "on").toLowerCase() !== "off";
+}
 
 async function main(args: string[]): Promise<number> {
   let explicit: string | undefined;
@@ -123,6 +147,8 @@ async function main(args: string[]): Promise<number> {
         dir: accountsDir as string,
         secret: authSecret,
         ...(authBaseUrl === undefined || authBaseUrl === "" ? {} : { baseUrl: authBaseUrl }),
+        ...(socialProvidersFromEnv() === undefined ? {} : { socialProviders: socialProvidersFromEnv() as Record<string, { clientId: string; clientSecret: string }> }),
+        passwordLogin: passwordLoginFromEnv(),
       },
     } : {}),
     ...(quotaCount === undefined ? {} : { quota: { operations: quotaCount, windowSeconds: quotaSeconds } }),

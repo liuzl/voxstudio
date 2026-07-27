@@ -691,3 +691,84 @@ describe("hosted accounts (docs/auth.md phase 3)", () => {
     expect(voicePrefix("frank")).not.toBe(voicePrefix("grace"));
   });
 });
+
+describe("sign-in doors (docs/auth.md — the human door)", () => {
+  const providers = { github: { clientId: "test-client-id", clientSecret: "test-client-secret" } };
+
+  test("healthz reports which doors are open, without a credential", async () => {
+    const dir = tempDir();
+    dirs.push(dir);
+    gateway = startGateway({
+      config,
+      fetch: engineFetch(),
+      port: 0,
+      accounts: { dir, secret: SECRET, socialProviders: providers, passwordLogin: false, rateLimit: { window: 60, max: 1_000 } },
+    });
+    const health = await (await fetch(new URL("/healthz", gateway.url))).json() as { login: { password: boolean; providers: string[] } };
+    expect(health.login).toEqual({ password: false, providers: ["github"] });
+  });
+
+  test("a social sign-in hands back the provider's authorize URL, with our callback", async () => {
+    const dir = tempDir();
+    dirs.push(dir);
+    gateway = startGateway({
+      config,
+      fetch: engineFetch(),
+      port: 0,
+      accounts: { dir, secret: SECRET, socialProviders: providers, passwordLogin: false, rateLimit: { window: 60, max: 1_000 } },
+    });
+    const origin = new URL(gateway.url).origin;
+    const started = await fetch(new URL("/v1/auth/sign-in/social", gateway.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", origin },
+      body: JSON.stringify({ provider: "github", callbackURL: "/" }),
+    });
+    expect(started.status).toBe(200);
+    const authorize = new URL((await started.json() as { url: string }).url);
+    expect(authorize.host).toBe("github.com");
+    expect(authorize.searchParams.get("client_id")).toBe("test-client-id");
+    // The provider returns to us, at the origin this deployment publishes.
+    expect(new URL(authorize.searchParams.get("redirect_uri") as string).pathname).toBe("/v1/auth/callback/github");
+  });
+
+  test("closing the password door actually closes it", async () => {
+    const dir = tempDir();
+    dirs.push(dir);
+    gateway = startGateway({
+      config,
+      fetch: engineFetch(),
+      port: 0,
+      accounts: { dir, secret: SECRET, socialProviders: providers, passwordLogin: false, rateLimit: { window: 60, max: 1_000 } },
+    });
+    const origin = new URL(gateway.url).origin;
+    const refused = await fetch(new URL("/v1/auth/sign-up/email", gateway.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", origin },
+      body: JSON.stringify({ email: "nope@test.dev", password: "password1234", name: "N" }),
+    });
+    expect(refused.status).toBeGreaterThanOrEqual(400);
+  });
+
+  test("a deployment with no way in at all is refused at startup", () => {
+    const dir = tempDir();
+    dirs.push(dir);
+    expect(() => startGateway({ config, port: 0, accounts: { dir, secret: SECRET, passwordLogin: false } }))
+      .toThrow("no way to sign in");
+  });
+
+  test("a provider beside an unverified password door is called out", async () => {
+    const dir = tempDir();
+    dirs.push(dir);
+    const lines: string[] = [];
+    gateway = startGateway({
+      config,
+      fetch: engineFetch(),
+      port: 0,
+      accounts: { dir, secret: SECRET, socialProviders: providers, rateLimit: { window: 60, max: 1_000 } },
+      log: line => lines.push(line),
+    });
+    // Touch the auth surface so the module loads, then check what it said.
+    await fetch(new URL("/healthz", gateway.url));
+    expect(lines.some(line => line.includes("weakest way in"))).toBe(true);
+  });
+});

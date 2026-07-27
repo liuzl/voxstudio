@@ -11,6 +11,12 @@
 /** Which door this deployment serves, from the unauthenticated /healthz probe. */
 export type AuthMode = "self" | "accounts";
 
+/** Which sign-in doors are open. A self-hosted studio has none and needs none. */
+export interface LoginDoors {
+  password: boolean;
+  providers: string[];
+}
+
 export interface AccountUser {
   id: string;
   email: string;
@@ -69,14 +75,43 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
  * gateway must not present a login form it has no way to satisfy.
  */
 export async function fetchAuthMode(): Promise<AuthMode> {
+  return (await fetchDoor()).mode;
+}
+
+/**
+ * The deployment's door and, under accounts, which ways in it opens. A gateway that
+ * predates the field, or one that cannot be reached, reads as self-hosted: a studio must
+ * never present a login form it has no way to satisfy.
+ */
+export async function fetchDoor(): Promise<{ mode: AuthMode; doors: LoginDoors }> {
+  const closed: LoginDoors = { password: false, providers: [] };
   try {
     const response = await fetch("/healthz");
-    if (!response.ok) return "self";
-    const body = await response.json() as { auth?: string };
-    return body.auth === "accounts" ? "accounts" : "self";
+    if (!response.ok) return { mode: "self", doors: closed };
+    const body = await response.json() as { auth?: string; login?: Partial<LoginDoors> };
+    if (body.auth !== "accounts") return { mode: "self", doors: closed };
+    return {
+      mode: "accounts",
+      doors: {
+        // A gateway that reports accounts but no doors predates this field; the password
+        // door was the only one then.
+        password: body.login?.password ?? true,
+        providers: body.login?.providers ?? [],
+      },
+    };
   } catch {
-    return "self";
+    return { mode: "self", doors: closed };
   }
+}
+
+/**
+ * Begin a provider sign-in. The gateway answers with the provider's authorize URL and
+ * the browser goes there; the provider returns to /v1/auth/callback/<provider>.
+ */
+export async function socialSignInUrl(provider: string, callbackURL = "/"): Promise<string> {
+  const started = await post<{ url?: string }>("/sign-in/social", { provider, callbackURL });
+  if (!started.url) throw new AuthError(500, "no_redirect", "the gateway returned no authorization URL");
+  return started.url;
 }
 
 /** The signed-in user, or null when there is no session. Never throws for "no session". */

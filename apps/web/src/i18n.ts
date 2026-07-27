@@ -251,6 +251,9 @@ const en = {
 
   // Accounts (docs/auth.md phase 3) — hosted deployments only
   "自托管语音工作台": "self-hosted voice studio",
+  "用 {provider} 登录": "Continue with {provider}",
+  "或": "or",
+  "该部署未开放任何登录方式。": "This deployment has no sign-in method enabled.",
   "登录": "Sign in",
   "注册账户": "Sign up",
   "邮箱": "Email",

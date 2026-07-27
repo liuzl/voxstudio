@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useAccount } from "./account";
-import { AuthError, resendVerification, signIn, signUp } from "./lib/auth";
+import { AuthError, resendVerification, signIn, signUp, socialSignInUrl } from "./lib/auth";
 import { useT } from "./i18n";
 
 /**
@@ -24,9 +24,13 @@ export function AuthGate({ children }: { children: ReactNode }) {
   return <SignInCard />;
 }
 
+/** A provider's name as a person recognises it; unknown ones fall back to their id. */
+const providerLabels: Record<string, string> = { github: "GitHub", google: "Google" };
+
 function SignInCard() {
   const t = useT();
   const refresh = useAccount(state => state.refresh);
+  const doors = useAccount(state => state.doors);
   const [mode, setMode] = useState<"in" | "up">("in");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -63,7 +67,38 @@ function SignInCard() {
           <div className="text-lg font-semibold tracking-wide">VoxStudio</div>
           <div className="text-xs text-ink-300">{t("自托管语音工作台")}</div>
         </div>
-        <form onSubmit={submit} className="space-y-3 rounded-xl border border-ink-700 bg-ink-900 p-5">
+        <div className="space-y-3 rounded-xl border border-ink-700 bg-ink-900 p-5">
+          {doors.providers.length > 0 && (
+            <div className="space-y-2">
+              {doors.providers.map(provider => (
+                <button
+                  key={provider}
+                  type="button"
+                  onClick={() => {
+                    setError("");
+                    void socialSignInUrl(provider)
+                      .then(url => { window.location.href = url; })
+                      .catch((failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure)));
+                  }}
+                  className="w-full rounded-lg border border-ink-700 bg-ink-800 px-3 py-2 text-sm hover:border-accent-500"
+                >
+                  {t("用 {provider} 登录", { provider: providerLabels[provider] ?? provider })}
+                </button>
+              ))}
+              {doors.password && (
+                <div className="flex items-center gap-2 pt-1 text-[11px] text-ink-500">
+                  <span className="h-px flex-1 bg-ink-700" />
+                  {t("或")}
+                  <span className="h-px flex-1 bg-ink-700" />
+                </div>
+              )}
+            </div>
+          )}
+          {!doors.password && doors.providers.length === 0 && (
+            <p className="text-xs text-ink-500">{t("该部署未开放任何登录方式。")}</p>
+          )}
+          {doors.password && (
+          <form onSubmit={submit} className="space-y-3">
           <div className="flex gap-1 rounded-lg border border-ink-700 p-1 text-xs">
             {(["in", "up"] as const).map(option => (
               <button
@@ -109,7 +144,10 @@ function SignInCard() {
           >
             {busy ? t("请稍候…") : t(mode === "in" ? "登录" : "注册账户")}
           </button>
-        </form>
+          </form>
+          )}
+          {!doors.password && error && <p className="text-xs text-red-300">{error}</p>}
+        </div>
       </div>
     </div>
   );

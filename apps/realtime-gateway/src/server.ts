@@ -57,6 +57,10 @@ export interface GatewayServerOptions {
      * keep the defaults; a test suite that signs in repeatedly must relax them.
      */
     attemptLimits?: AttemptLimits;
+    /** OAuth providers; credentials come from the deployment, never from this repo. */
+    socialProviders?: Record<string, { clientId: string; clientSecret: string }>;
+    /** Whether the email-and-password door is open. Default true. */
+    passwordLogin?: boolean;
   };
   /**
    * Per-account usage quota (docs/auth.md phase 4): `operations` chargeable calls per
@@ -206,6 +210,13 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   if (options.accounts !== undefined && options.accounts.secret.length < 32) {
     throw new TypeError("accounts: the auth secret must be at least 32 characters (set VOX_AUTH_SECRET)");
   }
+  // A deployment with every door shut would boot and accept nobody. Caught here rather
+  // than inside the dynamically loaded module, so it fails at startup like the rest.
+  if (options.accounts !== undefined
+    && options.accounts.passwordLogin === false
+    && Object.keys(options.accounts.socialProviders ?? {}).length === 0) {
+    throw new TypeError("accounts: no way to sign in — configure a social provider or leave the password door open");
+  }
   /**
    * The upgrade's Origin policy. Hosted: exactly the configured public origin (and the
    * gateway's own, which is that origin when no tunnel fronts it). Self-hosted: host
@@ -321,6 +332,8 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       sendVerificationEmail: configured.sendVerificationEmail,
       rateLimit: configured.rateLimit,
       attemptLimits: configured.attemptLimits,
+      socialProviders: configured.socialProviders,
+      passwordLogin: configured.passwordLogin,
       log,
     }));
     return accountsInstance;
@@ -720,6 +733,15 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         return problem(405, "method_not_allowed", `${request.method} is not allowed on ${known.path}`);
       }
       if (url.pathname === "/healthz") {
+        if (options.accounts !== undefined) {
+          return (async (): Promise<Response> => Response.json({
+            ok: true,
+            protocol: protocolVersion,
+            auth: "accounts",
+            // Which sign-in doors to render. Not a secret: the login card shows them.
+            login: (await accountsFor()).doors,
+          }))();
+        }
         // `auth` tells the app shell which door it is standing at — the one thing it
         // cannot discover without a credential (docs/auth.md phase 3). "accounts" means
         // sign in; "self" means the self-hosted studio, unchanged.

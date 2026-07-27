@@ -29,12 +29,12 @@ unbuilt work rather than a value someone has to supply:
 
 | Blocking launch | What it needs |
 |---|---|
-| A verification-email sender | The injection point and its tests exist; no provider is wired, so email verification is **off** and the gateway logs that at startup. |
+| One social provider **or** a verification-email sender | The hosted door needs a verified identity. A social provider supplies one and closes password recovery with it; a sender keeps the password door but needs the reset callback too. See [The human door](#the-human-door). |
 | `VOX_AUTH_SECRET` (≥32 chars) | Comes from the deployment. A short or missing secret refuses to boot. |
 | `VOX_AUTH_BASE_URL` | The public origin. Better Auth's own origin check keys on it, and the discovery documents publish it; missing, the gateway warns at startup. |
 | Quota numbers | No production default exists. Pick them from measured GPU throughput. |
 | **Operator capability (unbuilt)** | No way to ban an abusive account through the product. Implementation plus tests, not configuration — see [Operator capability](#operator-capability). |
-| **Password recovery (unbuilt)** | `/forget-password` is rate-limited but no reset-email callback is configured, so a user who forgets their password has no path back. Same missing sender as verification, plus the callback. |
+| **Password recovery (unbuilt)** | Only if the password door opens. `/forget-password` is rate-limited but has no reset-email callback, so a user who forgets their password has no way back. A social-only launch does not need it: no password, nothing to recover. |
 
 ## How it works
 
@@ -59,10 +59,36 @@ connection: a socket does no per-frame credential work.
 
 ### The human door
 
-Email and password, cookie session, via Better Auth mounted at `/v1/auth`. Email
-verification is required whenever a sender is configured — not ceremony, but the minimum
-abuse floor for a public GPU-backed service where signup grants synthesis. No social
-login yet (see triggers).
+Cookie session, via Better Auth mounted at `/v1/auth`. Two possible doors, and the
+deployment decides which are open:
+
+**Email and password** — implemented. Verification is required whenever a sender is
+configured; without one it is off, which is why a public launch cannot rely on this door
+alone. Verification is not ceremony: signup grants synthesis on a GPU, so a verified
+identity is the minimum abuse floor.
+
+**A social provider** — the intended launch door, not yet configured. The reason is not
+signup friction, which would be a weak argument for a developer tool. It is that a
+provider's address arrives already verified, which is exactly what the verification
+requirement stands in for, and that an account with no password needs no recovery flow.
+Two unbuilt gaps close as configuration rather than code. It also raises the cost of mass
+signup from "invent an email string" to "hold a real account", which is the only real
+answer to signup flooding — a deployment-wide ceiling bounds it, nothing more.
+
+**Open one door, not two, at launch.** An abuse floor is only as high as the lowest door:
+running social alongside an unverified password door would leave the password door as the
+way in, and adding the provider would buy nothing. Social-only also removes the entire
+password attack surface — no credential stuffing, no reset flow, no verification mail, and
+the account-keyed sign-in limiter has nothing left to defend. The password path stays
+implemented and dormant; opening it later is configuration plus a sender.
+
+GitHub is the better first provider for this audience — the users are developers and agent
+authors — and its OAuth app setup avoids Google's consent-screen review. Two things to
+confirm before relying on this, neither verified yet: whether Better Auth marks
+`emailVerified` from the provider's claim (if not, social users would trip the
+verification requirement), and that the callback URL follows `VOX_AUTH_BASE_URL`, which is
+already a required setting and whose misconfiguration shows up as "login bounces back and
+fails".
 
 ### The machine door
 
@@ -290,7 +316,7 @@ condition rather than a debate with a slogan.
 | Scoped credentials (read-only or synthesis-only keys) | Users handing keys to agents they did not write. Today the key's holder is its author; when that stops being true, "your key carries your owner's full authority" becomes a hazard we invited. Closest of these to justified. |
 | Device authorization / remote `vox login` | A remote interactive CLI as a real product entrance. Pasting a key is enough while the developer has a browser open. |
 | OIDC / SSO | An enterprise deployment. The plugin exists; the work is integration, not architecture. |
-| Social login | A measured signup drop-off. Cheap to add, and it would sidestep email verification entirely — the provider's address is already verified. |
+| Social login | **Already justified — see [The human door](#the-human-door).** The recorded trigger used to be "a measured signup drop-off", which was the wrong reason: what makes it worth doing is that it closes the verification and recovery gaps as configuration. It is the intended launch door. |
 | Anonymous trial accounts | Evidence that signup friction, not interest, is the drop-off. |
 | Agent-specific identities or per-agent quota | An agent that must be metered separately from its owner. An agent is a key holder; that has been enough. |
 | Remote/HTTP MCP | A caller that cannot spawn the local stdio server. The API key is already the credential, so nothing is rebuilt. |

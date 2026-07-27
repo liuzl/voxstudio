@@ -37,6 +37,19 @@ export interface AccountsOptions {
   rateLimit?: { window: number; max: number } | undefined;
   /** Overrides the brute-force limits keyed on the claimed account. Tests relax these. */
   attemptLimits?: AttemptLimits | undefined;
+  /**
+   * OAuth providers, credentials supplied by the deployment. A provider's address
+   * arrives already verified, which is what the verification requirement stands in for,
+   * and an account with no password needs no recovery flow (docs/auth.md, the human
+   * door). Callbacks land on `<baseUrl>/v1/auth/callback/<provider>`.
+   */
+  socialProviders?: Record<string, { clientId: string; clientSecret: string }> | undefined;
+  /**
+   * Whether the email-and-password door is open. Default true — today's behaviour. A
+   * public launch should close it and open a provider instead: an abuse floor is only as
+   * high as its lowest door, and without a verification sender the password door has none.
+   */
+  passwordLogin?: boolean | undefined;
   log?: (line: string) => void;
 }
 
@@ -52,6 +65,8 @@ export interface AccountsOptions {
 const authRateLimitDefaults = { window: 60, max: 120 } as const;
 
 export interface Accounts {
+  /** Which sign-in doors this deployment opens, for the app shell to render. */
+  readonly doors: { password: boolean; providers: string[] };
   /** Handles /v1/auth/* — reachable without a resolved identity (login needs none). */
   handler(request: Request): Promise<Response>;
   /** Cookie session or x-api-key header → AuthContext; null means unauthorized. */
@@ -83,8 +98,20 @@ export async function startAccounts(options: AccountsOptions): Promise<Accounts>
   mkdirSync(options.dir, { recursive: true });
   const db = new Database(join(options.dir, "auth.db"), { create: true });
   db.run("PRAGMA journal_mode = WAL");
+  const providers = options.socialProviders !== undefined && Object.keys(options.socialProviders).length > 0
+    ? options.socialProviders
+    : undefined;
+  const passwordLogin = options.passwordLogin ?? true;
+  if (providers === undefined && !passwordLogin) {
+    throw new TypeError("accounts: no way to sign in — configure a social provider or leave the password door open");
+  }
   const sender = options.sendVerificationEmail;
-  if (sender === undefined) {
+  // The lowest door sets the floor: a provider beside an unverified password door buys
+  // nothing, because the password door is still the way in (docs/auth.md, the human door).
+  if (providers !== undefined && passwordLogin && sender === undefined) {
+    log("accounts: a social provider is configured beside an unverified password door — the password door is the weakest way in; close it (VOX_AUTH_PASSWORD=off) or wire a verification sender");
+  }
+  if (sender === undefined && passwordLogin) {
     log("accounts: no verification-email sender configured — email verification is OFF (wire one before any public deployment; docs/auth.md phase 3)");
   }
   const auth = betterAuth({
@@ -105,9 +132,10 @@ export async function startAccounts(options: AccountsOptions): Promise<Accounts>
       ),
     },
     emailAndPassword: {
-      enabled: true,
+      enabled: passwordLogin,
       requireEmailVerification: sender !== undefined,
     },
+    ...(providers === undefined ? {} : { socialProviders: providers }),
     ...(sender === undefined ? {} : {
       emailVerification: {
         sendOnSignUp: true,
@@ -134,6 +162,7 @@ export async function startAccounts(options: AccountsOptions): Promise<Accounts>
   let closed = false;
   const attempts = new AuthAttemptLimiter(options.attemptLimits ?? attemptLimitDefaults);
   return {
+    doors: { password: passwordLogin, providers: Object.keys(providers ?? {}) },
     handler: async request => {
       if (closed) {
         return Response.json(
