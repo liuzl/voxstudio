@@ -218,10 +218,18 @@ past it with `input_too_long` before touching an engine, so the refusal costs ne
 nor quota. Without it no quota number predicts load, and the gateway says so at startup
 when a quota is configured alone. Off by default, like every other guardrail here.
 
-Two things the quota still does not bound, both worth knowing before signups open:
-**concurrency** (nothing limits simultaneous REST synthesis; `--max-sessions` caps only
-realtime conversations) and **transcription input** (an uploaded file's length is
-unbounded, the same gap on the ASR side).
+**Concurrency is gated separately, and sized from measurement.** Against the live engine,
+throughput was flat past two requests in flight (0.71→0.72 req/s) while latency grew
+linearly (1.6s → 2.6s → 4.1s → 7.4s at one, two, four, eight): the GPU serializes, so
+admitting more finishes nothing sooner and makes everyone wait. `--max-concurrent-synthesis
+N` admits N, queues `--max-queued-synthesis` more, and refuses beyond that with 429 and a
+`Retry-After` drawn from how long recent syntheses actually took — a caller can act on that,
+where a socket held in a deep queue past its own timeout helps nobody. Together with
+`--max-sessions` (realtime conversations) it covers both ways to load the TTS engine.
+
+One gap stays open and is stated rather than implied: **transcription input is unbounded**
+— an uploaded file's length has no ceiling, the same hole on the ASR side, and its right
+limit needs measuring rather than guessing.
 
 State is process-local: it resets on restart and does not span replicas. That is honest for
 one gateway and wrong for two — see triggers.

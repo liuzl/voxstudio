@@ -31,7 +31,11 @@ window. Requires --accounts; off by default.
 --max-synthesis-seconds N (or VOX_GATEWAY_MAX_SYNTHESIS_SECONDS) refuses a single
 /v1/audio/speech request longer than N estimated seconds of speech. A quota counts
 requests, not engine time, so without this one unit can buy an arbitrarily long
-synthesis. Off by default.`;
+synthesis. Off by default.
+--max-concurrent-synthesis N (VOX_GATEWAY_MAX_CONCURRENT_SYNTHESIS) admits N
+syntheses at once and queues --max-queued-synthesis Q (default N) more; past that a
+caller gets 429 with Retry-After. Measured: throughput is flat past two in flight
+while latency grows linearly, so admitting more finishes nothing sooner.`;
 
 /**
  * OAuth providers from the environment. Credentials never travel in argv, where a
@@ -69,6 +73,8 @@ async function main(args: string[]): Promise<number> {
   let quotaOperations = process.env.VOX_GATEWAY_QUOTA;
   let quotaWindow = process.env.VOX_GATEWAY_QUOTA_WINDOW;
   let maxSynthesisSeconds = process.env.VOX_GATEWAY_MAX_SYNTHESIS_SECONDS;
+  let maxConcurrentSynthesis = process.env.VOX_GATEWAY_MAX_CONCURRENT_SYNTHESIS;
+  let maxQueuedSynthesis = process.env.VOX_GATEWAY_MAX_QUEUED_SYNTHESIS;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
     const value = (): string => {
@@ -92,6 +98,8 @@ async function main(args: string[]): Promise<number> {
     else if (arg === "--quota") quotaOperations = value();
     else if (arg === "--quota-window") quotaWindow = value();
     else if (arg === "--max-synthesis-seconds") maxSynthesisSeconds = value();
+    else if (arg === "--max-concurrent-synthesis") maxConcurrentSynthesis = value();
+    else if (arg === "--max-queued-synthesis") maxQueuedSynthesis = value();
     else throw new TypeError(`vox-gateway: unknown option ${arg}`);
   }
   const config = explicit === undefined ? await loadConfig() : await loadConfig({ explicit });
@@ -135,6 +143,11 @@ async function main(args: string[]): Promise<number> {
   const quotaCount = positive(quotaOperations, "--quota", true);
   const quotaSeconds = positive(quotaWindow, "--quota-window") ?? 3_600;
   const synthesisCeiling = positive(maxSynthesisSeconds, "--max-synthesis-seconds");
+  const inFlight = positive(maxConcurrentSynthesis, "--max-concurrent-synthesis", true);
+  const queued = positive(maxQueuedSynthesis, "--max-queued-synthesis", true);
+  if (queued !== undefined && inFlight === undefined) {
+    throw new TypeError("vox-gateway: --max-queued-synthesis requires --max-concurrent-synthesis");
+  }
   if (quotaCount !== undefined && !hasAccounts) {
     throw new TypeError("vox-gateway: --quota requires --accounts");
   }
@@ -160,6 +173,7 @@ async function main(args: string[]): Promise<number> {
     } : {}),
     ...(quotaCount === undefined ? {} : { quota: { operations: quotaCount, windowSeconds: quotaSeconds } }),
     ...(synthesisCeiling === undefined ? {} : { maxSynthesisSeconds: synthesisCeiling }),
+    ...(inFlight === undefined ? {} : { synthesisConcurrency: { maxInFlight: inFlight, maxQueued: queued ?? inFlight } }),
     loadSileroVad: () => loadSileroVadModel(line => console.error(line)),
     ...(decoder === undefined ? {} : { pcmDecoder: decoder }),
     ...(configPath === undefined ? {} : {

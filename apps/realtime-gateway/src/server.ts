@@ -15,6 +15,7 @@ import type { AttemptLimits } from "./auth/attempt-limiter";
 import { fromEngineVoiceId, toEngineVoiceId } from "./voice-namespace";
 import { agentPage, llmsTxt, openApiDocument, type DiscoveryOptions } from "./discovery";
 import { QuotaLedger } from "./quota";
+import { SynthesisBusyError, SynthesisGate } from "./synthesis-gate";
 import { discoveryPaths, isCharged, routeFor } from "./routes";
 import { CaptureLibrary } from "./library";
 import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand } from "./protocol";
@@ -83,6 +84,14 @@ export interface GatewayServerOptions {
    * is bounded — hardening stays a deployment decision, as with the demo guardrails.
    */
   maxSynthesisSeconds?: number;
+  /**
+   * Concurrency gate over `/v1/audio/speech`. Measured on a live engine, throughput is
+   * flat past two in flight while latency grows linearly — the GPU serializes, so extra
+   * concurrency buys queueing, not work (see synthesis-gate.ts for the numbers). Requests
+   * past `maxInFlight` wait; past `maxQueued` they get 429 with a delay drawn from how
+   * long recent syntheses actually took. Absent, nothing is bounded.
+   */
+  synthesisConcurrency?: { maxInFlight: number; maxQueued: number };
   reconnectGraceMs?: number;
   /** OpenAI-dialect connections: how long a client may take to answer a function call. */
   openAiFunctionCallTimeoutMs?: number;
@@ -339,6 +348,9 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   if (options.quota !== undefined && options.maxSynthesisSeconds === undefined) {
     log("quota: set without --max-synthesis-seconds — the quota counts requests, not engine time, so one unit can buy an arbitrarily long synthesis");
   }
+  const synthesisGate = options.synthesisConcurrency === undefined
+    ? undefined
+    : new SynthesisGate(options.synthesisConcurrency);
   let accountsInstance: Promise<Accounts> | undefined;
   const accountsFor = (): Promise<Accounts> => {
     const configured = options.accounts as NonNullable<GatewayServerOptions["accounts"]>;
@@ -1073,7 +1085,20 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
               headers: { "content-type": "application/json" },
               body: JSON.stringify(body),
             });
-            return proxy(rewritten, selected[1], url.pathname, selected[0], refund);
+            const send = (): Promise<Response> => proxy(rewritten, selected[1], url.pathname, selected[0], refund);
+            if (synthesisGate === undefined) return send();
+            // Saturation is a wait, not a failure, until the queue is full — then say so
+            // with a delay the caller can honour instead of holding a socket nobody serves.
+            try {
+              return await synthesisGate.run(send);
+            } catch (error) {
+              if (!(error instanceof SynthesisBusyError)) throw error;
+              log(`synthesis: refused — ${synthesisGate.depth.inFlight} in flight, ${synthesisGate.depth.queued} queued`);
+              return refunded(Response.json(
+                { error: { message: error.message, code: error.code, retryAfterSeconds: error.retryAfterSeconds } },
+                { status: 429, headers: { "retry-after": String(error.retryAfterSeconds) } },
+              ));
+            }
           })();
         }
         return proxy(request, selected[1], url.pathname, selected[0], refund);

@@ -1314,3 +1314,74 @@ describe("a single synthesis cannot buy unbounded engine time", () => {
     expect(lines.some(line => line.includes("--max-synthesis-seconds"))).toBe(true);
   });
 });
+
+describe("the synthesis concurrency gate", () => {
+  test("admits the limit, queues the next, and refuses the rest with Retry-After", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const release: (() => void)[] = [];
+    gateway = startGateway({
+      config,
+      port: 0,
+      synthesisConcurrency: { maxInFlight: 1, maxQueued: 1 },
+      fetch: engineFetch({
+        "/v1/audio/speech": async () => {
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          await new Promise<void>(resolve => release.push(resolve));
+          inFlight -= 1;
+          return new Response(new Uint8Array(writeWav(new Float32Array(2_400).fill(0.1), 24_000)));
+        },
+      }),
+    });
+    const speak = (): Promise<Response> => fetch(new URL("/v1/audio/speech", gateway?.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: "你好" }),
+    });
+
+    const first = speak();
+    const second = speak();
+    await Bun.sleep(120);
+    // One reached the engine, one is waiting for the slot.
+    const third = await speak();
+    expect(third.status).toBe(429);
+    expect(Number(third.headers.get("retry-after"))).toBeGreaterThan(0);
+    const body = await third.json() as { error: { code: string; retryAfterSeconds: number } };
+    expect(body.error.code).toBe("synthesis_busy");
+    expect(body.error.retryAfterSeconds).toBeGreaterThan(0);
+
+    release.forEach(done => done());
+    await Bun.sleep(60);
+    release.forEach(done => done());
+    expect((await first).status).toBe(200);
+    expect((await second).status).toBe(200);
+    // The engine never saw more than the gate allowed.
+    expect(peak).toBe(1);
+  });
+
+  test("without a gate configured, concurrency is unbounded — today's behaviour", async () => {
+    let peak = 0;
+    let inFlight = 0;
+    gateway = startGateway({
+      config,
+      port: 0,
+      fetch: engineFetch({
+        "/v1/audio/speech": async () => {
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          await Bun.sleep(40);
+          inFlight -= 1;
+          return new Response(new Uint8Array(writeWav(new Float32Array(2_400).fill(0.1), 24_000)));
+        },
+      }),
+    });
+    const all = await Promise.all(Array.from({ length: 5 }, () => fetch(new URL("/v1/audio/speech", gateway?.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: "你好" }),
+    })));
+    expect(all.every(response => response.status === 200)).toBe(true);
+    expect(peak).toBeGreaterThan(1);
+  });
+});
