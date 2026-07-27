@@ -34,6 +34,8 @@ export class QuotaLedger {
   private readonly clock: () => number;
   /** userId -> spent count and the epoch millisecond its window ends. */
   private readonly windows = new Map<string, { count: number; resetAt: number }>();
+  /** When the last full sweep ran; charging is O(1) between them. */
+  private lastSweep = 0;
 
   constructor(options: QuotaOptions) {
     if (!Number.isInteger(options.operations) || options.operations <= 0) {
@@ -84,8 +86,16 @@ export class QuotaLedger {
     window.count = Math.max(0, window.count - 1);
   }
 
-  /** Drop windows that have passed, so an idle account costs nothing to remember. */
+  /**
+   * Drop windows that have passed, so an idle account costs nothing to remember. Walking
+   * the map on every charge made a hot gateway pay for every account it had ever seen
+   * (adversarial review 2026-07-26, L-5), and it was never needed for correctness:
+   * `charge` already re-anchors an account whose own window expired. Once per window is
+   * enough to keep the map from growing without bound.
+   */
   private sweep(now: number): void {
+    if (now - this.lastSweep < this.windowSeconds * 1_000) return;
+    this.lastSweep = now;
     for (const [userId, window] of this.windows) {
       if (now >= window.resetAt) this.windows.delete(userId);
     }

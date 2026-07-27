@@ -47,11 +47,15 @@ describe("agent onboarding page", () => {
 
   test("describes the deployment as configured, not as imagined", () => {
     const withLibrary = agentPage(options);
-    expect(withLibrary).toContain("/v1/library`");
+    // The route list is generated from the catalog, so the library's routes appear
+    // there verbatim when it is on.
+    expect(withLibrary).toContain("GET /v1/library");
+    expect(withLibrary).toContain("POST /v1/library/{id}/promote");
     expect(withLibrary).not.toContain("library is not enabled");
 
     const without = agentPage({ ...options, library: false });
     expect(without).toContain("library is not enabled");
+    expect(without).not.toContain("/v1/library/{id}/promote");
 
     const demo = agentPage({ ...options, demo: true });
     expect(demo).toContain("demo mode");
@@ -191,11 +195,13 @@ describe("openapi document", () => {
     expect(Object.keys(document.paths).some(path => path.startsWith("/v1/auth"))).toBe(false);
   });
 
-  test("healthz is the one unauthenticated operation", () => {
+  test("only the public surface is unauthenticated; every /v1 operation is guarded", () => {
     const health = document.paths["/healthz"]?.get as { security: unknown[] };
     expect(health.security).toEqual([]);
+    // /healthz and the discovery documents are the public set, by design.
+    const publicPaths = ["/healthz", "/agent", "/llms.txt", "/openapi.json"];
     for (const [path, operations] of Object.entries(document.paths)) {
-      if (path === "/healthz") continue;
+      if (publicPaths.includes(path)) continue;
       for (const [method, operation] of Object.entries(operations)) {
         if (method === "parameters") continue;
         expect((operation as { security?: unknown[] }).security).toEqual([{ bearerAuth: [] }, { apiKeyHeader: [] }]);

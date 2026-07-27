@@ -488,12 +488,15 @@ describe("hosted accounts (docs/auth.md phase 3)", () => {
       staticAssets: { "/index.html": `${assets}/index.html` },
     });
 
-    // Not the agent page: the SPA fallback, exactly as before this feature existed.
+    // Not the agent page, and not the app shell either: a machine gets a structured
+    // 404 it can act on (adversarial review 2026-07-26, L-1).
     for (const path of ["/agent", "/llms.txt", "/openapi.json"]) {
       const response = await fetch(new URL(path, gateway.url));
-      expect(response.status).toBe(200);
-      expect(await response.text()).toContain("studio-shell");
+      expect(response.status).toBe(404);
+      expect((await response.json() as { error: { code: string } }).error.code).toBe("discovery_disabled");
     }
+    // Ordinary deep links still reach the studio.
+    expect(await (await fetch(new URL("/settings", gateway.url))).text()).toContain("studio-shell");
   });
 
   describe("per-user quota (docs/auth.md phase 4)", () => {
@@ -659,13 +662,11 @@ describe("hosted accounts (docs/auth.md phase 3)", () => {
       second.socket.close();
     });
 
-    test("a self-hosted gateway ignores the quota entirely — nothing to meter, nobody to meter it for", async () => {
-      // The flag is refused without accounts (see the entrypoint tests); passing the
-      // option directly proves the enforcement itself is hosted-only.
-      gateway = startGateway({ config, fetch: engineFetch(), port: 0, quota: { operations: 1, windowSeconds: 60 } });
-      for (let attempt = 0; attempt < 4; attempt += 1) {
-        expect((await speak(gateway.url, {})).status).toBe(200);
-      }
+    test("a quota without accounts is refused at startup — there would be one account to meter", () => {
+      // The CLIs already refuse it; the library refuses it too, rather than starting up
+      // metering nobody and logging about it (adversarial review 2026-07-26, L-4).
+      expect(() => startGateway({ config, fetch: engineFetch(), port: 0, quota: { operations: 1, windowSeconds: 60 } }))
+        .toThrow("accounts");
     });
   });
 

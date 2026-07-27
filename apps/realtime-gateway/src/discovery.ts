@@ -10,7 +10,7 @@
  * aspirational: if a route is not in the switch in server.ts, it is not in here.
  */
 
-import { apiRoutes, type ApiRoute } from "./routes";
+import { apiRoutes, discoveryRoutesCatalog, type ApiRoute } from "./routes";
 
 export interface DiscoveryOptions {
   /** Public origin the deployment is reached at; links and the OpenAPI server use it. */
@@ -92,10 +92,16 @@ Base URL: ${base}/v1 — point any OpenAI-compatible client at it.
 
     curl -s ${base}/v1/voices -H "Authorization: Bearer $VOX_API_KEY"
 
-Implemented routes (and nothing else): \`/v1/audio/speech\`,
-\`/v1/audio/transcriptions\`, \`/v1/chat/completions\`, \`/v1/engines\`, \`/v1/voices\`
-(list, create, get, delete), \`/v1/design-profiles\`${options.library ? ", `/v1/library` (list, get, audio, correct, promote, delete)" : ""},
-and the realtime WebSocket \`/v1/realtime\`. \`GET /healthz\` needs no credential.
+Every implemented route, generated from the gateway's own routing table:
+
+${apiRoutes
+    .filter(route => route.library !== true || options.library)
+    .map(route => `    ${route.methods.filter(method => method !== "HEAD").join(" ")} ${route.path}`)
+    .join("\n")}
+
+Plus the realtime WebSocket \`/v1/realtime\` (a session protocol, not a REST route) and
+\`/v1/auth/*\`, the authentication library's own browser surface. \`GET /healthz\` and
+this page need no credential; everything under \`/v1\` does.
 ${options.library ? "" : "\nThe capture library is not enabled on this deployment: `/v1/library` answers 404 with `library_disabled`.\n"}${options.demo ? "\nThis deployment runs in demo mode: registry writes answer 403 with `demo_mode`.\n" : ""}
 The realtime socket is not an OpenAPI shape; it speaks the session protocol documented
 in the repository (docs/duplex-audio-architecture.md) and also accepts the OpenAI
@@ -285,8 +291,8 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
         summary: "List the caller's captures, newest first",
         security: secured,
         parameters: [
-          { name: "limit", in: "query", schema: { type: "integer", default: 50, maximum: 200 } },
-          { name: "offset", in: "query", schema: { type: "integer", default: 0 } },
+          { name: "limit", in: "query", schema: { type: "integer", default: 50, maximum: 200 }, description: "Clamped to 200; a non-integer or negative value falls back to the default rather than erroring." },
+          { name: "offset", in: "query", schema: { type: "integer", default: 0 }, description: "Clamped at zero; a non-integer falls back to the default." },
         ],
         responses: {
           "200": {
@@ -407,7 +413,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
    */
   const reconcile = (paths: Record<string, Record<string, unknown>>): Record<string, Record<string, unknown>> => {
     const reconciled: Record<string, Record<string, unknown>> = {};
-    for (const route of apiRoutes) {
+    for (const route of [...apiRoutes, ...discoveryRoutesCatalog]) {
       if (route.library === true && !options.library) continue;
       const documented = paths[route.path];
       if (documented === undefined) continue;
@@ -477,7 +483,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
                     properties: {
                       ok: { type: "boolean" },
                       protocol: { type: "integer", description: "Realtime session protocol version." },
-                      sessions: { type: "integer" },
+                      sessions: { type: "integer", description: "Live realtime sessions. Present on a self-hosted studio only; a hosted deployment does not disclose its traffic." },
                       auth: { type: "string", enum: ["self", "accounts"] },
                     },
                     required: ["ok", "protocol", "auth"],
@@ -499,6 +505,8 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
               "application/json": {
                 schema: {
                   type: "object",
+                  description: "Fields beyond those named are forwarded to the engine unchanged; the engine decides what it accepts.",
+                  additionalProperties: true,
                   properties: {
                     input: { type: "string", description: "The text to speak." },
                     voice: { type: "string", description: "A display name from GET /v1/voices. Omit for the engine default." },
@@ -575,6 +583,8 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
               "application/json": {
                 schema: {
                   type: "object",
+                  description: "Fields beyond those named are forwarded to the engine unchanged; the engine decides what it accepts.",
+                  additionalProperties: true,
                   properties: {
                     messages: {
                       type: "array",
@@ -752,6 +762,27 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
         },
       },
       ...libraryPaths,
+      // The discovery surface describes itself: an agent that found one document can see
+      // what the others are without guessing (adversarial review 2026-07-26).
+      "/agent": {
+        get: {
+          summary: "Agent onboarding page",
+          description: "Markdown as text/plain: how to get a key, how to authenticate, what costs quota, and the ownership rules. Unauthenticated by necessity.",
+          responses: { "200": { description: "The onboarding page.", content: { "text/plain": { schema: { type: "string" } } } } },
+        },
+      },
+      "/llms.txt": {
+        get: {
+          summary: "Compact machine index",
+          responses: { "200": { description: "The index.", content: { "text/plain": { schema: { type: "string" } } } } },
+        },
+      },
+      "/openapi.json": {
+        get: {
+          summary: "This document",
+          responses: { "200": { description: "The OpenAPI description of this deployment.", content: { "application/json": { schema: { type: "object" } } } } },
+        },
+      },
     }),
     components: {
       securitySchemes: {

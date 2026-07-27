@@ -106,3 +106,50 @@ describe("the discovery surface describes the origin it was reached on", () => {
     expect(lines.some(line => line.includes("VOX_AUTH_BASE_URL"))).toBe(true);
   });
 });
+
+describe("a self-hosted studio answers the machine paths honestly", () => {
+  test("the discovery paths are a structured 404, not the app shell with a 200", async () => {
+    const dir = `${import.meta.dir}/../node_modules/.test-selfhosted-${Date.now().toString(36)}`;
+    await Bun.write(`${dir}/index.html`, "<html><body>studio-shell</body></html>");
+    dirs.push(dir);
+    gateway = startGateway({
+      config,
+      port: 0,
+      staticAssets: { "/index.html": `${dir}/index.html` },
+      fetch: async () => Response.json({}),
+    });
+
+    for (const path of ["/agent", "/llms.txt", "/openapi.json"]) {
+      const response = await fetch(new URL(path, gateway.url));
+      // A machine can tell "not here" from "here is a web page".
+      expect({ path, status: response.status }).toEqual({ path, status: 404 });
+      expect(response.headers.get("content-type")).toContain("application/json");
+      const body = await response.json() as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("discovery_disabled");
+      expect(body.error.message).toContain("accounts");
+    }
+    // Ordinary deep links still get the shell: this is about machine paths only.
+    const page = await fetch(new URL("/settings", gateway.url));
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("studio-shell");
+  });
+
+  test("healthz keeps the session count for the owner and withholds it from a hosted deployment", async () => {
+    gateway = startGateway({ config, port: 0, fetch: async () => Response.json({}) });
+    const selfHosted = await (await fetch(new URL("/healthz", gateway.url))).json() as Record<string, unknown>;
+    expect(selfHosted.auth).toBe("self");
+    expect(selfHosted.sessions).toBe(0);
+    await gateway.stop();
+
+    gateway = startGateway({
+      config,
+      port: 0,
+      accounts: { dir: tempDir(), secret: SECRET, rateLimit: { window: 60, max: 1_000 } },
+      fetch: async () => Response.json({}),
+    });
+    const hosted = await (await fetch(new URL("/healthz", gateway.url))).json() as Record<string, unknown>;
+    expect(hosted.auth).toBe("accounts");
+    // Live-session counts are nobody's business on a public entrance.
+    expect("sessions" in hosted).toBe(false);
+  });
+});

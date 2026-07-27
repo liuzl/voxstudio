@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { parseConfig } from "@voxstudio/config";
 import { openApiDocument, type DiscoveryOptions } from "./discovery";
-import { apiRoutes, routeFor } from "./routes";
+import { apiRoutes, discoveryRoutesCatalog, routeFor } from "./routes";
 import { startGateway, type GatewayServer } from "./server";
 
 /**
@@ -34,12 +34,12 @@ afterEach(async () => {
 
 describe("the OpenAPI paths come from the router's own catalog", () => {
   test("every catalog route is documented, and every documented path is a catalog route", () => {
-    const catalogPaths = apiRoutes.map(route => route.path).sort();
+    const catalogPaths = [...apiRoutes, ...discoveryRoutesCatalog].map(route => route.path).sort();
     expect(Object.keys(document.paths).sort()).toEqual(catalogPaths);
   });
 
   test("every catalog method is documented, and no extra ones are", () => {
-    for (const route of apiRoutes) {
+    for (const route of [...apiRoutes, ...discoveryRoutesCatalog]) {
       const documented = Object.keys(document.paths[route.path] ?? {})
         .filter(key => key !== "parameters")
         .map(key => key.toUpperCase())
@@ -124,5 +124,39 @@ describe("the catalog matches the gateway that runs", () => {
     expect(routeFor("/v1/library/abc")?.charged).toBeUndefined();
     // A path nothing serves has no route at all.
     expect(routeFor("/v1/nope")).toBeUndefined();
+  });
+});
+
+describe("the document describes itself and the parts it used to leave out", () => {
+  test("the discovery surface is documented, publicly and read-only", () => {
+    for (const path of ["/agent", "/llms.txt", "/openapi.json"]) {
+      const operation = document.paths[path]?.get as { security?: unknown[] } | undefined;
+      expect(operation).toBeDefined();
+      // No credential, and nothing but GET.
+      expect(operation?.security).toEqual([]);
+      expect(Object.keys(document.paths[path] ?? {}).filter(key => key !== "parameters")).toEqual(["get"]);
+    }
+  });
+
+  test("the facade's passthrough is stated rather than implied", () => {
+    // Extra fields reach the engine unchanged; a reader must not think the list is closed.
+    for (const path of ["/v1/audio/speech", "/v1/chat/completions"]) {
+      const body = (document.paths[path]?.post as unknown as { requestBody: { content: Record<string, { schema: Record<string, unknown> }> } })
+        .requestBody.content["application/json"]?.schema;
+      expect(body?.additionalProperties).toBe(true);
+      expect(String(body?.description ?? "")).toContain("engine");
+    }
+  });
+
+  test("pagination says that it clamps rather than rejects", () => {
+    const list = document.paths["/v1/library"]?.get as { parameters: { name: string; description?: string }[] };
+    const limit = list.parameters.find(parameter => parameter.name === "limit");
+    expect(String(limit?.description ?? "").toLowerCase()).toContain("clamp");
+  });
+
+  test("the session count is described as self-hosted only", () => {
+    const health = document.paths["/healthz"]?.get as unknown as { responses: Record<string, { content: Record<string, { schema: { properties: Record<string, { description?: string }> } }> }> };
+    const properties = health.responses["200"]?.content["application/json"]?.schema.properties;
+    expect(String(properties?.sessions?.description ?? "")).toContain("self-hosted");
   });
 });

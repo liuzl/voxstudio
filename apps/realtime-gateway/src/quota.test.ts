@@ -58,3 +58,33 @@ describe("quota ledger (docs/auth.md phase 4)", () => {
     expect(() => new QuotaLedger({ operations: 5, windowSeconds: 0 })).toThrow("positive");
   });
 });
+
+describe("sweeping is amortized (adversarial review 2026-07-26, L-5)", () => {
+  test("a charge does not walk every account, and expired entries still go", () => {
+    let now = 0;
+    const ledger = new QuotaLedger({ operations: 5, windowSeconds: 10, clock: () => now });
+    for (let user = 0; user < 200; user += 1) ledger.charge(`user-${user}`);
+    expect(ledger.size).toBe(200);
+
+    // Within the window nothing is scanned away, and the counter keeps working.
+    now = 5_000;
+    expect(ledger.charge("user-0").allowed).toBe(true);
+    expect(ledger.size).toBe(200);
+
+    // Past the window the expired entries are reclaimed, at the latest on the next
+    // charge that crosses a sweep interval.
+    now = 20_000;
+    ledger.charge("fresh");
+    expect(ledger.size).toBe(1);
+  });
+
+  test("an account's own expired window is honoured immediately, sweep or not", () => {
+    let now = 0;
+    const ledger = new QuotaLedger({ operations: 1, windowSeconds: 10, clock: () => now });
+    expect(ledger.charge("alice").allowed).toBe(true);
+    expect(ledger.charge("alice").allowed).toBe(false);
+    now = 10_001;
+    // No dependence on a periodic sweep having run.
+    expect(ledger.charge("alice").allowed).toBe(true);
+  });
+});

@@ -270,7 +270,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     ? new QuotaLedger(options.quota)
     : undefined;
   if (options.quota !== undefined && options.accounts === undefined) {
-    log("quota: ignored — a per-account quota needs accounts; a self-hosted studio has nothing to meter");
+    throw new TypeError("quota requires accounts: a self-hosted studio has one account to meter, its operator's");
   }
 
   /**
@@ -711,7 +711,9 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         return Response.json({
           ok: true,
           protocol: protocolVersion,
-          sessions: sessions.size,
+          // Only the owner's own studio gets the live-session count; a public entrance
+          // does not disclose its traffic (adversarial review 2026-07-26, L-3).
+          ...(options.accounts === undefined ? { sessions: sessions.size } : {}),
           auth: options.accounts === undefined ? "self" : "accounts",
         });
       }
@@ -723,6 +725,16 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
         }
         return (discoveryRoutes[url.pathname] as (request: Request) => Response)(request);
+      }
+      // Without accounts these paths do not exist. Falling through to the SPA gave a
+      // machine a 200 and a web page, which reads as success (adversarial review
+      // 2026-07-26, L-1); ordinary deep links still get the shell.
+      if (options.accounts === undefined && (discoveryPaths as readonly string[]).includes(url.pathname)) {
+        return problem(
+          404,
+          "discovery_disabled",
+          "this deployment serves no discovery surface — it exists on gateways started with accounts",
+        );
       }
       const page = serveStatic(request, url);
       if (page) return page;

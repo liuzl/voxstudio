@@ -31,6 +31,8 @@ export interface ApiRoute {
   demoRefusable?: readonly string[];
   /** Answers without a credential. Everything else is 401 without one. */
   public?: boolean;
+  /** Served only on a hosted (accounts) deployment. */
+  hosted?: boolean;
 }
 
 /**
@@ -106,6 +108,18 @@ export const apiRoutes: readonly ApiRoute[] = [
 
 /** The discovery documents, served unauthenticated on hosted deployments only. */
 export const discoveryPaths = ["/agent", "/llms.txt", "/openapi.json"] as const;
+
+/**
+ * The discovery routes as catalog entries: hosted-only, public, read-only. Kept apart
+ * from `apiRoutes` because they are documentation rather than API — but they are real
+ * routes, so the document describes them too.
+ */
+export const discoveryRoutesCatalog: readonly ApiRoute[] = discoveryPaths.map(path => ({
+  path,
+  methods: ["GET", "HEAD"],
+  public: true,
+  hosted: true,
+}));
 
 /** The route serving `pathname`, or undefined when nothing claims it. */
 export function routeFor(pathname: string): ApiRoute | undefined {

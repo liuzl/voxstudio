@@ -7,7 +7,8 @@ import { useI18n, useT, type Locale } from "../i18n";
 interface Health {
   ok: boolean;
   protocol: number;
-  sessions: number;
+  /** Self-hosted only: a hosted deployment does not disclose its live traffic. */
+  sessions?: number;
 }
 
 function EnginesTable() {
@@ -215,10 +216,12 @@ export function SettingsPanel() {
               <dt className="text-xs text-ink-500">{t("协议")}</dt>
               <dd className="mt-0.5">v{health.protocol}</dd>
             </div>
-            <div>
-              <dt className="text-xs text-ink-500">{t("活动会话")}</dt>
-              <dd className="mt-0.5">{health.sessions}</dd>
-            </div>
+            {health.sessions !== undefined && (
+              <div>
+                <dt className="text-xs text-ink-500">{t("活动会话")}</dt>
+                <dd className="mt-0.5">{health.sessions}</dd>
+              </div>
+            )}
           </dl>
         )}
         <p className="mt-3 text-xs text-ink-500">
