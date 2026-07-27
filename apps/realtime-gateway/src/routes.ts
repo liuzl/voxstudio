@@ -106,6 +106,18 @@ export const apiRoutes: readonly ApiRoute[] = [
   },
 ];
 
+/**
+ * Charges that are not HTTP routes, and so cannot be read off `apiRoutes`: the realtime
+ * conversation and the spoken Studio tool. Declared here so the discovery documents can
+ * state the whole charged set from one place — the enumeration in `/agent` drifted from
+ * enforcement once already, by omitting exactly these.
+ */
+export const chargedBeyondRoutes = [
+  "starting a realtime session (session.start)",
+  "each turn within a realtime conversation",
+  "registering a voice through the spoken Studio tool",
+] as const;
+
 /** The discovery documents, served unauthenticated on hosted deployments only. */
 export const discoveryPaths = ["/agent", "/llms.txt", "/openapi.json"] as const;
 

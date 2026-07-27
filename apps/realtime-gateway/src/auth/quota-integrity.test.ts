@@ -321,7 +321,8 @@ describe("M-4: registering a voice by voice is charged like registering one over
 
 describe("H-2: brute-force protection does not depend on NODE_ENV", () => {
   test("repeated wrong passwords are rate-limited with the shipped defaults", async () => {
-    // No rateLimit override: the deployment default must hold in any environment.
+    // No overrides at all: the deployment default must hold in any environment, and the
+    // limit must follow the attacked account rather than the caller's claimed address.
     gateway = startGateway({
       config,
       port: 0,
@@ -329,42 +330,58 @@ describe("H-2: brute-force protection does not depend on NODE_ENV", () => {
       fetch: async () => Response.json({ voices: [] }),
     });
     const origin = new URL(gateway.url).origin;
-    const attacker = clientAddress();
     await signUp(gateway.url, "victim@test.dev", clientAddress());
 
     const codes: number[] = [];
-    for (let attempt = 0; attempt < 8; attempt += 1) {
+    for (let attempt = 0; attempt < 16; attempt += 1) {
       const response = await fetch(new URL("/v1/auth/sign-in/email", gateway.url), {
         method: "POST",
-        headers: { "content-type": "application/json", origin, "x-forwarded-for": attacker },
+        headers: {
+          "content-type": "application/json",
+          origin,
+          // A fresh claimed address every time: it must buy the attacker nothing.
+          "x-forwarded-for": clientAddress(),
+        },
         body: JSON.stringify({ email: "victim@test.dev", password: `wrong-${attempt}` }),
       });
       codes.push(response.status);
     }
-    // Guessing is stopped well before eight tries, whatever NODE_ENV says.
     expect(codes.filter(code => code === 429).length).toBeGreaterThan(0);
-    expect(codes.indexOf(429)).toBeLessThanOrEqual(6);
+    // And it bites well before sixteen tries, whatever NODE_ENV says.
+    expect(codes.indexOf(429)).toBeLessThan(14);
   });
 
-  test("signup is bounded too, so an open deployment cannot be filled with accounts", async () => {
+  test("signup is bounded deployment-wide, and varying the address does not help", async () => {
+    // The shipped ceiling is deliberately coarse (varying the email *is* the attack, so
+    // no per-caller key helps); a small override exercises the same semantics without
+    // sixty signups. What matters is that the bound ignores the claimed address.
     gateway = startGateway({
       config,
       port: 0,
-      accounts: { dir: tempDir(), secret: SECRET },
+      accounts: {
+        dir: tempDir(),
+        secret: SECRET,
+        attemptLimits: {
+          signIn: { window: 900, max: 10 },
+          perEmail: { window: 3_600, max: 5 },
+          signUp: { window: 3_600, max: 3 },
+          overall: { window: 60, max: 500 },
+        },
+      },
       fetch: async () => Response.json({ voices: [] }),
     });
     const origin = new URL(gateway.url).origin;
-    const flooder = clientAddress();
     const codes: number[] = [];
-    for (let attempt = 0; attempt < 12; attempt += 1) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
       const response = await fetch(new URL("/v1/auth/sign-up/email", gateway.url), {
         method: "POST",
-        headers: { "content-type": "application/json", origin, "x-forwarded-for": flooder },
+        headers: { "content-type": "application/json", origin, "x-forwarded-for": clientAddress() },
         body: JSON.stringify({ email: `flood-${attempt}@test.dev`, password: "password1234", name: "F" }),
       });
       codes.push(response.status);
     }
-    expect(codes.filter(code => code === 429).length).toBeGreaterThan(0);
+    expect(codes.slice(0, 3)).toEqual([200, 200, 200]);
+    expect(codes.slice(3)).toEqual([429, 429, 429]);
   });
 
   test("a deployment may relax the limiter explicitly, and tests can rely on that", async () => {
@@ -425,5 +442,65 @@ describe("M-2: the OpenAI dialect reports a quota refusal as one", () => {
     // And it says when to come back, like every other refusal does.
     expect(failure?.error?.retry_after_seconds).toBeGreaterThan(0);
     expect(failure?.error?.message ?? "").toContain("quota");
+  });
+});
+
+describe("charging integrity on the paths that are not REST routes", () => {
+  test("an unreachable engine refunds the spoken Studio tool's charge too", async () => {
+    const dir = tempDir();
+    gateway = startGateway({
+      config,
+      port: 0,
+      accounts: { dir, secret: SECRET, rateLimit: { window: 60, max: 1_000 } },
+      quota: { operations: 2, windowSeconds: 60 },
+      fetch: async (input, init) => {
+        const request = new Request(input instanceof Request ? input : String(input), init);
+        const path = new URL(request.url).pathname;
+        // The clone engine is unreachable; everything else answers.
+        if (path === "/v1/voices" && request.method === "POST") throw new Error("connection refused");
+        if (path === "/v1/audio/speech") return new Response(new Uint8Array(writeWav(new Float32Array(2_400).fill(0.1), 24_000)));
+        return Response.json({ voices: [] });
+      },
+    });
+    const cookie = await signUp(gateway.url, "toolrefund@test.dev");
+
+    // The REST registration path is the same engine call the spoken tool makes.
+    const form = new FormData();
+    form.set("id", "attempted");
+    form.set("text", "参考音");
+    form.set("audio", new File([new Uint8Array(16)], "ref.wav", { type: "audio/wav" }));
+    expect((await fetch(new URL("/v1/voices", gateway.url), { method: "POST", headers: { cookie }, body: form })).status).toBe(502);
+
+    // Nothing was spent: both allowance units remain.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      expect((await fetch(new URL("/v1/audio/speech", gateway.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ input: "x" }),
+      })).status).toBe(200);
+    }
+  });
+
+  test("the mid-conversation quota notice carries a code and a delay", async () => {
+    gateway = hostedGateway({ operations: 2, windowSeconds: 60 });
+    const cookie = await signUp(gateway.url, "midturn@test.dev");
+    const conversation = await Conversation.open(gateway.url, cookie);
+    conversation.send({ type: "session.start", idempotencyKey: "m-1", options: startOptions });
+    await conversation.until(() => conversation.events.some(event => event.type === "session.snapshot"), "snapshot");
+
+    // Session start spent one; the first turn spends the last and the second is refused.
+    conversation.speak();
+    await conversation.until(() => conversation.completedTurns() >= 1, "first turn");
+    conversation.speak();
+    await conversation.until(
+      () => conversation.events.some(event => event.type === "session.notice" && (event as { code?: string }).code === "quota_exceeded"),
+      "structured quota notice",
+    );
+    const notice = conversation.events.find(event => event.type === "session.notice" && (event as { code?: string }).code === "quota_exceeded") as
+      { code?: string; retryAfterSeconds?: number; message?: string } | undefined;
+    // The same guidance the start-time refusal gives, not free text a client must parse.
+    expect(notice?.retryAfterSeconds).toBeGreaterThan(0);
+    expect(notice?.message ?? "").toContain("quota");
+    conversation.close();
   });
 });

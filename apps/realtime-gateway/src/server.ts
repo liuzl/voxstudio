@@ -11,6 +11,7 @@ import { isLoopbackHost, resolveAuthContext, upgradeOriginAllowed } from "./auth
 // Type-only: the accounts module (and better-auth with it) loads dynamically, and
 // only when a deployment configured accounts (docs/auth.md phase 3).
 import type { Accounts } from "./auth/accounts";
+import type { AttemptLimits } from "./auth/attempt-limiter";
 import { fromEngineVoiceId, toEngineVoiceId } from "./voice-namespace";
 import { agentPage, llmsTxt, openApiDocument, type DiscoveryOptions } from "./discovery";
 import { QuotaLedger } from "./quota";
@@ -51,6 +52,11 @@ export interface GatewayServerOptions {
      * this; a test suite that signs up repeatedly must.
      */
     rateLimit?: { window: number; max: number };
+    /**
+     * Overrides the brute-force limits keyed on the claimed account. A deployment should
+     * keep the defaults; a test suite that signs in repeatedly must relax them.
+     */
+    attemptLimits?: AttemptLimits;
   };
   /**
    * Per-account usage quota (docs/auth.md phase 4): `operations` chargeable calls per
@@ -314,6 +320,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       baseUrl: configured.baseUrl ?? server.url.toString().replace(/\/$/, ""),
       sendVerificationEmail: configured.sendVerificationEmail,
       rateLimit: configured.rateLimit,
+      attemptLimits: configured.attemptLimits,
       log,
     }));
     return accountsInstance;
@@ -600,7 +607,15 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         form.set("audio", new File([wav as BlobPart], `${id}.wav`, { type: "audio/wav" }));
         const headers = new Headers();
         if (target.apiKey) headers.set("authorization", `Bearer ${target.apiKey}`);
-        const upstream = await fetchImpl(new URL("/v1/voices", target.baseUrl), { method: "POST", headers, body: form });
+        let upstream: Response;
+        try {
+          upstream = await fetchImpl(new URL("/v1/voices", target.baseUrl), { method: "POST", headers, body: form });
+        } catch (error) {
+          // An engine we never reached did no work, so the charge goes back — the same
+          // rule the REST paths follow (adversarial review 2026-07-27).
+          quota?.refund(owner);
+          throw error;
+        }
         if (!upstream.ok) throw new Error(`${engineName} refused the voice registration (HTTP ${upstream.status})`);
         return { engine: engineName };
       },

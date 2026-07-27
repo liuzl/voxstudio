@@ -5,6 +5,7 @@ import { betterAuth } from "better-auth";
 import { apiKey } from "@better-auth/api-key";
 import { getMigrations } from "better-auth/db/migration";
 import type { AuthContext } from "./auth-context";
+import { AuthAttemptLimiter, attemptLimitDefaults, claimedEmail, type AttemptLimits } from "./attempt-limiter";
 
 /**
  * Hosted accounts (docs/auth.md phase 3): Better Auth mounted behind the gateway's
@@ -34,33 +35,21 @@ export interface AccountsOptions {
    * test suite that signs up repeatedly); a deployment should keep the defaults.
    */
   rateLimit?: { window: number; max: number } | undefined;
+  /** Overrides the brute-force limits keyed on the claimed account. Tests relax these. */
+  attemptLimits?: AttemptLimits | undefined;
   log?: (line: string) => void;
 }
 
 /**
- * Brute-force protection, stated here rather than inherited from the environment.
- * Better Auth enables its limiter only when NODE_ENV is "production", which made the
- * only unauthenticated write surface — sign-up and sign-in — unprotected everywhere
- * else (adversarial review 2026-07-26). These limits are per client address, applied
- * whatever the environment says.
+ * Better Auth's own limiter, kept enabled as a blunt ceiling and nothing more. Its
+ * buckets key on the client address, which arrives in a caller-controlled header — so
+ * it can be defeated by rotating one, and it is not where this deployment's brute-force
+ * protection lives. That is `AuthAttemptLimiter`, which keys on the claimed account.
  *
- * Buckets are keyed on the client address, which behind a tunnel means the forwarded
- * one: a deployment that does not pass the real client IP through puts every visitor in
- * one bucket, and the limits below would then apply to the whole world at once.
+ * Left on rather than disabled because it also covers auth routes the gateway does not
+ * front, where a coarse ceiling is better than none.
  */
-const authRateLimitDefaults = {
-  /** The blanket allowance across /v1/auth/*. */
-  window: 60,
-  max: 60,
-  customRules: {
-    // Password guessing: a human needs a handful of tries, an attacker needs thousands.
-    "/sign-in/email": { window: 60, max: 5 },
-    // Account creation on a public entrance, bounded without blocking a real signup.
-    "/sign-up/email": { window: 3_600, max: 5 },
-    "/send-verification-email": { window: 3_600, max: 5 },
-    "/forget-password": { window: 3_600, max: 5 },
-  },
-} as const;
+const authRateLimitDefaults = { window: 60, max: 120 } as const;
 
 export interface Accounts {
   /** Handles /v1/auth/* — reachable without a resolved identity (login needs none). */
@@ -103,19 +92,18 @@ export async function startAccounts(options: AccountsOptions): Promise<Accounts>
     secret: options.secret,
     baseURL: options.baseUrl,
     basePath: "/v1/auth",
-    // Always on, never inherited from NODE_ENV. An override applies to the sensitive
-    // routes too: Better Auth ships its own stricter built-ins for sign-up and sign-in
-    // that a blanket `max` cannot raise, so a "relaxed" limiter that did not restate
-    // them would silently stay strict.
-    rateLimit: options.rateLimit === undefined
-      ? { enabled: true, ...authRateLimitDefaults }
-      : {
-          enabled: true,
-          ...options.rateLimit,
-          customRules: Object.fromEntries(
-            Object.keys(authRateLimitDefaults.customRules).map(route => [route, options.rateLimit as { window: number; max: number }]),
-          ),
-        },
+    // Always on, never inherited from NODE_ENV — but a ceiling, not the protection.
+    // Better Auth ships stricter built-ins for sign-up and sign-in that a blanket `max`
+    // cannot raise, so the ceiling restates them; the meaningful limits live in
+    // AuthAttemptLimiter, keyed on the claimed account rather than a spoofable header.
+    rateLimit: {
+      enabled: true,
+      ...(options.rateLimit ?? authRateLimitDefaults),
+      customRules: Object.fromEntries(
+        ["/sign-in/email", "/sign-up/email", "/send-verification-email", "/forget-password"]
+          .map(route => [route, options.rateLimit ?? authRateLimitDefaults]),
+      ),
+    },
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: sender !== undefined,
@@ -144,6 +132,7 @@ export async function startAccounts(options: AccountsOptions): Promise<Accounts>
   // must be refused rather than land on a closed SQLite handle (adversarial review
   // 2026-07-26).
   let closed = false;
+  const attempts = new AuthAttemptLimiter(options.attemptLimits ?? attemptLimitDefaults);
   return {
     handler: async request => {
       if (closed) {
@@ -152,7 +141,22 @@ export async function startAccounts(options: AccountsOptions): Promise<Accounts>
           { status: 503 },
         );
       }
-      return auth.handler(request);
+      // Charged before the library sees it, keyed on the account being attacked; a
+      // successful sign-in gives its charge back, so only failures ration anyone.
+      const suffix = new URL(request.url).pathname.replace(/^\/v1\/auth/, "");
+      const email = await claimedEmail(request);
+      const verdict = attempts.begin(suffix, email);
+      if (!verdict.allowed) {
+        const retryAfterSeconds = verdict.retryAfterSeconds ?? 60;
+        log(`auth: ${suffix} refused — too many attempts`);
+        return Response.json(
+          { error: { message: `too many attempts — retry in ${retryAfterSeconds}s`, code: "too_many_attempts", retryAfterSeconds } },
+          { status: 429, headers: { "retry-after": String(retryAfterSeconds) } },
+        );
+      }
+      const response = await auth.handler(request);
+      attempts.settle(suffix, email, response.status);
+      return response;
     },
     resolve: async request => {
       if (closed) return null;

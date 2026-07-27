@@ -10,7 +10,7 @@
  * aspirational: if a route is not in the switch in server.ts, it is not in here.
  */
 
-import { apiRoutes, discoveryRoutesCatalog, type ApiRoute } from "./routes";
+import { apiRoutes, chargedBeyondRoutes, discoveryRoutesCatalog, type ApiRoute } from "./routes";
 
 export interface DiscoveryOptions {
   /** Public origin the deployment is reached at; links and the OpenAPI server use it. */
@@ -27,8 +27,15 @@ export interface DiscoveryOptions {
   quota?: { operations: number; windowSeconds: number } | undefined;
 }
 
-/** The chargeable operations, named once and reused by every document. */
-const chargeableList = "POST /v1/audio/speech, /v1/audio/transcriptions, /v1/chat/completions, /v1/voices, /v1/design-profiles, /v1/library/{id}/promote, and starting a realtime session (session.start)";
+/**
+ * The chargeable operations, read off the same catalog the quota consults plus the
+ * charges that are not routes. Hand-maintaining this list is how `/agent` came to
+ * under-report what costs an account its allowance.
+ */
+const chargeableList = [
+  ...apiRoutes.flatMap(route => (route.charged ?? []).map(method => `${method} ${route.path}`)),
+  ...chargedBeyondRoutes,
+].join(", ");
 
 function quotaProse(options: DiscoveryOptions): string {
   if (options.quota === undefined) {

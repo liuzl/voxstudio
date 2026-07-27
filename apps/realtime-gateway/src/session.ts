@@ -359,9 +359,13 @@ export class GatewaySession {
         this.chargedTurns.add(turn.id);
         const verdict = charge(turn.id);
         if (verdict.allowed) return;
+        // The same contract the start-time refusal carries: a code to branch on and a
+        // delay to wait (adversarial review 2026-07-27 — this used to be free text).
         this.emit({
           type: "session.notice",
           message: `quota exhausted: this account's allowance is spent — retry in ${verdict.retryAfterSeconds ?? 0}s`,
+          code: "quota_exceeded",
+          ...(verdict.retryAfterSeconds === undefined ? {} : { retryAfterSeconds: verdict.retryAfterSeconds }),
         });
         this.stop();
       },

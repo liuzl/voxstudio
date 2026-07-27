@@ -160,3 +160,27 @@ describe("the document describes itself and the parts it used to leave out", () 
     expect(String(properties?.sessions?.description ?? "")).toContain("self-hosted");
   });
 });
+
+describe("the charged list agent-facing documents publish is derived, not restated", () => {
+  test("every charged route and every non-route charge appears in /agent and llms.txt", async () => {
+    const { agentPage, llmsTxt } = await import("./discovery");
+    const { chargedBeyondRoutes } = await import("./routes");
+    const metered = { ...options, quota: { operations: 100, windowSeconds: 3_600 } };
+    const page = agentPage(metered);
+    const index = llmsTxt(metered);
+
+    for (const route of apiRoutes) {
+      for (const method of route.charged ?? []) {
+        expect(page).toContain(`${method} ${route.path}`);
+        expect(index).toContain(`${method} ${route.path}`);
+      }
+    }
+    // The two charges that are not HTTP routes — the omission that made /agent
+    // under-report what an account pays for.
+    for (const charge of chargedBeyondRoutes) {
+      expect(page).toContain(charge);
+      expect(index).toContain(charge);
+    }
+    expect(page).toContain("each turn within a realtime conversation");
+  });
+});
