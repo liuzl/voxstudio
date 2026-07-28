@@ -185,22 +185,55 @@ def _sentence_bounds(text: str, enders: str) -> list[tuple[int, int]]:
 
 _JOINERS = ("‌", "‍")  # ZWNJ, ZWJ
 
+# Word-boundary hints for unpunctuated CJK runs (mirrors packages/text): cutting
+# right AFTER a trailing particle, or right BEFORE a connective character, lands
+# on a phrase boundary far more often than an arbitrary character split.
+_CJK_CUT_AFTER = set("的了着过地得吧吗呢啊呀嘛哦嗯")
+_CJK_CUT_BEFORE = set("是在和与或但而就都也还又只更把被让从向对给为于跟同")
+
+
+def _latin_run_char(ch: str) -> bool:
+    """Latin letters and decimal digits — the spaced scripts whose runs must not
+    be split. CJK is deliberately excluded (mirrors packages/text)."""
+    if unicodedata.category(ch) == "Nd":
+        return True
+    o = ord(ch)
+    if not (0x41 <= o <= 0x5A or 0x61 <= o <= 0x7A or 0xC0 <= o <= 0x24F or 0x1E00 <= o <= 0x1EFF):
+        return False
+    return unicodedata.category(ch).startswith("L")
+
 
 def _safe_cut(text: str, pos: int, i: int) -> int:
     while pos < i < len(text) and (unicodedata.category(text[i])[0] == "M"
                                    or text[i - 1] in _JOINERS):
         i -= 1
+    # Never split a Latin/digit run; when the whole window is one run there is
+    # no clean position and the original cut stands.
+    if pos < i < len(text) and _latin_run_char(text[i]) and _latin_run_char(text[i - 1]):
+        run_start = i
+        while run_start > pos and _latin_run_char(text[run_start - 1]):
+            run_start -= 1
+        if run_start > pos:
+            i = run_start
     return max(pos + 1, i)
 
 
 def _break_index(text: str, pos: int, hi: int) -> int:
-    floor = pos + max(1, (hi - pos) // 2)
+    # Boundary quality tiers, best first, latest match in the window; the search
+    # spans the whole window — a short chunk with a clean seam beats a
+    # full-length one that splits a word (mirrors packages/text).
+    floor = pos + 1
     for i in range(hi, floor, -1):
         if text[i - 1] in _CLAUSE_BREAKS:
             return i
     for i in range(hi, floor, -1):
         if text[i - 1].isspace():
             return i - 1  # leave the space to the tail, as sentence splitting does
+    for i in range(hi, floor, -1):
+        if _latin_run_char(text[i - 1]) and _latin_run_char(text[i]):
+            continue
+        if text[i - 1] in _CJK_CUT_AFTER or text[i] in _CJK_CUT_BEFORE:
+            return i
     return _safe_cut(text, pos, hi)
 
 
