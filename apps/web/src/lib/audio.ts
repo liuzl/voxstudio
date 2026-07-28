@@ -23,7 +23,13 @@ export class PlaybackTimeline {
   private readonly rebufferSec: number;
   private playheadSec = 0;
 
-  constructor(leadSec = 0.05, rebufferSec = 0.35) {
+  // The initial lead must cover the delivery interval of the slowest streaming
+  // engine: the C++ VoxCPM2 server sends two small fast-start chunks (~0.16s
+  // each) and then ~0.64s batches, so a 50ms lead started playback eagerly and
+  // starved right at the top of every reply — heard as stutter at the start.
+  // 0.45s waits for the fast-start chunks plus most of the first batch before
+  // the first sample plays; fast engines simply start ~0.4s later than before.
+  constructor(leadSec = 0.45, rebufferSec = 0.5) {
     this.leadSec = leadSec;
     this.rebufferSec = rebufferSec;
   }
