@@ -29,7 +29,10 @@ export class PlaybackTimeline {
   // starved right at the top of every reply — heard as stutter at the start.
   // 0.45s waits for the fast-start chunks plus most of the first batch before
   // the first sample plays; fast engines simply start ~0.4s later than before.
-  constructor(leadSec = 0.45, rebufferSec = 0.5) {
+  // 0.7s: at the start of a reply the LLM is still generating its remaining
+  // sentences on the same GPU, so TTS chunk supply runs near 1:1 with playback
+  // until the LLM finishes; the larger initial cushion absorbs that window.
+  constructor(leadSec = 0.7, rebufferSec = 0.7) {
     this.leadSec = leadSec;
     this.rebufferSec = rebufferSec;
   }
