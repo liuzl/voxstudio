@@ -145,3 +145,34 @@ describe("applyPronunciations", () => {
     expect(applyPronunciations("A X B", { X: "$1" })).toBe("A $1 B");
   });
 });
+
+describe("oversized-sentence word boundaries", () => {
+  // No chunk seam may ever land inside a Latin/number run: the halves would be
+  // synthesized independently and spliced.
+  test("never splits an embedded Latin word", () => {
+    const input = "这个项目使用VoxStudio进行语音合成然后再把结果保存到本地磁盘上面供后续使用没有任何标点符号来断句";
+    const chunks = chunkText(input, { maxSeconds: 3, firstMaxSeconds: 3 });
+    expect(chunks.join("")).toBe(input);
+    for (const chunk of chunks) {
+      expect(chunk.startsWith("Studio")).toBe(false);
+      expect(chunk.endsWith("Vox")).toBe(false);
+      expect(chunk.endsWith("VoxStu")).toBe(false);
+    }
+  });
+
+  test("takes a clause break even in the first half of the window", () => {
+    const input = "先说结论，然后是一大段完全没有任何停顿标点的详细展开内容一直说下去不停顿。";
+    const chunks = chunkText(input, { maxSeconds: 4, firstMaxSeconds: 4 });
+    expect(chunks.join("")).toBe(input);
+    expect(chunks[0]).toBe("先说结论，");
+  });
+
+  test("prefers a CJK function-character boundary over an arbitrary split", () => {
+    const input = "我们昨天讨论过的那个方案其实还有很多细节需要进一步确认才能开始动手实现整个系统";
+    const chunks = chunkText(input, { maxSeconds: 4, firstMaxSeconds: 4 });
+    expect(chunks.join("")).toBe(input);
+    const seam = Array.from(chunks[0] as string).pop() as string;
+    const nextStart = Array.from(chunks[1] as string)[0] as string;
+    expect("的了着过地得吧吗呢啊呀嘛哦嗯".includes(seam) || "是在和与或但而就都也还又只更把被让从向对给为于跟同".includes(nextStart)).toBe(true);
+  });
+});

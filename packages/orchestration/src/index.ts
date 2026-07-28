@@ -204,7 +204,7 @@ export async function* streamReply(
             enders: chunking.sentenceEnders,
           });
           text = parts[0] as string;
-          pending = parts.slice(1).join(" ");
+          pending = parts.slice(1).join("");
         } else {
           pending = "";
         }

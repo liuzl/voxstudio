@@ -3,6 +3,16 @@ export const sentenceEnders = "。！？；!?;.;।॥؟۔។៕။";
 const clauseBreaks = new Set(Array.from("，、,：:；;—–…،؛၊"));
 const closers = new Set(Array.from("\"'”’)）」』】》»"));
 const abbreviations = new Set("mr mrs ms dr prof st vs etc fig no vol jr sr approx cf al".split(" "));
+
+// Word-boundary hints for unpunctuated CJK runs: cutting right AFTER a
+// trailing particle, or right BEFORE a connective/function character, lands on
+// a phrase boundary far more often than an arbitrary character split.
+// "Word run" for seam purposes means spaced scripts: Latin letters and digits.
+// CJK is deliberately excluded — \p{L} alone would classify every hanzi as
+// part of one endless word and disable the CJK boundary tiers below.
+const latinRunChar = /^[\p{Script=Latin}\p{Nd}]$/u;
+const cjkCutAfter = new Set(Array.from("的了着过地得吧吗呢啊呀嘛哦嗯"));
+const cjkCutBefore = new Set(Array.from("是在和与或但而就都也还又只更把被让从向对给为于跟同"));
 const joiners = new Set(["‌", "‍"]);
 
 const charsPerSecond: Record<string, number> = {
@@ -163,16 +173,36 @@ function safeCut(chars: string[], position: number, initial: number): number {
       && (mark.test(chars[index] as string) || joiners.has(chars[index - 1] as string))) {
     index -= 1;
   }
+  // Never split an alphanumeric run (a Latin word, a number): back up to the
+  // start of the run. When the entire window is one run there is no clean
+  // position, so the original cut stands.
+  if (index > position && index < chars.length
+      && latinRunChar.test(chars[index] as string)
+      && latinRunChar.test(chars[index - 1] as string)) {
+    let runStart = index;
+    while (runStart > position && latinRunChar.test(chars[runStart - 1] as string)) runStart -= 1;
+    if (runStart > position) index = runStart;
+  }
   return Math.max(position + 1, index);
 }
 
 function breakIndex(chars: string[], position: number, high: number): number {
-  const floor = position + Math.max(1, Math.floor((high - position) / 2));
+  // Boundary quality tiers, best first, always taking the latest match in the
+  // window. The search spans the whole window rather than its second half: a
+  // short chunk with a clean seam beats a full-length chunk that splits a word
+  // (the seam is audible on every listen, the chunk length is not).
+  const floor = position + 1;
   for (let index = high; index > floor; index -= 1) {
     if (clauseBreaks.has(chars[index - 1] as string)) return index;
   }
   for (let index = high; index > floor; index -= 1) {
     if (isWhitespace(chars[index - 1] as string)) return index - 1;
+  }
+  for (let index = high; index > floor; index -= 1) {
+    const previous = chars[index - 1] as string;
+    const next = chars[index] as string;
+    if (latinRunChar.test(previous) && latinRunChar.test(next)) continue;
+    if (cjkCutAfter.has(previous) || cjkCutBefore.has(next)) return index;
   }
   return safeCut(chars, position, high);
 }
