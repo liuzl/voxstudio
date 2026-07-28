@@ -37,6 +37,7 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | Path | What |
 |---|---|
 | `engines/voxcpm2-server/` | Our TTS engine wrapper — FastAPI over OpenBMB VoxCPM2 |
+| `engines/voxcpm2-cpp/` | Deployment entry for the C++ voxcpm-server (liuzl/VoxCPM.cpp) — no-Python clone/long-form line, streamed first audio ~0.5s on Apple Silicon |
 | `engines/parakeet/` | Deployment and integration notes for the default real-time ASR engine |
 | `engines/moss-transcribe/` | Evaluation notes for long-form ASR and speaker diarization |
 | `engines/funasr/` | Realtime-slot ASR server (SenseVoice-Small / Paraformer, OpenAI-compatible) |

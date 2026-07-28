@@ -1,0 +1,19 @@
+[Unit]
+Description=VoxCPM2 C++ TTS HTTP service (voxstudio engine)
+After=network-online.target
+
+[Service]
+# Adjust the checkout, model and voice-dir paths to your host. Use
+# --backend cuda on NVIDIA hosts, --backend cpu where no GPU is available.
+ExecStart=%h/VoxCPM.cpp/build/examples/voxcpm-server \
+  --model-path %h/models/voxcpm2-q4_k-audiovae-f16.gguf \
+  --model-name voxcpm2 \
+  --voice-dir %h/.voxcpm/voices \
+  --host 127.0.0.1 --port 18085 \
+  --backend cuda --threads 12 --inference-timesteps 6 \
+  --api-key CHANGE_ME
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

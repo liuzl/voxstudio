@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- launchd user agent for the C++ VoxCPM2 TTS server. Replace %VOXCPM_CPP% (the
+     VoxCPM.cpp checkout), %MODEL_GGUF%, %VOICE_DIR% and %API_KEY%; machine-specific
+     values stay out of this public repo. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.voxstudio.voxcpm2-cpp</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>%VOXCPM_CPP%/build/examples/voxcpm-server</string>
+    <string>--model-path</string><string>%MODEL_GGUF%</string>
+    <string>--model-name</string><string>voxcpm2</string>
+    <string>--voice-dir</string><string>%VOICE_DIR%</string>
+    <string>--host</string><string>127.0.0.1</string>
+    <string>--port</string><string>18085</string>
+    <string>--backend</string><string>metal</string>
+    <string>--threads</string><string>12</string>
+    <string>--inference-timesteps</string><string>6</string>
+    <string>--api-key</string><string>%API_KEY%</string>
+  </array>
+  <!-- Escape hatch: uncomment to route AudioVAE graphs to CPU without a rebuild.
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>VOXCPM_VAE_ON_CPU</key><string>1</string>
+  </dict>
+  -->
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/voxcpm2-cpp.log</string>
+  <key>StandardErrorPath</key><string>/tmp/voxcpm2-cpp.log</string>
+</dict>
+</plist>
