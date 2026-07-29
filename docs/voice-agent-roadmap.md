@@ -1,188 +1,391 @@
-# Voice agent roadmap: multimodal input / agent executor / unified conversation-and-action
+# Voice agent roadmap: unified conversation, execution, and multimodal input
 
-Status: living. Opened 2026-07-28; all three feasibility investigations completed
-2026-07-29. Machine and deployment specifics live in the internal ops repo; this
-document keeps only the architectural conclusions. Current state is at the end.
+Status: living. Opened 2026-07-28; feasibility investigations completed
+2026-07-29; converted to an executable integration plan 2026-07-29.
+Machine and deployment specifics live in the internal ops repo. This document
+owns product behavior, architecture, delivery order, and promotion gates.
 
-## Direction 1: LLM-native audio input (dual-channel user turns)
+## 1. Outcome
 
-**Factual basis**: the local conversation LLM (Gemma 4 12B) is natively
-multimodal; an internal test on 2026-06-13 confirmed llama.cpp accepts
-`input_audio` content for it directly (audio is encoded to tokens by the mmproj
-projector) — only video needs the MLX backend or frame extraction. The
-llama-server instance conversation currently uses just doesn't mount mmproj:
-enabling it is one launch flag away.
+VoxStudio should become a voice frontend for a long-running agent without
+sacrificing the properties the conversation path already has:
 
-**Value**: not an ASR replacement — it restores the layer ASR throws away:
-tone/emotion, hesitation and laughter, non-speech sound events, accents and
-code-switching. Speaker identity needs sober expectations: an LLM compares
-voices acceptably within one context window, but stable cross-session identity
-belongs to a voiceprint-embedding sidecar (a CAM++/ECAPA-class small model).
-The LLM understands and expresses; the voiceprint decides identity.
+- low first-audio latency and sentence-level streaming;
+- certified barge-in and speculative turn-taking;
+- typed tools and spoken confirmation for external effects;
+- no retained audio unless a deployment explicitly enables retention;
+- one OpenAI-compatible gateway contract across CLI, Web, and realtime clients.
 
-**Proposed architecture**: ASR keeps its job (live captions, keyterm
-correction, history). The user-turn message body upgrades to two channels:
-`input_audio` (raw audio) + the ASR text as a hint. The model fuses them
-itself, which is naturally tolerant of ASR typos.
+The target agent can listen, speak, and act concurrently. Those are three
+different lifecycles:
 
-**Risks / open questions (answered by the evaluation below)**: mmproj vs. MTP
-compatibility → they coexist, but draft acceleration dies on audio turns
-(finding 3); mmproj memory +~1 GB → acceptable; QAT impact on audio
-understanding → fine on routine tasks, and the domain-term weakness is not
-quantization-related (plain text fails the same way — see the table).
+```text
+ears:  microphone → VAD → ASR (+ optional LLM audio understanding)
+mouth: speakable text → SentenceAssembler → TTS → playback
+hands: agent executor → tools → artifacts
+```
 
-**Offline evaluation results (2026-07-29, 202 real captures from the library +
-TTS corpus with known ground truth)**:
+No lifecycle may accidentally control another merely because they originated
+from the same user turn.
+
+## 2. Decisions already made
+
+### 2.1 Use the existing text/tool-call dual channel
+
+Do not put speech and actions inside one structured-JSON response. Incomplete
+JSON cannot be sentence-split, so it destroys TTS streaming and first-audio
+latency.
+
+- **Text is the speakable channel**: streamed through the existing
+  `SentenceAssembler` and TTS path.
+- **Tool calls are the action channel**: structured, typed, and subject to the
+  existing effect and confirmation policy.
+- Spoken output stays short and colloquial. Code, files, tables, and long
+  results go to artifacts rather than being read aloud.
+
+### 2.2 Embed pi behind a Vox-owned adapter
+
+The selected executor is earendil-works/pi (formerly badlogic/pi-mono). Embed
+`pi-agent-core` in the gateway process, but never expose pi types across the
+adapter boundary. Pin its versions; its project and npm scopes have already
+migrated once.
+
+The conversation package remains the voice frontend and owns audio, playback,
+turn-taking, and spoken confirmation. The executor owns multi-step model/tool
+work. The gateway composes them.
+
+The 2026-07-29 spike proved:
+
+- `createProvider` plus `openai-completions` works against the local
+  OpenAI-compatible llama-server;
+- write → read → summarize completed in three tool rounds and 6.6 seconds;
+- pi exposes the needed event, steering, hook, and cancellation seams under
+  Bun;
+- a dummy API key is currently required for a nominally keyless local provider.
+
+Simple tool adherence is proven; complex chains are not.
+
+### 2.3 Keep ASR; add audio as a second input channel
+
+LLM-native audio is not an ASR replacement. ASR remains responsible for
+captions, corrected history, keyterms, and the capture-library data flywheel.
+Optional audio input restores tone, hesitation, laughter, non-speech events,
+accent, and code-switching.
+
+The current user turn eventually becomes:
+
+```text
+current turn: input_audio + ASR text hint
+history:      corrected text + optional compact paralinguistic summary
+```
+
+Raw audio is not copied into retained conversation history by default.
+Cross-session speaker identity is a separate voiceprint-sidecar project; it is
+not an LLM prompt feature.
+
+## 3. Interaction and ownership contract
+
+This contract must land before the executor integration.
+
+### 3.1 Three independent controls
+
+| Control | User meaning | Mouth | Hands | Conversation |
+|---|---|---:|---:|---:|
+| `stopSpeech` | user starts speaking over playback | stop immediately | continue | accept the new utterance |
+| `steerExecution` | user changes or clarifies the task | stop stale narration | continue with steering | append a user message |
+| `cancelExecution` | user explicitly says stop/cancel the task | stop | abort model and cancellable tools | report cancellation |
+| `endSession` | user hangs up | stop | deployment policy decides | close realtime session |
+
+Barge-in therefore must **not** call `Agent.abort()`. It stops the mouth. The
+new utterance may steer the running executor after ASR finalizes. Only an
+explicit cancel intent invokes executor cancellation.
+
+This deliberately differs from the current conversation implementation, where
+one turn `AbortSignal` cancels LLM, playback, and in-flight tool handlers
+together. Agent mode must split that signal into at least:
+
+```text
+speechSignal      synthesis and playback for one narration
+executionSignal   agent/model execution
+toolSignal        one tool invocation, derived from execution policy
+sessionSignal     gateway/session shutdown
+```
+
+### 3.2 Tool cancellation and effects
+
+Keep the existing effect classes:
+
+- `read`: executes immediately;
+- `session`: changes only this Vox session and executes immediately;
+- `external`: waits for explicit spoken confirmation unless operator-trusted.
+
+An aborted read tool should stop when supported. An external tool that has
+already crossed its commit point may be non-cancellable; cancellation then
+means “stop waiting and report the eventual outcome,” not pretending the side
+effect was undone.
+
+Every side-effecting tool needs a stable invocation ID. Reconnect, retry, and
+steering must never execute the same confirmed action twice.
+
+### 3.3 Speech sources and priority
+
+There are initially two speech sources:
+
+1. executor text deltas for the current direct answer;
+2. system-generated milestone narration through `queueAgentSpeech`.
+
+Do **not** expose a model-visible `speak` tool in the first integration. It
+overlaps both existing channels and can duplicate sentences. Add it later only
+if a measured workflow requires the model to control an explicit mid-execution
+utterance.
+
+Milestone narration rules:
+
+- speak only transitions meaningful to the user, not every tool event;
+- coalesce repeated events and rate-limit progress speech;
+- never speak secrets, raw tool arguments, paths, or long content;
+- a newer update may replace queued but not-yet-audible progress;
+- barge-in clears stale queued narration without cancelling execution.
+
+### 3.4 Disconnect and shutdown
+
+Phase 1 agent execution is session-scoped:
+
+- transient WebSocket reconnect keeps the executor alive within the existing
+  reattach window;
+- explicit `endSession` cancels execution after bounded cleanup;
+- gateway shutdown aborts execution and waits for a bounded drain;
+- durable jobs that survive process restart are out of scope until a job store,
+  ownership model, and artifact retention policy exist.
+
+Hosted deployments additionally require per-user concurrency and operation
+quotas. A task is always owned by the authenticated user that created it.
+
+## 4. Internal executor boundary
+
+Define a Vox-owned interface before adding pi:
+
+```ts
+interface AgentExecutor {
+  start(input: AgentInput, context: AgentContext): AgentRun;
+}
+
+interface AgentRun {
+  events: AsyncIterable<AgentEvent>;
+  steer(input: AgentInput): Promise<void>;
+  cancel(reason: string): Promise<void>;
+  close(): Promise<void>;
+}
+
+type AgentEvent =
+  | { type: "text.delta"; text: string }
+  | { type: "text.final"; text: string }
+  | { type: "tool.started"; invocationId: string; name: string }
+  | { type: "tool.progress"; invocationId: string; summary: string }
+  | { type: "tool.completed"; invocationId: string; ok: boolean }
+  | { type: "artifact.created"; artifact: ArtifactRef }
+  | { type: "run.completed" }
+  | { type: "run.failed"; code: string; message: string };
+```
+
+The exact TypeScript may change during implementation; the invariants may not:
+
+- pi is replaceable without changing conversation or gateway protocols;
+- every event belongs to a run and every tool event to an invocation;
+- executor events contain display-safe summaries separately from raw data;
+- cancellation has an observable terminal result;
+- fake executors can deterministically test every composite state.
+
+## 5. Artifact contract
+
+Agent mode needs a destination for content that should not be spoken.
+Introduce an artifact contract before broad tool access:
+
+- immutable ID, owner, MIME type, size, creation time, and short description;
+- bounded gateway storage with the same explicit-retention posture as the
+  capture library;
+- authenticated list/read/download/delete routes;
+- Web conversation events carry references, never large artifact bodies;
+- Web Studio renders safe previews and download links;
+- tool output is not automatically retained unless promoted to an artifact.
+
+Filesystem, shell, and arbitrary network tools remain disabled until workspace
+isolation and artifact ownership are implemented.
+
+## 6. Multimodal input contract
+
+The 2026-07-29 offline evaluation used 202 real captures plus known TTS
+fixtures. Results:
 
 | Task | Result |
 |---|---|
-| ASR correction (clean audio + typo'd hint) | ✅ Perfect — the single wrong character is fixed, everything else preserved verbatim |
-| ASR correction (real capture, domain terms) | ⚠️ After ASR heard 「过拟合/欠拟合」 (overfitting/underfitting) as 「过你荷和欠你合」, audio input could not rescue it either (guessed 「权利和责任」) — domain terms still need keyterm biasing; audio is not a cure-all |
-| Same/different speaker judgment (8 gold pairs) | ✅ 7/8 — in-context comparison usability exceeded expectations, 1–2.5 s per pair |
-| Tone / paralinguistics (qualitative) | ✅ Reasonable descriptions for normal-length utterances (a lone 「诶」 judged as "tentative, probing, seeking confirmation") |
+| Clean audio + typo hint | single wrong character corrected perfectly |
+| Real domain-term error | audio did not recover 过拟合/欠拟合; Qwen3-ASR revision later solved it at the ASR layer |
+| Same/different speaker, 8 pairs | 7/8 correct, 1–2.5 seconds per pair |
+| Tone/paralinguistics | useful qualitative descriptions |
 
-**Three key engineering findings**:
+Engineering constraints:
 
-1. **Audio ≤1 s is silently dropped** (the model answers "I hear nothing";
-   no audio tokens in the prompt) — padding with silence to ≥2 s restores
-   perception. Production ingestion must pad short utterances;
-2. Audio costs about **27 tokens/second** — a 5 s utterance ≈ 135 tokens,
-   negligible;
-3. **MTP and mmproj coexist** (no conflict in one instance), but with audio
-   in context the draft acceptance rate falls from ~95% (text-only) to ~19% —
-   decode speedup is effectively dead on audio turns; accept the slowdown or
-   disable draft for those turns.
+1. audio at or below one second is silently ignored by the tested Gemma path;
+   pad only the LLM-bound copy with silence to at least two seconds;
+2. audio costs about 27 tokens/second;
+3. mmproj and MTP coexist, but draft acceptance fell from about 95% to 19% on
+   audio turns, eliminating the useful speculative speedup.
 
-**Next (phase B)**: conversation-flow prototype — user-turn message body
-becomes `input_audio` (padded) + ASR text hint, behind a session-level
-gradual-rollout switch.
+Implementation requirements:
 
-## Direction 2: pi as the agent executor
+- extend `ChatMessage.content` from string-only to typed text/audio parts;
+- serialize the same contract through `LlmClient` and the OpenAI-compatible
+  facade;
+- advertise an `audio-input` LLM capability and reject incompatible engines;
+- add a session-level `audioUnderstanding` rollout flag, off by default;
+- keep ASR, capture-library, VAD, and voice-registration audio unpadded;
+- place only the current turn’s audio in the LLM request; history keeps text
+  and, if useful, a compact derived paralinguistic summary;
+- account for audio tokens in context limits and quota estimates;
+- never log or retain base64 audio payloads by accident.
 
-Evaluated as earendil-works/pi (formerly badlogic/pi-mono; a TypeScript agent
-toolbox: provider-agnostic LLM client, tool harness, session management).
+A separate multimodal LLM instance is preferred operationally, selected through
+the engine registry. This avoids forcing mmproj and its memory cost onto the
+default text-only path.
 
-**Fit**: bun/TS like voxstudio, so it can be embedded in-process;
-provider-agnostic, points at a local OpenAI-compatible endpoint with no cloud
-tie. Mind the overlap with existing assets: the conversation package already
-has typed tools + a spoken-confirmation flow + the MCP tool design
-(docs/mcp-tools.md, docs/agent-voice-mcp.md) — pi's increment is the mature
-multi-step execution loop and tool ecosystem, not "having tool calls at all."
+## 7. Delivery plan
 
-**Risks**: young project, fast-moving API (the npm scope has already migrated
-once; pin versions + isolate behind an adapter); bun compatibility → proven by
-the spike; fitting long-running execution to voice-latency constraints → the
-spike confirmed pi's native seams suffice (below).
+### Phase A — lifecycle ADR and state-model tests
 
-**Spike results (2026-07-29 — verdict: adopt, embed in-process)**:
+Deliver:
 
-Identity first: badlogic/pi-mono has migrated to **earendil-works/pi** (the old
-GitHub URL redirects); the current npm scope is `@earendil-works/*`
-(`@mariozechner/*` is deprecated).
+- formal `stopSpeech`, `steerExecution`, `cancelExecution`, `endSession`
+  transitions;
+- signal ownership and tool commit-point rules;
+- reconnect, hang-up, and gateway-shutdown behavior;
+- state-model tests with fake speech and fake execution.
 
-Measured (`pi-agent-core` + `pi-ai` under bun, pointed at the local
-llama-server running Gemma 4 12B):
+Promotion gates:
 
-- ✅ `createProvider` + `openai-completions` works out of the box against a
-  local endpoint (the official docs carry Ollama/vLLM recipes);
-- ✅ A full multi-step tool chain ran clean: write_file → read_file → correct
-  summary, three rounds in 6.6 s (12B QAT tool-call adherence is fine for
-  simple chains; complex chains still to be assessed);
-- ✅ **The integration surface matches voxstudio's needs point for point**:
-  `Agent` event stream (`tool_execution_start` → progress narration;
-  `text_delta` → speakable channel straight into SentenceAssembler),
-  `abort()` → barge-in, the `beforeToolCall` hook → spoken confirmation gate,
-  `queueMessage`/steering → conversational turns. Every seam direction 3
-  needs exists natively in pi — no MCP indirection layer required;
-- ⚠️ One pothole: the README's keyless-provider recipe fails with "No API
-  key" in practice; a dummy key works around it (docs/implementation drift).
+- confirmed barge-in stops audible playback within 150 ms;
+- barge-in never aborts the fake executor;
+- explicit cancel reaches a terminal cancelled state;
+- no superseded narration is heard after steering;
+- no zombie event mutates a completed or cancelled run.
 
-**Selection verdict**: embed pi-agent-core in the gateway as the executor; the
-conversation package keeps the voice-frontend role; wire them per direction 3's
-event mapping.
+### Phase B — executor adapter with a fake backend
 
-## Direction 3: unified conversation and agent action
+Deliver:
 
-**Key design judgment: no monolithic structured-JSON output** — unclosed JSON
-cannot be sentence-split, which kills sentence-level streaming and TTS
-first-audio. The correct dual channel is the existing tool-calling protocol:
+- Vox-owned executor types;
+- gateway/session integration behind `agentMode: false` by default;
+- deterministic fake executor covering text, progress, tools, artifacts,
+  steering, failure, and cancellation;
+- protocol events and Web UI state for run progress.
 
-- **text channel = the speakable channel**: naturally streaming, through the
-  existing SentenceAssembler → TTS;
-- **tool_calls channel = the action channel**: structured and type-safe;
-  conversation already implements the `{type:"text"|"tool_calls"}` interleaved
-  stream and the spoken confirmation gate for external tools.
+Promotion gates:
 
-Contract via system prompt: what is spoken stays short, colloquial,
-conclusions-and-intent only; data, code, and long content go through tools and
-artifacts, never into speech.
+- existing non-agent conversation tests and latency gates do not regress;
+- reconnect attaches to the same run exactly once;
+- a run cannot leak across authenticated users or sessions;
+- bounded shutdown drains or aborts every run.
 
-**Three new pieces to build**:
+### Phase C — minimal pi backend
 
-1. Progress narration: long-task milestone events → one-sentence spoken
-   updates (agent event stream → toSpeakable mapping);
-2. Interruption semantics: barge-in currently only stops playback; once
-   unified, the proposal is "interruption stops the mouth; only an explicit
-   'stop' stops the hands (through the confirmation gate)";
-3. A `speak` tool: the agent's explicit channel for talking mid-execution,
-   complementing the passive text stream.
+Deliver:
 
-**Dependencies**: the executor is decided (pi, direction 2); the event mapping
-table is in direction 2's spike verdict. Direction 1 is its input upgrade (an
-agent that hears tone) and can proceed in parallel, later.
+- pinned pi packages behind the adapter;
+- local OpenAI-compatible provider configuration;
+- executor text deltas into the existing speakable pipeline;
+- `beforeToolCall` mapped to the Vox effect/confirmation policy;
+- milestone events mapped to rate-limited `queueAgentSpeech`;
+- only a small allowlisted tool set: one read tool, one session tool, and one
+  test external-effect tool.
 
-## Ecosystem evaluation and watchlist (2026-07-29 hands-on addendum)
+Promotion gates:
 
-**audio.cpp (0xShug0; ggml-based all-in-one audio inference framework, 35+
-model families)** — fully hands-on tested (M3 Max Metal build; clone / design /
-streaming / ASR / VAD / forced alignment all exercised):
+- a multi-step chain completes through voice end to end;
+- zero external effects occur before spoken confirmation;
+- a confirmed invocation executes at most once across retry/reconnect;
+- barge-in stops speech but the chain continues;
+- explicit cancellation aborts cancellable work within a defined timeout;
+- simple chains meet or beat the measured 6.6-second spike baseline within an
+  agreed tolerance.
 
-| Verdict | Evidence |
-|---|---|
-| ✅ **Qwen3-ASR-0.6B adopted** (final-pass revision tier, shipped) | Mandarin gold transcript character-perfect; nails 「过拟合/欠拟合」 in one shot where funasr (SenseVoice) and Gemma+audio both fail; ~0.5 s/utterance resident, RTF 0.15. Wiring: `revise=true` bypass in the funasr adapter (engines/qwen3-asr-revision/) |
-| ❌ No TTS engine change | Their voxcpm2 on Metal is RTF 1.46 / qwen3_tts 1.18 (neither realtime) vs. our 0.41–0.63. Causes: the conv_transpose occupancy defect (the very kernel we fixed, still unmerged upstream) + per-step host round-trips between modules |
-| ❌ Mandarin streaming-ASR gap still open | Nemotron 0.6B is fast but ~6% CER and misses every domain term; Voxtral 4B has substitutions + truncation + no punctuation. **Speculative turn-taking still has no Mandarin engine** |
-| ➖ Bundled Silero VAD works but adds nothing for us | Its streaming `speech_start` events are fine, but voxstudio already embeds the same Silero v5 in-process (platforms/bun/silero.ts, the conversation default with an energy fallback) — no reason to route through it |
-| ⚠️ Qwen3 forced aligner usable, but not the badcase tool of choice | Clean timestamps (0.16 s/char); a ghost sentence merely gets compressed (0.099 s/char) rather than flagged — ASR round-trip comparison with Qwen3-ASR is the more direct TTS badcase detector |
-| No fork; cherry-pick + contribute upstream | One-month-old project shipping daily: a deep fork means rebase hell. Their CONTRIBUTING has no anti-AI clause, so our Metal conv_transpose occupancy fix went straight upstream: [0xShug0/audio.cpp#149](https://github.com/0xShug0/audio.cpp/pull/149) (AudioVAE decode 10.23 s → 1.81 s, bit-identical output) |
+### Phase D — artifacts and broader tools
 
-**Side discovery**: voice design (the `(style description)` prefix) is a prompt
-convention of the VoxCPM2 model itself — our engine supported it all along; the
-server merely demanded a `voice` parameter. Now optional
-(liuzl/VoxCPM.cpp `9c5733c`); design mode works on the offline, SSE, and
-streaming paths.
+Deliver artifact storage, routes, Web UI, retention quota, workspace isolation,
+and only then expand the tool allowlist.
 
-**Moonshine (moonshine-ai)** — watch only: Mandarin CER 25.76%, no Mandarin
-streaming. Its thesis — streaming ASR as the default architecture — is right;
-re-evaluate when it (or anything else) covers Mandarin.
+Promotion gates:
 
-**Watchlist triggers**: audio.cpp gains a Mandarin-capable streaming-ASR
-family, or its voxcpm2 Metal path drops below RTF 0.7 after the occupancy fix
-merges → re-evaluate.
+- artifact access is owner-scoped;
+- path traversal and cross-user access tests pass;
+- quota eviction cannot remove in-flight or explicitly retained work;
+- secrets and raw tool payloads never enter narration or public events.
 
-## Current state and next steps (2026-07-29)
+### Phase E — multimodal phase B
 
-All groundwork is done:
+Deliver typed content parts, LLM audio ingestion, short-audio padding,
+capability routing, and the opt-in session switch.
+
+Promotion gates:
+
+- the clean typo-correction fixture remains exact;
+- the 8-pair speaker comparison does not regress below 7/8;
+- sub-one-second speech becomes perceptible after LLM-copy-only padding;
+- text-only sessions have no latency or memory regression;
+- audio is absent from retained history and logs by default;
+- MTP behavior on audio and text turns is measured in the production topology.
+
+Phase E can proceed in parallel after Phase A. It must not block the executor
+adapter and must not be required for agent mode.
+
+## 8. Ecosystem decisions and watchlist
+
+The 2026-07-29 audio.cpp evaluation produced these decisions:
+
+- **Adopted**: Qwen3-ASR-0.6B as the final-pass revision tier. It was
+  character-perfect on the Mandarin gold transcript and fixed the
+  过拟合/欠拟合 failure at about 0.5 seconds per utterance, RTF 0.15. The
+  FunASR adapter forwards `revise=true` and falls back to SenseVoice.
+- **No TTS engine change**: audio.cpp VoxCPM2 measured RTF 1.46 and Qwen3-TTS
+  1.18 versus VoxStudio’s 0.41–0.63. The Metal conv-transpose occupancy fix was
+  contributed upstream as 0xShug0/audio.cpp#149.
+- **Mandarin streaming ASR remains open**: Nemotron measured about 6% CER and
+  missed domain terms; Voxtral substituted, truncated, and omitted
+  punctuation. Neither clears the speculative-turn-taking bar.
+- **No VAD change**: VoxStudio already embeds Silero v5 in-process with an
+  energy fallback.
+- **Forced alignment is not the primary TTS bad-case detector**: Qwen3 forced
+  alignment compressed a ghost sentence rather than flagging it; ASR
+  round-trip comparison is more direct.
+- **No deep audio.cpp fork**: cherry-pick needed pieces and contribute fixes
+  upstream.
+
+Voice design is a VoxCPM2 prompt convention, not a separate engine capability:
+the `(style description)` prefix works after making the server’s `voice`
+parameter optional (liuzl/VoxCPM.cpp `9c5733c`).
+
+Moonshine remains watch-only: Mandarin CER measured 25.76% and it has no
+Mandarin streaming path.
+
+Re-evaluate when:
+
+- audio.cpp or another engine gains production-quality Mandarin streaming ASR;
+- audio.cpp VoxCPM2 on Metal drops below RTF 0.7 after the occupancy fix;
+- a voiceprint sidecar is justified by a concrete cross-session identity
+  product requirement.
+
+## 9. Current state
 
 | Item | State |
 |---|---|
-| Direction 1 offline evaluation | ✅ Done — dual-channel input is viable; three engineering constraints known (pad short audio / token cost negligible / drop MTP on audio turns) |
-| Direction 2 pi spike | ✅ Done — verdict: embed pi-agent-core in-process |
-| Direction 3 foundation inventory | ✅ Done — every seam needed exists natively in pi |
+| Multimodal offline evaluation | done; viable with known padding/history/MTP constraints |
+| pi feasibility spike | done; adopt behind a Vox adapter |
+| Existing typed tools and spoken confirmation | shipped |
+| Qwen3-ASR final revision tier | shipped |
+| Executor lifecycle contract | next: Phase A |
+| Vox executor adapter | not started |
+| pi production dependency | not added |
+| Artifact contract and UI | not started |
+| Dual-channel conversation input | not started |
+| Voiceprint sidecar | separate future project |
 
-Integration work, suggested order:
-
-1. **Direction 3 interruption-semantics design doc** (small; fix the
-   interaction contract first: interruption stops the mouth, only an explicit
-   stop halts the hands, through the confirmation gate);
-2. **pi executor integration**: embed pi-agent-core in the gateway; land the
-   event mapping (progress narration, speakable channel, barge-in → abort,
-   beforeToolCall → spoken confirmation) and the `speak` tool;
-3. **Direction 1 phase B**: dual-channel user-turn message body (padded audio
-   + ASR hint) behind a session-level rollout switch — can run in parallel
-   with 2. The voiceprint sidecar is its own project.
-
-Addendum (07-29): direction 1's leftover — "domain terms still need keyterm
-biasing" — has been solved by a simpler route: the Qwen3-ASR revision tier
-(see the ecosystem section) fixes domain terms at the ASR layer, taking most
-of the correction pressure off the hint channel.
+The next implementation change is Phase A, not installing pi.
