@@ -58,9 +58,29 @@ conversation 包已有 typed tools + 口头确认流 + MCP 工具设计
 **风险**：项目年轻、API 迭代快；bun 兼容需冒烟；长任务执行模型与
 语音实时性约束（barge-in、取消）需要适配层。
 
-**下一步**：一天时间盒 spike——pi 指向本地 LLM 跑通多步任务，评估
-两种接法：pi 工具接口被 conversation 工具层包装，或 pi 作为 executor、
-voxstudio 作为语音前端经 MCP 相接（agent-voice-mcp 可能是现成接缝）。
+**Spike 结果（2026-07-29，结论：采用，进程内嵌入）**：
+
+先澄清项目身份：badlogic/pi-mono 已迁移为 **earendil-works/pi**（GitHub
+旧地址重定向），npm 现行 scope 为 `@earendil-works/*`（`@mariozechner/*`
+已标记弃用）。
+
+实测（`pi-agent-core` + `pi-ai`，bun 运行，指向本地 llama-server 的
+Gemma 4 12B）：
+
+- ✅ `createProvider` + `openai-completions` API 对本地端点开箱即用
+  （官方文档就有 Ollama/vLLM 配方）；
+- ✅ 多步工具链完整跑通：write_file → read_file → 正确汇总，三轮
+  6.6s（12B QAT 的工具调用遵循度对简单链足够，复杂链待评）；
+- ✅ **集成面与 voxstudio 需求逐点对上**：`Agent` 事件流
+  （`tool_execution_start` → 进度旁白；`text_delta` → 可说通道直连
+  SentenceAssembler）、`abort()` → barge-in、`beforeToolCall` 钩子 →
+  口头确认门、`queueMessage`/steering → 对话轮次。方向 3 需要的接缝
+  pi 原生全有，无需走 MCC/MCP 间接层；
+- ⚠️ 小坑：README 的无钥 provider 配方实测报 "No API key"，需给哑 key
+  绕过（疑文档/实现小分歧）。
+
+**选型结论**：pi-agent-core 作为 executor 进程内嵌入 gateway，
+conversation 包保持语音前端职责，按方向 3 的事件映射对接。
 
 ## 方向 3：对话与 agent 执行一体化
 
