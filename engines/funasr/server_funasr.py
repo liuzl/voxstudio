@@ -68,7 +68,9 @@ def revise_transcribe(settings: Settings, payload: bytes, filename: str) -> str:
     import uuid
 
     boundary = uuid.uuid4().hex
-    safe_name = (filename or "audio.wav").replace('"', "_")
+    # Quotes would close the filename attribute; CR/LF would let a crafted
+    # filename inject extra multipart headers. Both become underscores.
+    safe_name = re.sub(r'[\r\n"]', "_", filename or "audio.wav")
     body = b"".join(
         [
             f"--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{settings.revise_model}\r\n".encode(),
@@ -164,20 +166,24 @@ def create_app(recognizer: Recognizer | None = None, settings: Settings | None =
             raise HTTPException(status_code=400, detail="empty audio upload")
 
         want_revise = (revise or "").strip().lower() in {"1", "true", "yes"}
-        if want_revise and resolved.revise_url:
-            try:
-                text = await asyncio.to_thread(
-                    revise_transcribe, resolved, payload, file.filename or "audio.wav",
-                )
-                if response_format == "text":
-                    return PlainTextResponse(text)
-                return JSONResponse({"text": text, "engine": "revise"})
-            except Exception:
-                # The draft model is the availability floor: any revision failure
-                # (endpoint down, timeout, bad response) falls through silently.
-                pass
-
+        # One semaphore bounds both tiers: revision forwarding holds an upload
+        # body and an executor thread for up to revise_timeout, so letting it
+        # bypass queue_limit would turn a request burst into unbounded memory
+        # and a thundering herd on the revision endpoint.
         async with semaphore:
+            if want_revise and resolved.revise_url:
+                try:
+                    text = await asyncio.to_thread(
+                        revise_transcribe, resolved, payload, file.filename or "audio.wav",
+                    )
+                    if response_format == "text":
+                        return PlainTextResponse(text)
+                    return JSONResponse({"text": text, "engine": "revise"})
+                except Exception:
+                    # The draft model is the availability floor: any revision failure
+                    # (endpoint down, timeout, bad response) falls through silently.
+                    pass
+
             with tempfile.NamedTemporaryFile(suffix=".wav") as handle:
                 handle.write(payload)
                 handle.flush()

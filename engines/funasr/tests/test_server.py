@@ -113,3 +113,44 @@ def test_revise_flag_without_url_uses_draft_model(client):
     response = post(session, revise="true")
     assert response.status_code == 200
     assert response.json() == {"text": "你好，世界。", "engine": "fake"}
+
+
+def test_revise_transcribe_builds_wellformed_multipart(monkeypatch):
+    import io
+    import urllib.request
+
+    from server_funasr import revise_transcribe
+
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return io.BytesIO(b'{"text": "ok"}')
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    settings = Settings(
+        model="fake", device="cpu", hub="ms", max_upload_bytes=1024, queue_limit=2,
+        revise_url="http://127.0.0.1:9/v1/audio/transcriptions", revise_model="qwen3-asr",
+    )
+    payload = b"RIFF\x00\x01binary\xffdata"
+    # A hostile filename: quotes plus CRLF trying to inject a multipart header.
+    text = revise_transcribe(settings, payload, 'evil"\r\nX-Injected: 1\r\n.wav')
+
+    assert text == "ok"
+    assert captured["timeout"] == settings.revise_timeout
+    body = captured["request"].data
+    content_type = captured["request"].get_header("Content-type")
+    boundary = content_type.split("boundary=")[1]
+    # Framing: opening boundary per part, closing boundary, both fields present,
+    # binary payload carried verbatim.
+    assert body.count(f"--{boundary}".encode()) == 3
+    assert body.endswith(f"--{boundary}--\r\n".encode())
+    assert b'name="model"\r\n\r\nqwen3-asr\r\n' in body
+    assert payload in body
+    # The injection attempt is neutralized: no CR/LF or quote survives in the
+    # filename attribute, so the crafted header never starts its own line.
+    assert not any(line.startswith(b"X-Injected") for line in body.split(b"\r\n"))
+    filename_line = next(l for l in body.split(b"\r\n") if b"filename=" in l)
+    assert b"\r" not in filename_line.split(b'filename="')[1]
+    assert filename_line.count(b'"') == 4  # name="file"; filename="..." — no stray quotes
