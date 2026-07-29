@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { VoicePicker } from "../components/VoicePicker";
+import { ConversationRoutePicker } from "../components/EngineRoutePicker";
 import { conversationControls, startConversation, stopConversation } from "../conversation";
 import { useStudio, type TurnView } from "../store";
 import { useT, type MessageKey } from "../i18n";
@@ -211,6 +212,7 @@ function StartCard({ starting, onStart }: { starting: boolean; onStart: () => vo
             language hint is fixed to auto (measured identical to zh on SenseVoice); the
             protocol still carries it for engines that care. */}
         <VoicePicker value={voice} engine={voiceEngine} onChange={setVoice} className="max-w-44" />
+        <ConversationRoutePicker />
       </div>
       <p className="text-xs leading-relaxed text-ink-500">
         {t("授权麦克风后进入全双工对话：断句、识别、回答全自动，回答播放时直接开口即可打断，停顿后续说会自动合并。")}

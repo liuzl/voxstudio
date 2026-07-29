@@ -1,6 +1,7 @@
 import { estSeconds, chunkText } from "@voxstudio/text";
 import { useEffect, useRef, useState } from "react";
 import { VoicePicker } from "../components/VoicePicker";
+import { TtsEnginePicker } from "../components/EngineRoutePicker";
 import { synthesize } from "../lib/api";
 import { useStudio } from "../store";
 import { useT } from "../i18n";
@@ -21,6 +22,7 @@ export function GeneratePanel() {
   const voice = useStudio(state => state.generateVoice);
   const engine = useStudio(state => state.generateEngine);
   const setVoice = useStudio(state => state.setGenerateVoice);
+  const setEngine = useStudio(state => state.setGenerateEngine);
   const [busy, setBusy] = useState(false);
   const [busySince, setBusySince] = useState(0);
   const abort = useRef<AbortController | undefined>(undefined);
@@ -77,6 +79,7 @@ export function GeneratePanel() {
           className="w-full resize-y rounded-lg border border-ink-700 bg-ink-800 px-3 py-2.5 text-sm leading-relaxed text-ink-100 placeholder:text-ink-500"
         />
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <TtsEnginePicker value={engine} onChange={setEngine} />
           <VoicePicker value={voice} engine={engine} onChange={setVoice} />
           {text.trim() && (
             <span className="text-[11px] text-ink-500">

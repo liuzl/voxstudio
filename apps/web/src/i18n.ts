@@ -119,6 +119,17 @@ const en = {
   // Voice picker
   "默认（{engine}）": "Default ({engine})",
   "引擎默认": "engine default",
+  "运行路线": "Engine route",
+  "自动": "Automatic",
+  "自动（{engine}）": "Automatic ({engine})",
+  "未配置": "not configured",
+  "显式选择": "Explicit selection",
+  "语音识别 ASR": "Speech recognition · ASR",
+  "语言模型 LLM": "Language model · LLM",
+  "语音合成 TTS": "Speech synthesis · TTS",
+  "留在自动即可使用网关默认引擎。": "Leave a route on Automatic to use the gateway default.",
+  "恢复全部自动": "Reset all to Automatic",
+  "完成": "Done",
 
   // Generate panel
   "输入要合成的文本…（⌘+Enter 生成）": "Text to synthesize… (⌘+Enter to generate)",

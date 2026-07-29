@@ -29,7 +29,9 @@ export class ConversationController {
         // the conversation ASR is ever routed to an engine that does care.
         language: "auto",
         ...(store.voice ? { voice: store.voice } : {}),
-        ...(store.voiceEngine ? { ttsEngine: store.voiceEngine } : {}),
+        ...(store.conversationAsrEngine ? { asrEngine: store.conversationAsrEngine } : {}),
+        ...(store.conversationLlmEngine ? { llmEngine: store.conversationLlmEngine } : {}),
+        ...(store.conversationTtsEngine ? { ttsEngine: store.conversationTtsEngine } : {}),
         // The browser endpoint negotiates AEC in getUserMedia, so barge-in is on and the
         // endpoint owns the audible-playback clock.
         bargeIn: true,
