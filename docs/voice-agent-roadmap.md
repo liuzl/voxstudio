@@ -118,7 +118,7 @@ spike 结论；方向 1 是其输入增强（听得懂语气的 agent），可�
 | ✅ **Qwen3-ASR-0.6B 采用**（终稿修订档，已落地） | 中文金标逐字全对；funasr(SenseVoice)/Gemma+音频都救不回的「过拟合/欠拟合」一次答对；常驻 ~0.5s/句，RTF 0.15。接入方式：funasr 适配器 `revise=true` 旁路（engines/qwen3-asr-revision/） |
 | ❌ TTS 引擎不换 | 其 voxcpm2 Metal RTF 1.46 / qwen3_tts 1.18（均不实时）vs 我们 0.41-0.63。慢因：conv_transpose 占用率（正是我们已修、上游未合的 kernel）+ 模块间每步 host 往返 |
 | ❌ 中文流式 ASR 缺口未解 | Nemotron 0.6B 快但 CER ~6% 且领域词全错；Voxtral 4B 错字+截断+无标点。**推测式 turn-taking 仍无中文引擎** |
-| ✅ Silero VAD（内置）可用 | 流式 `speech_start` 事件+样本偏移，即插即用的 barge-in 原语 |
+| ➖ Silero VAD（内置）可用但对我们无增量 | 其流式 `speech_start` 事件正常，但 voxstudio 已进程内集成同款 Silero v5（platforms/bun/silero.ts，conversation 默认检测器，energy 兜底）——不需要再经它 |
 | ⚠️ Qwen3 对齐器可用但非 badcase 首选 | 时间戳干净（0.16s/字）；幽灵句只被压缩不报错（0.099s/字）——TTS badcase 检测更直接的方案是 Qwen3-ASR 回环比对 |
 | 不 fork，按需取件 + 上游贡献 | 项目月龄 1 个月日更节奏，深度 fork = rebase 地狱；其 CONTRIBUTING 无 AI 禁令，我们的 Metal conv_transpose 占用率修复计划直接 PR 给它 |
 
