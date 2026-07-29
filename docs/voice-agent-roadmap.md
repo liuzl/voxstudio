@@ -1,7 +1,7 @@
 # 语音 Agent 路线图：多模态输入 / agent 执行器 / 对话-行动一体化
 
-2026-07-28 的方向评估，三个候选方向的价值、可行性与排序。机器与部署细节
-在内部运维仓，此处只保留架构结论。
+三个方向的评估与调研记录（2026-07-28 立项，07-29 完成全部前置调研）。
+机器与部署细节在内部运维仓，此处只保留架构结论。当前状态见文末。
 
 ## 方向 1：LLM 原生音频输入（双通道用户 turn）
 
@@ -19,9 +19,10 @@ mmproj projector 编码为 token），仅 video 需要 MLX 后端或抽帧。当
 用户 turn 消息体升级为双通道：`input_audio`（原始音频）+ ASR 文本
 （作为 hint），模型自行融合，天然容错 ASR 错字。
 
-**风险/待验证**：mmproj 与 MTP draft 加速的兼容性（可能要在多模态与
-最快 decode 之间取舍）；mmproj 常驻内存约 +1GB；QAT 量化对音频理解
-质量的影响未测。
+**风险/待验证（已由下方评测回答）**：mmproj 与 MTP 兼容性 → 可共存但
+音频 turn 的 draft 加速失效（发现 3）；mmproj 内存 +~1GB → 可接受；
+QAT 对音频理解的影响 → 常规任务表现良好，领域词短板与量化无关
+（纯文本同样失败，见评测表）。
 
 **离线评测结果（2026-07-29，素材库 202 条真实录音 + 已知文本 TTS 语料）**：
 
@@ -46,8 +47,8 @@ mmproj projector 编码为 token），仅 video 需要 MLX 后端或抽帧。当
 
 ## 方向 2：引入 pi 作为 agent 执行器
 
-按 Mario Zechner 的 pi-mono（TypeScript 极简 agent 工具箱：provider
-无关 LLM client、工具 harness、session 管理）评估。
+按 earendil-works/pi（原 badlogic/pi-mono，TypeScript agent 工具箱：
+provider 无关 LLM client、工具 harness、session 管理）评估。
 
 **契合度**：与 voxstudio 同为 bun/TS，可进程内引用；provider 无关，
 可直接指向本地 OpenAI 兼容端点，不绑云。注意与现有资产的重叠：
@@ -55,8 +56,9 @@ conversation 包已有 typed tools + 口头确认流 + MCP 工具设计
 （docs/mcp-tools.md、docs/agent-voice-mcp.md）——pi 的增量在成熟的
 多步执行循环与工具生态，不在"有无工具调用"。
 
-**风险**：项目年轻、API 迭代快；bun 兼容需冒烟；长任务执行模型与
-语音实时性约束（barge-in、取消）需要适配层。
+**风险**：项目年轻、API 迭代快（scope 已迁移过一次，锁版本+适配层
+隔离）；bun 兼容 → spike 已证实可用；长任务执行与语音实时性约束的
+适配 → spike 确认 pi 原生接缝足够（见下）。
 
 **Spike 结果（2026-07-29，结论：采用，进程内嵌入）**：
 
@@ -75,7 +77,7 @@ Gemma 4 12B）：
   （`tool_execution_start` → 进度旁白；`text_delta` → 可说通道直连
   SentenceAssembler）、`abort()` → barge-in、`beforeToolCall` 钩子 →
   口头确认门、`queueMessage`/steering → 对话轮次。方向 3 需要的接缝
-  pi 原生全有，无需走 MCC/MCP 间接层；
+  pi 原生全有，无需走 MCP 间接层；
 - ⚠️ 小坑：README 的无钥 provider 配方实测报 "No API key"，需给哑 key
   绕过（疑文档/实现小分歧）。
 
@@ -103,13 +105,25 @@ conversation 包保持语音前端职责，按方向 3 的事件映射对接。
 3. `speak` 工具：agent 在长执行中主动开口的显式通道，与被动 text 流
    互补。
 
-**依赖**：方向 3 依赖方向 2 的 executor 选型；方向 1 是其输入增强
-（听得懂语气的 agent）。
+**依赖**：executor 已选定 pi（方向 2 已定），事件映射表见方向 2 的
+spike 结论；方向 1 是其输入增强（听得懂语气的 agent），可后置并行。
 
-## 排序
+## 当前状态与下一步（2026-07-29）
 
-| 优先级 | 事项 | 理由 |
-|---|---|---|
-| 1 | 方向 1 离线评测（约半天） | 零风险、素材现成，直接决定双通道输入是否值得 |
-| 2 | 方向 2 pi spike（约一天） | 定 executor 选型，是方向 3 的前置 |
-| 3 | 方向 3 打断语义设计文档 | 地基已有，难点在交互语义而非工程 |
+前置调研全部完成：
+
+| 事项 | 状态 |
+|---|---|
+| 方向 1 离线评测 | ✅ 完成——双通道输入可行，三条工程约束已知（垫短音频 / token 成本可忽略 / 音频 turn 弃 MTP） |
+| 方向 2 pi spike | ✅ 完成——选型定案：pi-agent-core 进程内嵌入 |
+| 方向 3 地基盘点 | ✅ 完成——所需接缝 pi 原生齐备 |
+
+接下来是集成开发，建议顺序：
+
+1. **方向 3 打断语义设计文档**（小，先定交互契约：打断只停嘴、明确
+   叫停才停手、经确认门）；
+2. **pi executor 集成**：gateway 内嵌 pi-agent-core，落地事件映射
+   （进度旁白、可说通道、barge-in→abort、beforeToolCall→口头确认）
+   与 `speak` 工具；
+3. **方向 1 阶段 B**：用户 turn 双通道消息体（垫长音频 + ASR hint）
+   加会话级灰度开关，可与 2 并行；声纹 sidecar 另立项。
