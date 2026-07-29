@@ -86,6 +86,8 @@ not an LLM prompt feature.
 ## 3. Interaction and ownership contract
 
 This contract must land before the executor integration.
+The accepted detailed state and race contract is
+[`agent-lifecycle.md`](./agent-lifecycle.md).
 
 ### 3.1 Three independent controls
 
@@ -211,6 +213,8 @@ Introduce an artifact contract before broad tool access:
 
 Filesystem, shell, and arbitrary network tools remain disabled until workspace
 isolation and artifact ownership are implemented.
+The accepted execution boundary and isolation baseline is
+[`agent-execution-sandbox.md`](./agent-execution-sandbox.md).
 
 ## 6. Multimodal input contract
 
@@ -269,6 +273,11 @@ Promotion gates:
 - no superseded narration is heard after steering;
 - no zombie event mutates a completed or cancelled run.
 
+Status: contract, pure state-model tests, and initial broker race tests landed
+(barge-in/tool completion, cancel/commit ordering, scoped duplicate IDs, and
+bounded fake-runner drain). Gateway/player integration and its 150 ms
+audible-stop gate remain before Phase A is complete.
+
 ### Phase B — executor adapter with a fake backend
 
 Deliver:
@@ -285,6 +294,10 @@ Promotion gates:
 - reconnect attaches to the same run exactly once;
 - a run cannot leak across authenticated users or sessions;
 - bounded shutdown drains or aborts every run.
+
+Status: the zero-dependency `@voxstudio/agent-executor` boundary, fake
+executor, fake `ToolRunner`, policy validator, and invocation ledger have
+landed. Gateway/session integration has not started.
 
 ### Phase C — minimal pi backend
 
@@ -381,11 +394,14 @@ Re-evaluate when:
 | pi feasibility spike | done; adopt behind a Vox adapter |
 | Existing typed tools and spoken confirmation | shipped |
 | Qwen3-ASR final revision tier | shipped |
-| Executor lifecycle contract | next: Phase A |
-| Vox executor adapter | not started |
+| Executor lifecycle contract | accepted; pure state model and race tests landed |
+| Sandbox/tool-broker security baseline | accepted; real isolated runner remains Phase D |
+| Vox executor adapter | types, fake executor, fake ToolRunner, and invocation ledger landed |
+| Gateway/session executor integration | not started |
 | pi production dependency | not added |
 | Artifact contract and UI | not started |
 | Dual-channel conversation input | not started |
 | Voiceprint sidecar | separate future project |
 
-The next implementation change is Phase A, not installing pi.
+The next implementation change is Phase A gateway/player integration using the
+fake executor, not installing pi.
