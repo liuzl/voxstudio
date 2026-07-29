@@ -108,6 +108,30 @@ conversation 包保持语音前端职责，按方向 3 的事件映射对接。
 **依赖**：executor 已选定 pi（方向 2 已定），事件映射表见方向 2 的
 spike 结论；方向 1 是其输入增强（听得懂语气的 agent），可后置并行。
 
+## 生态评测与观察（2026-07-29 实测补记）
+
+**audio.cpp（0xShug0，ggml 系全能音频推理框架，35+ 家族）**——全面实测
+（M3 Max Metal 构建，克隆/design/流式/ASR/VAD/对齐全跑）：
+
+| 结论 | 依据 |
+|---|---|
+| ✅ **Qwen3-ASR-0.6B 采用**（终稿修订档，已落地） | 中文金标逐字全对；funasr(SenseVoice)/Gemma+音频都救不回的「过拟合/欠拟合」一次答对；常驻 ~0.5s/句，RTF 0.15。接入方式：funasr 适配器 `revise=true` 旁路（engines/qwen3-asr-revision/） |
+| ❌ TTS 引擎不换 | 其 voxcpm2 Metal RTF 1.46 / qwen3_tts 1.18（均不实时）vs 我们 0.41-0.63。慢因：conv_transpose 占用率（正是我们已修、上游未合的 kernel）+ 模块间每步 host 往返 |
+| ❌ 中文流式 ASR 缺口未解 | Nemotron 0.6B 快但 CER ~6% 且领域词全错；Voxtral 4B 错字+截断+无标点。**推测式 turn-taking 仍无中文引擎** |
+| ✅ Silero VAD（内置）可用 | 流式 `speech_start` 事件+样本偏移，即插即用的 barge-in 原语 |
+| ⚠️ Qwen3 对齐器可用但非 badcase 首选 | 时间戳干净（0.16s/字）；幽灵句只被压缩不报错（0.099s/字）——TTS badcase 检测更直接的方案是 Qwen3-ASR 回环比对 |
+| 不 fork，按需取件 + 上游贡献 | 项目月龄 1 个月日更节奏，深度 fork = rebase 地狱；其 CONTRIBUTING 无 AI 禁令，我们的 Metal conv_transpose 占用率修复计划直接 PR 给它 |
+
+**顺带发现**：voice design（`(风格描述)前缀`）是 VoxCPM2 模型自身的提示词
+约定——我们的引擎原生支持，只是 server 强制要求 voice 参数。已改为可选
+（liuzl/VoxCPM.cpp `9c5733c`），design 模式在离线/SSE/流式三路径全部可用。
+
+**Moonshine（moonshine-ai）**——仅观察：中文 CER 25.76%、无中文流式；
+其"流式 ASR 作为默认架构"的理念是对的，等它或其它引擎补上中文再评。
+
+**观察名单触发条件**：audio.cpp 出现中文达标的流式 ASR 家族，或其
+voxcpm2 Metal 路径合入占用率修复后 RTF 进入 0.7 以下 → 重新评估。
+
 ## 当前状态与下一步（2026-07-29）
 
 前置调研全部完成：
@@ -127,3 +151,7 @@ spike 结论；方向 1 是其输入增强（听得懂语气的 agent），可�
    与 `speak` 工具；
 3. **方向 1 阶段 B**：用户 turn 双通道消息体（垫长音频 + ASR hint）
    加会话级灰度开关，可与 2 并行；声纹 sidecar 另立项。
+
+补记（07-29）：方向 1 评测遗留的「领域词仍需 keyterm 偏置」已被更简单的
+方案解决——Qwen3-ASR 终稿修订档（见生态评测节）在 ASR 层直接修对领域词，
+hint 通道的纠错压力大幅下降。

@@ -4,6 +4,11 @@ Serves ``/v1/audio/transcriptions`` over a FunASR ``AutoModel``. The default mod
 SenseVoice-Small: strong Mandarin, built for code-switched zh/en speech, and fast enough on
 CPU for realtime utterances. ``FUNASR_MODEL`` selects another FunASR model id (for example
 ``paraformer-zh``) without code changes.
+
+When ``FUNASR_REVISE_URL`` is set (an OpenAI-compatible transcription endpoint backed by a
+stronger, slower model — e.g. Qwen3-ASR via audiocpp_server), requests carrying
+``revise=true`` are forwarded there first and fall back to the local model on any error.
+SenseVoice stays the low-latency draft path; revision is the accuracy tier for final text.
 """
 
 from __future__ import annotations
@@ -32,6 +37,9 @@ class Settings:
     hub: str
     max_upload_bytes: int
     queue_limit: int
+    revise_url: str = ""
+    revise_model: str = "qwen3-asr"
+    revise_timeout: float = 10.0
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -47,7 +55,40 @@ class Settings:
             hub=os.getenv("FUNASR_HUB", "ms"),
             max_upload_bytes=max_upload,
             queue_limit=queue_limit,
+            revise_url=os.getenv("FUNASR_REVISE_URL", ""),
+            revise_model=os.getenv("FUNASR_REVISE_MODEL", "qwen3-asr"),
+            revise_timeout=float(os.getenv("FUNASR_REVISE_TIMEOUT", "10")),
         )
+
+
+def revise_transcribe(settings: Settings, payload: bytes, filename: str) -> str:
+    """Forward audio to the revision endpoint; raises on any failure."""
+    import json
+    import urllib.request
+    import uuid
+
+    boundary = uuid.uuid4().hex
+    safe_name = (filename or "audio.wav").replace('"', "_")
+    body = b"".join(
+        [
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\n{settings.revise_model}\r\n".encode(),
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{safe_name}\"\r\n"
+            "Content-Type: application/octet-stream\r\n\r\n".encode(),
+            payload,
+            f"\r\n--{boundary}--\r\n".encode(),
+        ]
+    )
+    request = urllib.request.Request(
+        settings.revise_url,
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+    with urllib.request.urlopen(request, timeout=settings.revise_timeout) as response:
+        parsed = json.loads(response.read())
+    text = str(parsed.get("text", "")).strip()
+    if not text:
+        raise RuntimeError("revision endpoint returned empty text")
+    return text
 
 
 class Recognizer(Protocol):
@@ -112,6 +153,7 @@ def create_app(recognizer: Recognizer | None = None, settings: Settings | None =
         file: Annotated[UploadFile, File()],
         language: Annotated[str | None, Form()] = None,
         response_format: Annotated[str, Form()] = "json",
+        revise: Annotated[str | None, Form()] = None,
     ):
         if response_format not in SUPPORTED_FORMATS:
             raise HTTPException(status_code=400, detail=f"unsupported response_format {response_format}")
@@ -120,6 +162,21 @@ def create_app(recognizer: Recognizer | None = None, settings: Settings | None =
             raise HTTPException(status_code=413, detail="audio upload too large")
         if not payload:
             raise HTTPException(status_code=400, detail="empty audio upload")
+
+        want_revise = (revise or "").strip().lower() in {"1", "true", "yes"}
+        if want_revise and resolved.revise_url:
+            try:
+                text = await asyncio.to_thread(
+                    revise_transcribe, resolved, payload, file.filename or "audio.wav",
+                )
+                if response_format == "text":
+                    return PlainTextResponse(text)
+                return JSONResponse({"text": text, "engine": "revise"})
+            except Exception:
+                # The draft model is the availability floor: any revision failure
+                # (endpoint down, timeout, bad response) falls through silently.
+                pass
+
         async with semaphore:
             with tempfile.NamedTemporaryFile(suffix=".wav") as handle:
                 handle.write(payload)
@@ -132,7 +189,7 @@ def create_app(recognizer: Recognizer | None = None, settings: Settings | None =
         text = TAG.sub("", raw).strip()
         if response_format == "text":
             return PlainTextResponse(text)
-        return JSONResponse({"text": text})
+        return JSONResponse({"text": text, "engine": resolved.model} if want_revise else {"text": text})
 
     return app
 

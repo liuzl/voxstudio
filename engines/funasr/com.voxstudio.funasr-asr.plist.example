@@ -19,6 +19,9 @@
     <key>FUNASR_HUB</key><string>hf</string>
     <key>FUNASR_MODEL</key><string>FunAudioLLM/SenseVoiceSmall</string>
     <key>FUNASR_DEVICE</key><string>mps</string>
+    <!-- Optional accuracy tier: forward revise=true requests to a stronger ASR
+         endpoint (see engines/qwen3-asr-revision/). Remove to disable. -->
+    <key>FUNASR_REVISE_URL</key><string>http://127.0.0.1:REVISE_PORT/v1/audio/transcriptions</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>

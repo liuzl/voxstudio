@@ -49,6 +49,13 @@ launchctl load ~/Library/LaunchAgents/com.voxstudio.funasr-asr.plist
 - `POST /v1/audio/transcriptions` — multipart `file`, optional `language` hint
   (`zh|en|yue|ja|ko|auto`; anything else degrades to `auto`), `response_format`
   `json` (default) or `text`. SenseVoice's `<|zh|>`-style tags are stripped server-side.
+- Optional `revise=true` form field: when `FUNASR_REVISE_URL` is configured, the audio
+  is forwarded to that OpenAI-compatible transcription endpoint (a stronger, slower
+  model — we run Qwen3-ASR-0.6B via audio.cpp's `audiocpp_server`, see
+  `engines/qwen3-asr-revision/`) and its text is returned with `engine: "revise"`.
+  Any failure falls back silently to the local draft model. Two-tier rationale:
+  SenseVoice answers in ~50 ms for live captions; the LLM-decoder revision tier fixes
+  domain terms ("过拟合" not "过你荷") in ~0.5 s for the final transcript.
 - `GET /healthz` — `{status, model}`.
 
 ## Deploy (systemd template)

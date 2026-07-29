@@ -75,3 +75,41 @@ def test_language_hints():
     assert clean_language(None) == "auto"
     assert clean_language("english") == "auto"
     assert clean_language("en") == "en"
+
+
+def test_revise_forwards_to_revision_endpoint(monkeypatch):
+    import server_funasr
+
+    settings = Settings(
+        model="fake", device="cpu", hub="ms", max_upload_bytes=1024, queue_limit=2,
+        revise_url="http://127.0.0.1:1/v1/audio/transcriptions",
+    )
+    monkeypatch.setattr(
+        server_funasr, "revise_transcribe", lambda s, payload, name: "修订后的文本。"
+    )
+    app = create_app(recognizer=FakeRecognizer(), settings=settings)
+    with TestClient(app) as session:
+        response = post(session, revise="true")
+    assert response.status_code == 200
+    assert response.json() == {"text": "修订后的文本。", "engine": "revise"}
+
+
+def test_revise_failure_falls_back_to_draft_model():
+    settings = Settings(
+        model="fake", device="cpu", hub="ms", max_upload_bytes=1024, queue_limit=2,
+        # Port 1 is unroutable: the forward raises and the draft model answers.
+        revise_url="http://127.0.0.1:1/v1/audio/transcriptions",
+        revise_timeout=0.2,
+    )
+    app = create_app(recognizer=FakeRecognizer(), settings=settings)
+    with TestClient(app) as session:
+        response = post(session, revise="true")
+    assert response.status_code == 200
+    assert response.json() == {"text": "你好，世界。", "engine": "fake"}
+
+
+def test_revise_flag_without_url_uses_draft_model(client):
+    session, _ = client
+    response = post(session, revise="true")
+    assert response.status_code == 200
+    assert response.json() == {"text": "你好，世界。", "engine": "fake"}
