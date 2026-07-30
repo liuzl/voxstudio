@@ -32,13 +32,13 @@ export function PageHeader({
   );
 }
 
+/** For pages that manage their own vertical rhythm; PageShell adds the default one on top. */
+export const pageShellClass =
+  "mx-auto w-full max-w-[1276px] px-4 pb-16 pt-8 sm:px-8 sm:pt-12 lg:px-12 lg:pt-14";
+
 export function PageShell({ children, compact = false }: { children: ReactNode; compact?: boolean }) {
   return (
-    <div
-      className={`mx-auto w-full max-w-[1276px] px-4 pb-16 pt-8 sm:px-8 sm:pt-12 lg:px-12 lg:pt-14 ${
-        compact ? "space-y-6" : "space-y-8"
-      }`}
-    >
+    <div className={`${pageShellClass} ${compact ? "space-y-6" : "space-y-8"}`}>
       {children}
     </div>
   );

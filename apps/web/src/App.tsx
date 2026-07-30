@@ -17,23 +17,13 @@ import { GeneratePanel } from "./panels/GeneratePanel";
 import { LibraryPanel } from "./panels/LibraryPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { VoicesPanel } from "./panels/VoicesPanel";
+import { useGatewayHealth } from "./lib/useGatewayHealth";
 import { useStudio, type ToastView } from "./store";
 import { useT, type MessageKey } from "./i18n";
 
-export type Tab = "agents" | "conversation" | "generate" | "voices" | "library" | "settings";
-
-const tabs: {
-  id: Tab;
-  label: MessageKey;
-  icon: typeof Mic2;
-}[] = [
-  { id: "agents", label: "助手", icon: Bot },
-  { id: "conversation", label: "实时对话", icon: MessageCircleMore },
-  { id: "generate", label: "文本转语音", icon: AudioLines },
-  { id: "voices", label: "音色库", icon: Mic2 },
-  { id: "library", label: "素材库", icon: FolderOpen },
-  { id: "settings", label: "设置", icon: Settings },
-];
+/* The sidebar (grouped, hand-laid-out) is the source of labels and icons; routes only need ids. */
+const tabIds = ["agents", "conversation", "generate", "voices", "library", "settings"] as const;
+export type Tab = (typeof tabIds)[number];
 
 const sessionLabels: Record<string, { text: MessageKey; tone: string }> = {
   connecting: { text: "连接中", tone: "bg-yellow-400" },
@@ -48,18 +38,7 @@ const sessionLabels: Record<string, { text: MessageKey; tone: string }> = {
 function ConnectionDot({ withText = true }: { withText?: boolean }) {
   const t = useT();
   const connection = useStudio(state => state.connection);
-  const [gateway, setGateway] = useState<"probing" | "ok" | "down">("probing");
-
-  useEffect(() => {
-    let cancelled = false;
-    const probe = () =>
-      fetch("/healthz")
-        .then(response => { if (!cancelled) setGateway(response.ok ? "ok" : "down"); })
-        .catch(() => { if (!cancelled) setGateway("down"); });
-    void probe();
-    const timer = setInterval(() => void probe(), 30_000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, []);
+  const gateway = useGatewayHealth();
 
   const status: { text: MessageKey; tone: string } = sessionLabels[connection]
     ?? (gateway === "ok"
@@ -124,7 +103,7 @@ const tabPath = (tab: Tab): string => (tab === "agents" ? "/" : `/${tab}`);
 
 function tabFromPath(pathname: string): Tab {
   const name = pathname.replace(/^\/+|\/+$/g, "");
-  return (tabs.find(item => item.id === name)?.id ?? "agents") as Tab;
+  return tabIds.find(id => id === name) ?? "agents";
 }
 
 export function App() {

@@ -14,10 +14,12 @@ import {
   TrendingUp,
   UserRoundSearch,
 } from "lucide-react";
+import { PageHeader, pageShellClass } from "../components/StudioPage";
 import { useT } from "../i18n";
 import { useStudio } from "../store";
 
 const agentNameKey = "voxstudio.agent.name";
+const agentHiddenKey = "voxstudio.agent.hidden";
 const agentId = "voxstudio-default-agent";
 
 const templates = [
@@ -67,7 +69,8 @@ export function AgentsPanel({ onOpenAgent }: { onOpenAgent: () => void }) {
   const [createOpen, setCreateOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
-  const [agentVisible, setAgentVisible] = useState(true);
+  // Deletion persists (localStorage), so the removal toast tells the truth across reloads.
+  const [agentVisible, setAgentVisible] = useState(() => localStorage.getItem(agentHiddenKey) === null);
   const [agentName, setAgentName] = useState(
     () => localStorage.getItem(agentNameKey) || t("默认语音助手"),
   );
@@ -94,9 +97,11 @@ export function AgentsPanel({ onOpenAgent }: { onOpenAgent: () => void }) {
     toast("info", t("助手名称已更新"));
   };
 
-  const useTemplate = (template?: Template) => {
+  // Not a hook (despite operating on templates) — plain handler, callable from any onClick.
+  const applyTemplate = (template?: Template) => {
     setCreateOpen(false);
     setAgentVisible(true);
+    localStorage.removeItem(agentHiddenKey);
     if (template) {
       setAgentName(t(template.name));
       localStorage.setItem(agentNameKey, t(template.name));
@@ -109,18 +114,16 @@ export function AgentsPanel({ onOpenAgent }: { onOpenAgent: () => void }) {
   const hasMatch = agentVisible && agentName.toLocaleLowerCase().includes(normalizedQuery);
 
   return (
-    <div className="mx-auto w-full max-w-[1276px] px-4 pb-16 pt-8 sm:px-8 sm:pt-12 lg:px-12 lg:pt-14">
-      <header>
-        <div className="flex items-center gap-2.5">
-          <h1 className="text-[23px] font-semibold tracking-[-0.035em] text-[#11110f] sm:text-[26px]">
-            {t("语音助手")}
-          </h1>
+    <div className={pageShellClass}>
+      <PageHeader
+        title={t("语音助手")}
+        description={t("创建、配置和测试实时语音助手。")}
+        badge={(
           <span className="rounded-full border border-[#f2a56f] bg-[#fffaf6] px-2 py-0.5 text-[10px] font-medium text-[#d66b2e]">
             Beta
           </span>
-        </div>
-        <p className="mt-1 text-[14px] text-[#85858a]">{t("创建、配置和测试实时语音助手。")}</p>
-      </header>
+        )}
+      />
 
       <div className="mt-7 flex items-center gap-2.5 sm:mt-8 sm:justify-between lg:mt-[26px]">
         <label className="relative min-w-0 flex-1 sm:max-w-[282px]">
@@ -135,7 +138,7 @@ export function AgentsPanel({ onOpenAgent }: { onOpenAgent: () => void }) {
 
         <div ref={createRef} className="relative flex shrink-0">
           <button
-            onClick={() => useTemplate()}
+            onClick={() => applyTemplate()}
             className="inline-flex h-10 min-w-[120px] items-center justify-center rounded-l-full bg-[#090909] px-5 text-[14px] font-medium text-white shadow-[0_1px_2px_rgba(0,0,0,0.18)] transition hover:bg-[#252523] active:scale-[0.98]"
           >
             <span className="hidden sm:inline">{t("创建助手")}</span>
@@ -153,7 +156,7 @@ export function AgentsPanel({ onOpenAgent }: { onOpenAgent: () => void }) {
           {createOpen && (
             <div className="absolute right-0 top-12 z-30 w-[300px] overflow-hidden rounded-xl border border-[#e2e2dd] bg-white p-1.5 shadow-[0_14px_40px_rgba(0,0,0,0.13)]">
               <button
-                onClick={() => useTemplate()}
+                onClick={() => applyTemplate()}
                 className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left hover:bg-[#f5f5f2]"
               >
                 <span className="flex size-8 items-center justify-center rounded-full bg-[#f1f1ed] text-[#50504b]">
@@ -173,7 +176,7 @@ export function AgentsPanel({ onOpenAgent }: { onOpenAgent: () => void }) {
                 return (
                   <button
                     key={template.name}
-                    onClick={() => useTemplate(template)}
+                    onClick={() => applyTemplate(template)}
                     className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left hover:bg-[#f5f5f2]"
                   >
                     <span className={`flex size-8 items-center justify-center rounded-full ${template.color}`}>
@@ -262,6 +265,7 @@ export function AgentsPanel({ onOpenAgent }: { onOpenAgent: () => void }) {
                     onClick={event => {
                       event.stopPropagation();
                       setAgentVisible(false);
+                      localStorage.setItem(agentHiddenKey, "1");
                       setActionsOpen(false);
                       toast("info", t("已从列表移除助手"));
                     }}
@@ -287,7 +291,7 @@ export function AgentsPanel({ onOpenAgent }: { onOpenAgent: () => void }) {
           return (
             <button
               key={template.name}
-              onClick={() => useTemplate(template)}
+              onClick={() => applyTemplate(template)}
               style={{ minWidth: template.width }}
               className="inline-flex h-10 w-full items-center gap-2 rounded-full border border-[#dededb] bg-white py-1 pl-1 pr-4 text-[13px] font-medium text-[#242422] shadow-[0_1px_1px_rgba(0,0,0,0.02)] transition hover:border-[#c9c9c4] hover:bg-[#fafaf8] active:scale-[0.98] sm:w-auto"
             >
@@ -299,7 +303,7 @@ export function AgentsPanel({ onOpenAgent }: { onOpenAgent: () => void }) {
           );
         })}
         <button
-          onClick={() => useTemplate()}
+          onClick={() => applyTemplate()}
           className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-full border border-[#dededb] bg-white px-4 text-[13px] font-medium text-[#242422] shadow-[0_1px_1px_rgba(0,0,0,0.02)] transition hover:border-[#c9c9c4] hover:bg-[#fafaf8] active:scale-[0.98] sm:w-40"
         >
           <Plus className="size-[18px] text-[#55555a]" strokeWidth={1.8} />

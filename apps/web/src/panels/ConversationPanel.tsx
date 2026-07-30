@@ -15,6 +15,7 @@ import { VoicePicker } from "../components/VoicePicker";
 import { ConversationRoutePicker } from "../components/EngineRoutePicker";
 import { PageHeader, SectionCard, StatusBadge, primaryButton, secondaryButton } from "../components/StudioPage";
 import { conversationControls, startConversation, stopConversation } from "../conversation";
+import { useGatewayHealth } from "../lib/useGatewayHealth";
 import { useStudio, type TurnView } from "../store";
 import { useT, type MessageKey } from "../i18n";
 
@@ -204,6 +205,7 @@ function MicLevel() {
 
 function StartCard({ starting, onStart }: { starting: boolean; onStart: () => void }) {
   const t = useT();
+  const gateway = useGatewayHealth();
   const voice = useStudio(state => state.voice);
   const voiceEngine = useStudio(state => state.voiceEngine);
   const setVoice = useStudio(state => state.setVoice);
@@ -221,8 +223,12 @@ function StartCard({ starting, onStart }: { starting: boolean; onStart: () => vo
           <Radio className="size-3.5" />
           {t("实时试用")}
           <span className="ml-auto flex items-center gap-1.5">
-            <span className="size-1.5 rounded-full bg-emerald-500" />
-            {t("网关就绪")}
+            <span
+              className={`size-1.5 rounded-full ${
+                gateway === "ok" ? "bg-emerald-500" : gateway === "down" ? "bg-red-500" : "bg-ink-500"
+              }`}
+            />
+            {t(gateway === "ok" ? "网关就绪" : gateway === "down" ? "网关离线" : "探测中")}
           </span>
         </div>
         <div className="flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
