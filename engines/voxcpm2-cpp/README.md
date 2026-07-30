@@ -52,6 +52,7 @@ engines:
     base_url: http://127.0.0.1:18085
     model: voxcpm2
     health_path: /healthz
+    capabilities: [clone, design, streaming]
 ```
 
 ## Contract
@@ -62,10 +63,12 @@ engines:
 | POST | `/v1/audio/speech` | synthesis; see fields below |
 | GET | `/v1/voices` | `{"voices":[...]}`, registered voices sorted by id |
 | POST | `/v1/voices` | register a voice (multipart: `id`, `text`, `audio`) |
+| POST | `/v1/design-profiles` | generate and persist a reusable design voice |
 | GET/DELETE | `/v1/voices/{id}` | inspect / remove one voice |
 
-`/v1/audio/speech` fields: `model`, `input`, `voice` (a registered id — there is no
-built-in default voice), `response_format` (`wav`/`mp3`/…), `speed`,
+`/v1/audio/speech` fields: `model`, `input`, `voice` (a registered id, or `design`
+for reference-free synthesis steered by a parenthesized style prefix),
+`response_format` (`wav`/`mp3`/…), `speed`,
 `cfg_value` (0,16], `timesteps` [1,100], `seed` (non-negative → reproducible output),
 `stream` (bool), `stream_format` (`sse` for base64 events), `max-attempts`.
 
@@ -77,8 +80,9 @@ built-in default voice), `response_format` (`wav`/`mp3`/…), `speed`,
   server conditions chunks 2..N of a session on the voice anchor alone, which for
   registered voices is identical to independent requests with the same voice — and
   registered voices here always condition on the reference transcript
-  (`prosody_prompt=true` behavior). Sessions only matter for reference-less design
-  voices, which this server does not offer.
+  (`prosody_prompt=true` behavior). A design profile first generates its anchor
+  without reference conditioning, then persists that anchor as a reusable registered
+  voice.
 
 ## Service templates
 
