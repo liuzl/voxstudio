@@ -1,5 +1,13 @@
 import { create } from "zustand";
+import { de } from "./de";
 import { en, type MessageKey } from "./en";
+import { es } from "./es";
+import { fr } from "./fr";
+import { it } from "./it";
+import { ja } from "./ja";
+import { ko } from "./ko";
+import { pt } from "./pt";
+import { ru } from "./ru";
 
 export type { MessageKey };
 
@@ -14,8 +22,7 @@ export type { MessageKey };
  * languages when their catalogs land.
  */
 const catalogs = {
-  en,
-  // Next batch (docs/research: Tier 2): ja, ko, es, fr, de, pt, ru, it
+  en, ja, ko, es, fr, de, pt, ru, it,
 } satisfies Record<string, Record<MessageKey, string>>;
 
 /** "zh" is the source language — it has no catalog, the keys themselves are the text. */
@@ -25,7 +32,16 @@ export type Locale = "auto" | UiLocale;
 export const uiLocales = ["zh", ...Object.keys(catalogs)] as readonly UiLocale[];
 
 /** What <html lang> should say for each UI locale (BCP-47 decisions live here only). */
-const htmlLang: Record<UiLocale, string> = { zh: "zh-CN", en: "en" };
+const htmlLang: Record<UiLocale, string> = {
+  zh: "zh-CN", en: "en", ja: "ja", ko: "ko", es: "es",
+  fr: "fr", de: "de", pt: "pt-BR", ru: "ru", it: "it",
+};
+
+/** Endonyms for the language picker — a language names itself, so these are not translated. */
+export const localeNames: Record<UiLocale, string> = {
+  zh: "中文", en: "English", ja: "日本語", ko: "한국어", es: "Español",
+  fr: "Français", de: "Deutsch", pt: "Português", ru: "Русский", it: "Italiano",
+};
 
 const storageKey = "voxstudio.locale";
 const hasDom = typeof document !== "undefined";

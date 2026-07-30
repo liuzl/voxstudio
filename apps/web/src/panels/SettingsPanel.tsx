@@ -5,7 +5,7 @@ import { PageHeader, PageShell, StatusBadge } from "../components/StudioPage";
 import { listEngines, type EngineEntry } from "../lib/api";
 import { useStudio } from "../store";
 import { useTheme, type ThemePreference } from "../theme";
-import { useI18n, useT, type Locale } from "../i18n";
+import { localeNames, uiLocales, useI18n, useT, type Locale } from "../i18n";
 
 interface Health {
   ok: boolean;
@@ -290,8 +290,9 @@ export function SettingsPanel() {
           className="mt-3 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-sm text-ink-100"
         >
           <option value="auto">{t("自动（跟随浏览器）")}</option>
-          <option value="zh">中文</option>
-          <option value="en">English</option>
+          {uiLocales.map(code => (
+            <option key={code} value={code}>{localeNames[code]}</option>
+          ))}
         </select>
       </section>
 
