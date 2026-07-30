@@ -1,12 +1,9 @@
-import { create } from "zustand";
-
 /**
- * The i18n scheme: the Chinese source string IS the message key. There is exactly one
- * catalog to maintain (English), and `t()` only accepts keys that exist in it — a missing
- * translation is a compile error, not a runtime fallback. `{name}` placeholders are
- * substituted in both languages.
+ * The English catalog. Its key set IS the message-key type for every other catalog:
+ * the Chinese source string is the key (see index.ts for the scheme), and this file
+ * is the canonical, complete enumeration of them.
  */
-const en = {
+export const en = {
   // App shell
   "对话": "Conversation",
   "生成": "Generate",
@@ -16,13 +13,7 @@ const en = {
   "工作台": "Studio",
   "资产": "Assets",
   "系统": "System",
-  "实时全双工语音": "Live full-duplex voice",
   "文本转语音": "Text to speech",
-  "管理与设计音色": "Manage and design voices",
-  "录音与转写资产": "Audio and transcript assets",
-  "运行时与偏好": "Runtime and preferences",
-  "本地工作区": "Local workspace",
-  "主导航": "Main navigation",
   "点击关闭": "Click to dismiss",
   "连接中": "Connecting",
   "重连中": "Reconnecting",
@@ -32,7 +23,6 @@ const en = {
   "探测中": "Probing",
   "助手": "Agents",
   "实时对话": "Live conversation",
-  "API 与运行时": "API & runtime",
   "语音": "Voice",
   "搜索": "Search",
   "打开导航": "Open navigation",
@@ -176,8 +166,6 @@ const en = {
   "开始对话": "Start conversation",
   "启动中…": "Starting…",
   "语言": "Language",
-  "授权麦克风后进入全双工对话：断句、识别、回答全自动，回答播放时直接开口即可打断，停顿后续说会自动合并。":
-    "Grant microphone access to enter a full-duplex conversation: segmentation, recognition, and replies are automatic; just speak over a playing reply to interrupt, and resuming after a pause merges into the same turn.",
   "开口即说 —— 断句、识别、回答全自动；回答播放时直接说话就能打断。":
     "Just speak — segmentation, recognition, and replies are automatic; speaking over a playing reply interrupts it.",
   "重新开始": "Restart",
@@ -215,7 +203,6 @@ const en = {
   "取消": "Cancel",
   "合成中…": "Synthesizing…",
   "已取消合成": "Synthesis cancelled",
-  "生成记录（本页保留最近 30 条，刷新即失）": "Takes (last 30 kept on this page; lost on reload)",
   "还没有生成记录。": "No takes yet.",
   "下载": "Download",
   "删除": "Delete",
@@ -397,52 +384,3 @@ const en = {
 } as const;
 
 export type MessageKey = keyof typeof en;
-export type Locale = "auto" | "zh" | "en";
-
-const storageKey = "voxstudio.locale";
-const hasDom = typeof document !== "undefined";
-
-function detect(): "zh" | "en" {
-  if (typeof navigator === "undefined") return "zh";
-  return (navigator.language ?? "").toLowerCase().startsWith("zh") ? "zh" : "en";
-}
-
-export function resolveLocale(locale: Locale): "zh" | "en" {
-  return locale === "auto" ? detect() : locale;
-}
-
-interface I18nState {
-  locale: Locale;
-  setLocale(locale: Locale): void;
-}
-
-export const useI18n = create<I18nState>(set => ({
-  locale: (typeof localStorage !== "undefined" && (localStorage.getItem(storageKey) as Locale)) || "auto",
-  setLocale: locale => {
-    if (typeof localStorage !== "undefined") localStorage.setItem(storageKey, locale);
-    if (hasDom) document.documentElement.lang = resolveLocale(locale) === "zh" ? "zh-CN" : "en";
-    set({ locale });
-  },
-}));
-
-if (hasDom) {
-  document.documentElement.lang = resolveLocale(useI18n.getState().locale) === "zh" ? "zh-CN" : "en";
-}
-
-function format(template: string, params?: Record<string, string | number>): string {
-  if (!params) return template;
-  return template.replace(/\{(\w+)\}/g, (match, name: string) =>
-    name in params ? String(params[name]) : match);
-}
-
-/** Translate a message; usable outside React (reads the store imperatively). */
-export function t(key: MessageKey, params?: Record<string, string | number>): string {
-  const locale = resolveLocale(useI18n.getState().locale);
-  return format(locale === "zh" ? key : en[key], params);
-}
-
-/** React hook version: subscribes to locale changes so components re-render on switch. */
-export function useT(): typeof t {
-  useI18n(state => state.locale);
-  return t;
-}
