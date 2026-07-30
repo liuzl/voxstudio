@@ -53,9 +53,9 @@ export function StatusBadge({
 }) {
   const tones = {
     neutral: "border-ink-700 bg-ink-800 text-ink-300",
-    success: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    warning: "border-amber-200 bg-amber-50 text-amber-700",
-    danger: "border-red-200 bg-red-50 text-red-700",
+    success: "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300",
+    warning: "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300",
+    danger: "border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300",
   };
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${tones[tone]}`}>
@@ -75,7 +75,7 @@ export function SectionCard({
 }
 
 export const primaryButton =
-  "inline-flex min-h-10 items-center justify-center gap-2 rounded-full bg-ink px-5 text-[13px] font-medium text-white shadow-[0_1px_2px_rgba(0,0,0,0.16)] transition hover:bg-ink-hover active:scale-[0.98] disabled:pointer-events-none disabled:opacity-35";
+  "inline-flex min-h-10 items-center justify-center gap-2 rounded-full bg-ink px-5 text-[13px] font-medium text-on-ink shadow-[0_1px_2px_rgba(0,0,0,0.16)] transition hover:bg-ink-hover active:scale-[0.98] disabled:pointer-events-none disabled:opacity-35";
 
 export const secondaryButton =
   "inline-flex min-h-10 items-center justify-center gap-2 rounded-full border border-edge-strong bg-canvas px-4 text-[13px] font-medium text-fg-secondary shadow-[0_1px_1px_rgba(0,0,0,0.02)] transition hover:border-edge-hover hover:bg-fill-faint hover:text-ink active:scale-[0.98] disabled:pointer-events-none disabled:opacity-35";

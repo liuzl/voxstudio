@@ -27,35 +27,35 @@ const templates = [
     name: "客服助手",
     description: "解决客户问题",
     icon: Headphones,
-    color: "bg-[#fff1e8] text-[#ee6d32]",
+    color: "bg-[#fff1e8] text-[#ee6d32] dark:bg-[#33221a] dark:text-[#f0925c]",
     width: 180,
   },
   {
     name: "销售顾问",
     description: "推动客户完成购买",
     icon: TrendingUp,
-    color: "bg-[#eaf7ee] text-[#39915a]",
+    color: "bg-[#eaf7ee] text-[#39915a] dark:bg-[#1a2b20] dark:text-[#5cba7d]",
     width: 164,
   },
   {
     name: "预约助理",
     description: "安排和管理预约",
     icon: CalendarDays,
-    color: "bg-[#fff4d8] text-[#bd8514]",
+    color: "bg-[#fff4d8] text-[#bd8514] dark:bg-[#2e2718] dark:text-[#d8a437]",
     width: 216,
   },
   {
     name: "个人助理",
     description: "协助处理日常事务",
     icon: BriefcaseBusiness,
-    color: "bg-[#f1ebff] text-[#7d55c7]",
+    color: "bg-[#f1ebff] text-[#7d55c7] dark:bg-[#251d33] dark:text-[#a685e0]",
     width: 182,
   },
   {
     name: "线索筛选",
     description: "筛选和跟进入站线索",
     icon: UserRoundSearch,
-    color: "bg-[#e9f1ff] text-[#4c77c6]",
+    color: "bg-[#e9f1ff] text-[#4c77c6] dark:bg-[#1a2333] dark:text-[#7ba1e0]",
     width: 176,
   },
 ] as const;
@@ -139,7 +139,7 @@ export function AgentsPanel({ onOpenAgent }: { onOpenAgent: () => void }) {
         <div ref={createRef} className="relative flex shrink-0">
           <button
             onClick={() => applyTemplate()}
-            className="inline-flex h-10 min-w-[120px] items-center justify-center rounded-l-full bg-ink px-5 text-[14px] font-medium text-white shadow-[0_1px_2px_rgba(0,0,0,0.18)] transition hover:bg-ink-hover active:scale-[0.98]"
+            className="inline-flex h-10 min-w-[120px] items-center justify-center rounded-l-full bg-ink px-5 text-[14px] font-medium text-on-ink shadow-[0_1px_2px_rgba(0,0,0,0.18)] transition hover:bg-ink-hover active:scale-[0.98]"
           >
             <span className="hidden sm:inline">{t("创建助手")}</span>
             <span className="sm:hidden">{t("创建")}</span>
@@ -148,7 +148,7 @@ export function AgentsPanel({ onOpenAgent }: { onOpenAgent: () => void }) {
             aria-label={t("显示模板")}
             aria-expanded={createOpen}
             onClick={() => setCreateOpen(open => !open)}
-            className="flex h-10 w-10 items-center justify-center rounded-r-full border-l border-white/20 bg-ink text-white shadow-[0_1px_2px_rgba(0,0,0,0.18)] transition hover:bg-ink-hover"
+            className="flex h-10 w-10 items-center justify-center rounded-r-full border-l border-white/20 bg-ink text-on-ink shadow-[0_1px_2px_rgba(0,0,0,0.18)] transition hover:bg-ink-hover"
           >
             <ChevronDown className={`size-3.5 transition-transform ${createOpen ? "rotate-180" : ""}`} />
           </button>
@@ -214,7 +214,7 @@ export function AgentsPanel({ onOpenAgent }: { onOpenAgent: () => void }) {
             <span className="flex min-w-0 items-center gap-3">
               <span
                 aria-hidden
-                className="size-6 shrink-0 rounded-full border border-black/10 shadow-[inset_0_0_8px_rgba(255,255,255,0.22)]"
+                className="size-6 shrink-0 rounded-full border border-black/10 shadow-[inset_0_0_8px_rgba(255,255,255,0.22)] dark:border-white/15"
                 style={{
                   background:
                     "radial-gradient(circle at 68% 26%, #d6bcff 0 5%, transparent 21%), radial-gradient(circle at 28% 70%, #6439a3 0 8%, transparent 34%), radial-gradient(circle at 72% 76%, #334b72 0 5%, transparent 28%), #101019",
@@ -337,7 +337,7 @@ export function AgentsPanel({ onOpenAgent }: { onOpenAgent: () => void }) {
               <button onClick={() => setRenameOpen(false)} className="h-9 rounded-lg border border-edge-strong px-3.5 text-[12px] font-medium text-fg-secondary hover:bg-fill-hover">
                 {t("取消")}
               </button>
-              <button onClick={saveName} disabled={!draftName.trim()} className="h-9 rounded-lg bg-ink px-3.5 text-[12px] font-medium text-white hover:bg-ink-hover disabled:opacity-40">
+              <button onClick={saveName} disabled={!draftName.trim()} className="h-9 rounded-lg bg-ink px-3.5 text-[12px] font-medium text-on-ink hover:bg-ink-hover disabled:opacity-40">
                 {t("保存")}
               </button>
             </div>

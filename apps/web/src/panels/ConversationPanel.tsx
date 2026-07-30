@@ -360,7 +360,7 @@ export function ConversationPanel() {
                   <>
                     <button
                       onClick={() => conversationControls()?.setMuted(!muted)}
-                      className={`${secondaryButton} ${muted ? "border-amber-300 bg-amber-50 text-amber-700" : ""}`}
+                      className={`${secondaryButton} ${muted ? "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300" : ""}`}
                       title={t("空格键切换")}
                     >
                       {muted ? <MicOff className="size-3.5" /> : <Mic className="size-3.5" />}
@@ -376,7 +376,7 @@ export function ConversationPanel() {
                     </button>
                     <button
                       onClick={() => void stopConversation()}
-                      className="inline-flex min-h-10 items-center gap-2 rounded-full border border-red-200 bg-red-50 px-4 text-[13px] font-medium text-red-700 hover:bg-red-100"
+                      className="inline-flex min-h-10 items-center gap-2 rounded-full border border-red-200 bg-red-50 px-4 text-[13px] font-medium text-red-700 hover:bg-red-100 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20"
                     >
                       {t("结束")}
                     </button>

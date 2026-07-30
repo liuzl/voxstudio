@@ -232,7 +232,7 @@ export function LibraryPanel() {
                   <button
                     onClick={() => void saveCorrection(capture, draft)}
                     disabled={rowBusy}
-                    className="rounded-lg bg-accent-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-accent-500 disabled:opacity-40"
+                    className="rounded-lg bg-accent-600 px-4 py-1.5 text-xs font-medium text-on-ink hover:bg-accent-500 disabled:opacity-40"
                   >
                     {t("保存校正")}
                   </button>
@@ -266,7 +266,7 @@ export function LibraryPanel() {
                 <button
                   onClick={() => void promote(capture)}
                   disabled={rowBusy || !voiceId.trim()}
-                  className="rounded-lg bg-accent-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-accent-500 disabled:opacity-40"
+                  className="rounded-lg bg-accent-600 px-4 py-1.5 text-xs font-medium text-on-ink hover:bg-accent-500 disabled:opacity-40"
                 >
                   {t("注册")}
                 </button>

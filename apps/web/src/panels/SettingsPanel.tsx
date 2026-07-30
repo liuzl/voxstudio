@@ -4,6 +4,7 @@ import { AccountSection } from "./AccountSection";
 import { PageHeader, PageShell, StatusBadge } from "../components/StudioPage";
 import { listEngines, type EngineEntry } from "../lib/api";
 import { useStudio } from "../store";
+import { useTheme, type ThemePreference } from "../theme";
 import { useI18n, useT, type Locale } from "../i18n";
 
 interface Health {
@@ -176,6 +177,8 @@ export function SettingsPanel() {
   const t = useT();
   const locale = useI18n(state => state.locale);
   const setLocale = useI18n(state => state.setLocale);
+  const themePreference = useTheme(state => state.preference);
+  const setThemePreference = useTheme(state => state.setPreference);
   const [health, setHealth] = useState<Health | "unreachable" | undefined>(undefined);
   const capability = useStudio(state => state.capability);
   const sessionId = useStudio(state => state.sessionId);
@@ -289,6 +292,19 @@ export function SettingsPanel() {
           <option value="auto">{t("自动（跟随浏览器）")}</option>
           <option value="zh">中文</option>
           <option value="en">English</option>
+        </select>
+      </section>
+
+      <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
+        <h2 className="text-sm font-medium text-ink-300">{t("外观")}</h2>
+        <select
+          value={themePreference}
+          onChange={event => setThemePreference(event.target.value as ThemePreference)}
+          className="mt-3 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-sm text-ink-100"
+        >
+          <option value="system">{t("跟随系统")}</option>
+          <option value="light">{t("浅色")}</option>
+          <option value="dark">{t("深色")}</option>
         </select>
       </section>
 

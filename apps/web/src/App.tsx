@@ -186,7 +186,7 @@ export function App() {
   const navigation = (
     <>
       <div className="flex h-[58px] items-center gap-2.5 px-5">
-        <span className="flex size-7 items-center justify-center rounded-lg bg-ink text-white">
+        <span className="flex size-7 items-center justify-center rounded-lg bg-ink text-on-ink">
           <AudioLines className="size-4" strokeWidth={2.3} />
         </span>
         <span className="text-[14px] font-semibold tracking-[-0.025em] text-ink">VoxStudio</span>
@@ -247,7 +247,7 @@ export function App() {
 
       <header className="fixed inset-x-0 top-0 z-30 flex h-[74px] items-center justify-between border-b border-edge-faint bg-canvas/95 px-4 backdrop-blur md:hidden">
         <span className="flex items-center gap-2.5 text-[15px] font-semibold tracking-[-0.025em]">
-          <span className="flex size-8 items-center justify-center rounded-[10px] bg-ink text-white">
+          <span className="flex size-8 items-center justify-center rounded-[10px] bg-ink text-on-ink">
             <AudioLines className="size-4" strokeWidth={2.2} />
           </span>
           VoxStudio

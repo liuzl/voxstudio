@@ -306,6 +306,10 @@ const en = {
 
   // Settings panel
   "查看运行状态、引擎能力，并管理对话与界面偏好。": "Inspect runtime health and engine capabilities, and manage conversation and interface preferences.",
+  "外观": "Appearance",
+  "跟随系统": "Follow system",
+  "浅色": "Light",
+  "深色": "Dark",
   "实时会话与 REST 门面": "Realtime sessions and REST facade",
   "网关": "Gateway",
   "探测中…": "Probing…",

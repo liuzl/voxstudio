@@ -636,7 +636,7 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
             </label>
             <div className="flex-1" />
             <button onClick={() => void create()} disabled={creating}
-              className="rounded-lg bg-accent-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-accent-500 disabled:opacity-40">
+              className="rounded-lg bg-accent-600 px-4 py-1.5 text-xs font-medium text-on-ink hover:bg-accent-500 disabled:opacity-40">
               {creating ? t("生成中…") : t("创建")}
             </button>
           </div>

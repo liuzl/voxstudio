@@ -189,7 +189,7 @@ export function GeneratePanel() {
               </a>
               <button
                 onClick={() => removeTake(take.id)}
-                className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-ink-700 text-ink-500 hover:bg-red-50 hover:text-red-600"
+                className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-ink-700 text-ink-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/15 dark:hover:text-red-300"
                 title={t("删除")}
               >
                 <Trash2 className="size-3.5" />

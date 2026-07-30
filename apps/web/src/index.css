@@ -9,6 +9,7 @@
    * agent avatar gradient) stay inline as content data.
    */
   --color-canvas: #ffffff; /* page and card background */
+  --color-on-ink: #ffffff; /* text/icons sitting on an ink fill */
   --color-surface: #fbfbfa; /* inputs, wells */
   --color-fill-faint: #fafaf8; /* wide-row hover */
   --color-fill-hover: #f5f5f2; /* menu-item / control hover */
@@ -45,6 +46,56 @@
   --color-ink-100: #171715;
   --color-accent-500: #181816;
   --color-accent-600: #20201e;
+}
+
+/* The dark: variant keys off the resolved theme attribute, not the media query,
+   so a manual override in 设置 and "follow system" share one definition. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root {
+  color-scheme: light;
+}
+
+/*
+ * Dark theme: the same 22 roles over warm near-blacks. Brand ink inverts to
+ * near-white (components pair it with on-ink instead of a hardcoded white).
+ */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-canvas: #161614;
+  --color-on-ink: #161614;
+  --color-surface: #1d1d1b;
+  --color-fill-faint: #1b1b19;
+  --color-fill-hover: #232321;
+  --color-fill-active: #2a2a27;
+  --color-edge-faint: #262624;
+  --color-edge: #2e2e2b;
+  --color-edge-strong: #35352f;
+  --color-edge-hover: #47473f;
+  --color-ink: #f2f2ef;
+  --color-ink-hover: #dcdcd7;
+  --color-fg: #e8e8e4;
+  --color-fg-secondary: #b5b5ae;
+  --color-fg-tertiary: #9c9c95;
+  --color-fg-muted: #8d8d86;
+  --color-fg-faint: #74746e;
+  --color-accent: #f5813d;
+  --color-accent-deep: #f09a63;
+  --color-accent-edge: #7c4a26;
+  --color-accent-surface: #2b211b;
+  --color-danger: #e5756c;
+  --color-danger-surface: #2e1c1a;
+
+  --color-ink-950: #1a1a18;
+  --color-ink-900: #161614;
+  --color-ink-800: #2a2a27;
+  --color-ink-700: #2e2e2b;
+  --color-ink-500: #8d8d86;
+  --color-ink-300: #b5b5ae;
+  --color-ink-100: #e8e8e4;
+  --color-accent-500: #f2f2ef;
+  --color-accent-600: #dcdcd7;
 }
 
 html,
