@@ -80,11 +80,12 @@ agents panel beyond the minimum (list + pick at conversation start).
    tenant story adds an owner dimension (per-tenant agent directories or an
    owner column when the registry outgrows files). Ids stay
    `[A-Za-z0-9._-]{1,64}`; nothing here assumes a single operator except the
-   storage path, which is already a flag. The tenancy milestone's first
-   sub-piece is an identity abstraction in the gateway (OIDC-first — see the
-   positioning clarifications in
-   [competitive-voice-agents.md](./competitive-voice-agents.md)); agents then
-   scope to whatever identity asserts.
+   storage path, which is already a flag. The gateway now resolves a hosted
+   `AuthContext` through product-owned accounts while self-hosted sessions keep
+   their zero-auth or optional-token shape; when the agent registry lands, its
+   resources scope to that same owner identity. Organizations and enterprise
+   OIDC widen the identity source later without changing the agent schema (see
+   [auth.md](./auth.md)).
 
 ## Phases and gates
 

@@ -1,19 +1,24 @@
 # Product runtime and app architecture
 
-Status: Accepted, 2026-07-10
+Status: Accepted, 2026-07-10; migration delivered. The compiled TypeScript/Bun
+CLI, Web Studio, and MCP surface now share the workspace core. Migration phases
+and removal gates below are retained as the historical decision record.
 
 ## Decision
 
-VoxStudio's product-side code will converge on TypeScript. Bun is the workspace,
-development, test, and executable-build tool, but shared packages must not depend on the
-Bun runtime. Python remains the implementation language for model engines and research
-tools. Rust is reserved for native audio or operating-system integration when a measured
-need justifies it.
+VoxStudio's product-side code has converged on TypeScript. Bun is the workspace,
+development, test, and executable-build tool, but shared packages do not depend
+on the Bun runtime. Model servers keep the runtime appropriate to their
+upstream implementation (Python or C++); measurement tools use TypeScript for
+product gates and Python for scientific/numerical analysis. Operating-system
+integration may use a narrow platform-native helper, as the macOS Swift audio
+host does.
 
-The first migration target is the CLI. Its current Python implementation remains the
-behavioral reference until a compiled TypeScript replacement passes the same contract
-fixtures and platform checks. The migration must not change the engine HTTP contract or
-the user-visible CLI contract.
+The first migration target was the CLI. Its Python implementation remained the
+behavioral reference until the compiled TypeScript replacement passed the same
+contract fixtures and platform checks. The migration did not change the engine
+HTTP contract or the user-visible CLI contract; the Python CLI has since been
+removed.
 
 ## Why now
 
@@ -36,7 +41,8 @@ platform adapters.
 ```text
 apps/
   cli/                  compiled Bun executable
-  web/                  browser UI and its backend
+  web/                  browser UI
+  realtime-gateway/     WebSocket sessions, REST facade, auth, and persistence
   mcp/                  stdio and HTTP MCP server
   desktop/              optional Tauri shell and TypeScript UI
   mobile/               mobile client
@@ -50,11 +56,12 @@ packages/
 
 platforms/
   bun/                  filesystem, process, recording, and playback adapters
+  macos-audio/          Swift voice-processing capture/playback helper
   browser/              MediaRecorder and Web Audio adapters
   tauri/                desktop adapters when the desktop app exists
 
-engines/                model-serving processes; Python is allowed here
-tools/                  measurement and research programs; Python is allowed here
+engines/                model-serving processes and deployment entries; Python/C++ allowed
+tools/                  TypeScript product gates and Python research instruments
 ```
 
 Directories are introduced only when their first owned module is implemented. The target
@@ -88,11 +95,13 @@ export interface AudioPlayer {
 The rule is enforced initially by package boundaries and review, then by lint rules once
 the package graph exists.
 
-## What remains in Python
+## What remains outside the shared TypeScript core
 
 `engines/voxcpm2-server` remains Python because it is coupled to PyTorch, CUDA, and the
-upstream model package. The measurement programs remain Python because their speaker
-encoders and numerical tooling already live in that ecosystem.
+upstream model package. C++ engine entries follow their upstream native
+runtimes. Scientific measurement programs remain Python where their speaker
+encoders and numerical tooling already live in that ecosystem; live product
+acceptance gates are TypeScript where they exercise the shipped orchestration.
 
 The transitional Python `core/` and `voxcli` fallback served as the migration's parity
 oracle and were retired in 2026-07 once the TypeScript side had moved past them.
@@ -153,7 +162,7 @@ Both implementations consume the same inputs and expected outputs for:
 Audio comparisons specify tolerances explicitly. Text boundaries, sample counts, sample
 rates, HTTP fields, and error codes are exact.
 
-## Migration phases
+## Historical migration phases
 
 ### Phase 0: baseline
 
@@ -197,9 +206,9 @@ rates, HTTP fields, and error codes are exact.
 - Build MCP from the same contracts and clients.
 - Start desktop or mobile only after a concrete workflow requires it.
 
-## Python CLI removal gate
+## Historical Python CLI removal gate
 
-The Python CLI is removed only when all of the following are true:
+The Python CLI was removed only after all of the following were true:
 
 - Shared parity fixtures pass in Python and TypeScript.
 - All current commands and flags have compatibility coverage.
@@ -209,8 +218,8 @@ The Python CLI is removed only when all of the following are true:
 - Release artifacts have a documented installation and upgrade path.
 - One release has been exercised without requiring the Python CLI as a fallback.
 
-Until then, the implementations coexist under explicit names; `vox` continues to point at
-the production-ready implementation.
+Until that gate passed, the implementations coexisted under explicit names and
+`vox` continued to point at the production-ready implementation.
 
 ## Release and support policy
 
@@ -225,7 +234,8 @@ execution coverage.
 
 ## Rollback
 
-Migration phases are additive. The Python CLI remains runnable until the removal gate is
-met, and engine contracts do not change. If a TypeScript phase fails, `vox` stays on the
-Python entry point while the incomplete package is fixed or removed. No data migration is
-required because named voices remain owned by the TTS engine.
+The migration phases were additive. The Python CLI remained runnable until the
+removal gate was met, and engine contracts did not change. If a TypeScript
+phase failed, `vox` stayed on the Python entry point while the incomplete
+package was fixed or removed. No data migration was required because named
+voices remained owned by the TTS engine.

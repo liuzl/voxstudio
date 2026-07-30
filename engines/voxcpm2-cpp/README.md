@@ -10,8 +10,8 @@ Measured on an M3 Max (q4_k LM + f16 AudioVAE, Metal backend, 6 timesteps): full
 **RTF ≈ 0.41**, first streamed audio in **~0.5s**, still real-time (RTF ≈ 0.9) while a
 12B llama.cpp model generates on the same GPU. At the quality tier (`timesteps: 10`)
 RTF ≈ 0.51. The trade against the Python engine (`engines/voxcpm2-server/`): identical
-request surface for registered voices, no design voices yet, raw-PCM streaming only
-(fine on loopback; use the Python engine's Opus streaming across a WAN).
+request surface for registered and design voices, but raw-PCM streaming only (fine on
+loopback; use the Python engine's Opus streaming across a WAN).
 
 ## Build
 

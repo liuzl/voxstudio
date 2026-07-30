@@ -1,12 +1,12 @@
 # Public demo hardening
 
-Status: Accepted, 2026-07-19. Phase 1 (the guardrails) delivered the same day —
-suite green and the live probe passed (see Phases). What it takes to put the Web
-Studio on voxstudio.cc
-without donating the host machine to the internet: an access model that is mostly
-someone else's product, and three gateway guardrails that are ours.
+Status: Accepted, 2026-07-19. Phase 1 (the reusable gateway guardrails)
+delivered the same day — suite green and the live probe passed (see Phases).
+The original Access-based entrance below remains the private, allow-listed demo
+shape. It is not the public self-serve identity design, which is now implemented
+and specified in [auth.md](./auth.md).
 
-## Access model (layered, mostly zero-code)
+## Private demo access model (layered, mostly zero-code)
 
 1. **Cloudflare Access in front of the tunnel** — allow-listed emails, one-time
    PIN login, WebSocket-aware, audit log. Who is not on the list never reaches
@@ -18,14 +18,11 @@ someone else's product, and three gateway guardrails that are ours.
 3. **The guardrails below** protect the machine when both layers admit someone —
    or when the operator deliberately opens the door wider.
 
-An open self-serve demo (per-visitor tokens with quotas) is a separate, real
-feature — priced only when the need is real. Its cheapest identity is Access's
-any-email-with-OTP policy plus a gateway that reads the asserted email for
-per-visitor caps — a deliberate transitional layer until the product's own
-identity abstraction lands (OIDC-first; see the positioning clarifications in
-[competitive-voice-agents.md](./competitive-voice-agents.md)). Accounts holding
-identity and quota are compatible with the positioning; visitor voice assets
-persisting on operator infrastructure are the line, and a separate decision.
+For the public self-serve entrance, this transitional Access/OTP proposal has
+been superseded. The gateway now owns Better Auth accounts, owner scoping, and
+per-account quotas; self-hosted deployments retain zero-auth or optional-token
+operation. The guardrails below compose with either deployment shape and remain
+useful independently of identity.
 
 ## Gateway guardrails (this repo)
 
@@ -88,6 +85,7 @@ internal ops log, never here.
    a resource gap in exactly the deployment this document is for); guardrail
    env/flag typos fail closed instead of silently running unguarded; and the
    session cap requires an integer.
-2. **The ops half** (internal repo): tunnel + Access configuration, the demo
-   config file, and the go-live checklist — including rotating the token and a
-   teardown drill.
+2. **The private-demo ops half** (internal repo): tunnel + Access configuration,
+   the demo config file, and the go-live checklist — including rotating the token
+   and a teardown drill. Public self-serve launch requirements are tracked in
+   [auth.md](./auth.md), not this phase.

@@ -5,6 +5,11 @@ VoxStudio's positioning honest — what they do better, what we deliberately do
 differently, and which of their ideas are cheap to adopt. Surveys are product
 walkthroughs on the stated date; capabilities may have moved since.
 
+Identity note: the OIDC-first position recorded in the 2026-07-26 survey was
+superseded by [auth.md](./auth.md). The public self-serve entrance now uses
+product-owned Better Auth accounts; OIDC remains a future enterprise plugin and
+Cloudflare Access remains an option for private deployments.
+
 ## xAI Voice Agents (Beta) — surveyed 2026-07-17
 
 **Form**: fully hosted agent-as-configuration on Grok. An agent is a console-edited
@@ -179,14 +184,13 @@ are orthogonal to who runs the servers.
 | Capability | Verdict |
 |---|---|
 | **Multi-tenancy** (workspaces, isolation, per-tenant quotas) | Compatible — the natural growth path of a self-hosted install (the GitLab/Nextcloud shape). An org running one instance for many teams strengthens the data-boundary pitch: *your organization's voice data never leaves your machines, and the whole organization can use it.* |
-| **A user system** (accounts, roles, identity) | Compatible — required, in fact, by the team/enterprise ladder. Design stance: an identity abstraction in the gateway, **OIDC-first** (Keycloak / Authentik / Cloudflare Access all speak it) with minimal local accounts; it is the first sub-piece of the tenancy milestone. |
+| **A user system** (accounts, roles, identity) | Compatible and now delivered for individual hosted accounts through Better Auth, owner scoping, and per-account quotas. Organizations and roles remain future work; OIDC is reserved for enterprise SSO rather than the public entrance. |
 | **Compliance features** (audit logs, retention controls, encryption) | Aligned, not merely compatible — organizations choose self-hosting *because* of compliance; the software's job is to be compliance-ready, certification belongs to the deployment. |
 | **Usage accounting** | Split it: metering-for-billing external customers is the hosted business; internal quotas and chargeback are multi-tenant features. |
 | **Telephony** | See the refinement above: no carrier infrastructure of our own; SIP/Twilio adapters are fair game. |
 | **Operating voxstudio.cc with accounts** | Compatible while accounts hold identity + quota + downloads. The line is crossed only when visitor **voice assets** (recordings, cloned voices) persist on infrastructure we operate — that is a distinct business decision with retention, consent, and trust costs, not a side effect of adding login. |
 
-The ladder, each rung fully self-hosted: single operator (today) → team
-(external identity via Access/OIDC, the demo access model) → multi-tenant
-(built-in identity, owner-scoped voice bank / library / agents /
-pronunciations, per-tenant quotas). Agents ([agents.md](./agents.md)) slot in
-before tenancy and gain an owner dimension when it arrives.
+The revised ladder is: zero-auth or optional-token self-hosting → individual
+hosted accounts with product-owned identity and owner-scoped resources (delivered)
+→ organizations and roles → enterprise SSO where justified. Agents
+([agents.md](./agents.md)) gain the same owner dimension when their registry lands.

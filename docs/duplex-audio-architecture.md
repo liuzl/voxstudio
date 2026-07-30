@@ -121,8 +121,8 @@ audio endpoint's responsibility.
 
 ### macOS CLI endpoint
 
-The first speaker-mode implementation is a small Swift executable under a
-future `platforms/macos-audio/` directory. It uses one `AVAudioEngine` for
+The speaker-mode implementation is the Swift executable under
+`platforms/macos-audio/`. It uses one `AVAudioEngine` for
 `AVAudioInputNode`, `AVAudioPlayerNode`, and `AVAudioOutputNode`, enables voice
 processing before starting the engine, and exposes a versioned local IPC
 protocol to the Bun CLI. It is available only on supported macOS versions and

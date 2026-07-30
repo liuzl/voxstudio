@@ -1,6 +1,9 @@
 # Web Studio
 
-Status: Accepted, 2026-07-14. Phase 1 (realtime gateway) delivered 2026-07-15.
+Status: Accepted, 2026-07-14; living delivery record. The realtime gateway,
+five core panels, single-binary packaging, hosted authentication, and explicit
+engine-route selection are delivered. The real-browser double-talk gate and
+production hosting operations remain.
 
 ## Scope
 
@@ -39,26 +42,32 @@ below rather than relitigated per feature.
 4. **Frontend stack: React + TypeScript + Tailwind + Zustand.** Validated by the lineage
    and compatible with the workspace's TypeScript core. Lives in `apps/web`; shared
    contracts come from `packages/contracts`.
-5. **Server-side persistence is SQLite at the gateway.** Library metadata, generation
-   takes, and capture transcripts. Audio artifacts stay on the filesystem next to it.
+5. **Retained captures are server-side; ephemeral takes are browser-side.** The
+   opt-in Library stores capture metadata and transcripts in gateway SQLite with
+   WAV artifacts beside it. Generate-panel takes are bounded browser-session
+   object URLs unless the user downloads them; they are not silently retained
+   by the gateway.
 6. **Curated engines, not an engine zoo.** The lineage ships seven TTS engines; this
    product ships the certified few behind one contract (quality line + fast lane) and adds
-   engines by demonstrated need. The UI selects by *capability* (clone / preset / fast),
-   not by engine brand.
+   engines by demonstrated need. Ordinary workflows select automatically by role and
+   capability. Operators and evaluators may explicitly pin a named ASR, LLM, or TTS
+   instance through the compact route picker.
 7. **Reproducibility is a UI feature.** Design profiles carry SHA-256 fingerprints and
    audit status today; the studio surfaces them as badges and one-click `audit`/`verify`
    actions instead of burying the product's strongest guarantee in a CLI.
-8. **Hosting is Cloudflare-native.** Static assets on Pages at voxstudio.cc; the gateway
-   reached through a tunnel; private deployments gated by Cloudflare Access. A public
-   demo mode is a separate, explicit decision with its own abuse and cost review — not a
-   default.
+8. **Hosting keeps the gateway private, but identity belongs to the product.** A tunnel
+   may provide ingress and Cloudflare Access remains suitable for private allow-listed
+   deployments. The public self-serve entrance uses product-owned Better Auth accounts,
+   ownership, and quotas as specified in [auth.md](./auth.md); it is not placed behind
+   Access.
 
 ## Non-goals
 
 - Global hotkeys or system-wide dictation in the browser (decision 2).
 - Supporting every lineage engine (decision 6).
 - The multi-track Stories editor in v1 — a large timeline UI, deferred whole.
-- Accounts or multi-tenancy in v1: one owner, Cloudflare Access at the door.
+- Organizations, teams, and multi-principal ownership in v1. Product-owned individual
+  accounts and owner scoping are already delivered for the hosted entrance.
 - Claiming end-to-end encryption beyond what the duplex document already scopes.
 
 ## Panels
@@ -66,18 +75,19 @@ below rather than relitigated per feature.
 1. **对话 Conversation** — live duplex session: mic capture with negotiated AEC (browser
    constraints verified per the duplex doc), agent audio playback, streaming captions,
    visible turn/barge-in/reopen state, per-turn latency readout (the `turn.timing`
-   event), push-to-talk and mute as first-class controls.
-2. **生成 Generate** — text in, audio out: voice/profile picker, capability toggles
-   (clone / design / fast lane), chunking preview for long text, takes history per
-   prompt, effect chain slot (v2).
+   event), push-to-talk and mute as first-class controls, plus an optional named
+   ASR/LLM/TTS route picker that defaults to automatic routing.
+2. **生成 Generate** — text in, audio out: voice/profile and named-TTS pickers,
+   chunking preview for long text, bounded in-browser takes history, effect
+   chain slot (v2).
 3. **音色 Voices** — registered voices and design profiles with fingerprint badges,
-   audit status against the running engine, create/reproduce/verify/audition flows
-   mirroring the CLI verbs.
+   audit status against the running engine, and create/verify/audition flows
+   corresponding to the relevant CLI operations.
 4. **素材库 Library** — the captures surface: every recording/utterance with its
    transcript, re-transcribe, inline correction (feeding the ASR reference workflow),
    promote-to-voice-sample.
-5. **设置 Settings** — engine health (the four-slot table), model identities and
-   manifests, gateway status, MCP bindings (v2).
+5. **设置 Settings** — the complete named-instance registry with health, roles,
+   capabilities, model identities and manifests; gateway status and MCP bindings (v2).
 
 ## Delivery phases
 
@@ -184,15 +194,17 @@ below rather than relitigated per feature.
    with an empty cache: full turn, no network, cache untouched — the model never
    enters the repo, matching the public-repo rules); and WebAssembly SIMD is the
    stated hard prerequisite of the WASM path (onnxruntime-web ships only the SIMD
-   build; every Bun target qualifies). The voxstudio.cc deployment itself remains;
-   its access model and gateway guardrails are designed and delivered in
-   [public-demo.md](./public-demo.md) — what remains is the ops half (tunnel +
-   Access configuration, internal repo).
+   build; every Bun target qualifies). The voxstudio.cc deployment itself remains.
+   Hosted identity and ownership are delivered in [auth.md](./auth.md); reusable
+   capacity, duration, and read-only demo guardrails are recorded in
+   [public-demo.md](./public-demo.md). What remains is the ops half in the internal
+   repository.
 6. **v2**: effects chain, Stories editor, MCP management panel.
 
-**Shell updates, 2026-07-17…19** (delivered incrementally, each with its commit):
-Chinese/English i18n with the source string as the key; the start card reduced to
-one decision (the voice — the ASR hint is fixed to auto by measurement); tool
+**Shell updates, 2026-07-17…29** (delivered incrementally, each with its commit):
+Chinese/English i18n with the source string as the key; the ASR language hint
+fixed to auto by measurement; a compact runtime-route picker that leaves ASR,
+LLM, and TTS on their role defaults unless explicitly pinned; tool
 caption chips, including the amber pending-confirmation chip
 ([mcp-tools.md](./mcp-tools.md)); conversation-etiquette fields in Settings,
 persisted in localStorage ([conversation-etiquette.md](./conversation-etiquette.md));

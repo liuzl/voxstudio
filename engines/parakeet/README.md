@@ -57,7 +57,8 @@ not yet represented in the shared voxstudio `Transcription` contract.
 
 ## Model selection
 
-Use the Nemotron model for voxstudio's multilingual default:
+Within the Parakeet family, use the Nemotron model for the multilingual,
+Mandarin-capable alternative:
 
 ```text
 nvidia/nemotron-3.5-asr-streaming-0.6b
@@ -254,7 +255,7 @@ count, host class, and whether timings include model loading.
 - Keep service-manager paths and machine-specific library search paths in private
   operations configuration, not in this repository.
 
-## Benchmark before changing the default
+## Benchmark before changing its product role
 
 Use consented, non-sensitive fixtures with human-reviewed references. Cover:
 

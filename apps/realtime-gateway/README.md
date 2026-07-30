@@ -4,7 +4,7 @@ The Web Studio's server: the duplex session protocol over WebSocket at `/v1/real
 plus a REST facade over the OpenAI-compatible engine contract. The browser talks to this
 gateway and never to an engine — engine addresses and credentials stay server-side.
 
-This is Phase 1 of [docs/web-studio.md](../../docs/web-studio.md); the session contract it
+It began as Phase 1 of [docs/web-studio.md](../../docs/web-studio.md); the session contract it
 speaks is specified in [docs/duplex-audio-architecture.md](../../docs/duplex-audio-architecture.md).
 The conversation behavior itself — VAD segmentation, provisional barge-in, speculative
 turn-taking, the streaming reply pipeline — is `@voxstudio/conversation`, the same loop
@@ -18,8 +18,10 @@ bun run apps/realtime-gateway/src/main.ts --config voxstudio.yaml --port 8790
 VOX_GATEWAY_TOKEN=... bun run apps/realtime-gateway/src/main.ts
 ```
 
-Binds `127.0.0.1` by default. Exposing it is a deployment decision: a tunnel in front,
-Cloudflare Access at the door (web-studio decision 8) — never a `0.0.0.0` default.
+Binds `127.0.0.1` by default and never defaults to `0.0.0.0`. Self-hosted
+deployments use no authentication by default or an optional bearer token. Hosted
+deployments use product-owned accounts and quotas; private allow-listed deployments
+may put Cloudflare Access in front. See [docs/auth.md](../../docs/auth.md).
 
 ## Protocol (v1)
 
@@ -44,21 +46,28 @@ events during the gap are not replayed. Replayed commands are acknowledged
 (`command.duplicate`) but never re-executed, and a `turn.interrupt` naming a superseded
 turn is rejected as `stale_turn`, so a stale stop can never kill the reply now playing.
 
-`session.start` options mirror `vox listen`: `language`, `system`, `maxTokens`, `voice`,
-`bargeIn` (default false — protected mode until the endpoint has negotiated AEC),
-`turnTaking` (default speculative), `reopenMs`, `vad` (silero where available, loud
-degrade to energy), `threshold`, `silenceMs`, `minSpeechMs`, plus `playbackAck`: with it,
-the endpoint owns the audible-playback clock — after the last piece is sent the turn stays
-`speaking` until the client's `playback.complete` for that turn (capped by the audio's own
-duration plus slack), so speech during the still-audible tail barges in instead of opening
-a turn beside the playing reply.
+`session.start` options mirror `vox listen`: `language`, `system`, `maxTokens`,
+`voice`, named-instance overrides (`asrEngine`, `llmEngine`, `ttsEngine`),
+`studioTools`, `welcome`, `nudgeAfterSeconds`, `bargeIn` (default false —
+protected mode until the endpoint has negotiated AEC), `turnTaking` (default
+speculative), `reopenMs`, `vad` (Silero where available, loud degrade to
+energy), `threshold`, `silenceMs`, and `minSpeechMs`. With `playbackAck`, the
+endpoint owns the audible-playback clock: after the last piece is sent the turn
+stays `speaking` until the client's `playback.complete` for that turn (capped by
+the audio's own duration plus slack), so speech during the still-audible tail
+barges in instead of opening a turn beside the playing reply.
 
 ## REST facade
 
-`POST /v1/audio/speech`, `POST /v1/audio/transcriptions`, `POST /v1/chat/completions`,
-`GET /v1/voices` forward to the configured engines with credentials injected server-side;
-`GET /healthz` reports liveness. Body and status pass through; engine-identifying headers
-do not.
+The facade covers speech, transcription, chat, the sanitized engine registry,
+voice registration and mutation, design profiles, and the optional capture
+library under `/v1/*`; `?engine=` explicitly selects a kind-checked named
+instance where supported. Hosted deployments additionally expose discovery at
+`/agent`, `/llms.txt`, and `/openapi.json`, while Better Auth owns
+`/v1/auth/*`. The route catalog in `src/routes.ts` is the authoritative method,
+parameter, quota, and demo-policy list and generates the OpenAPI surface.
+`GET /healthz` reports liveness. Engine credentials and identifying headers do
+not leave the gateway.
 
 ## Known limits
 

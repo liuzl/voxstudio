@@ -27,8 +27,9 @@ already runs more than one of everything:
 2. **Instances carry `kind` and `capabilities`.** `kind` (`tts` | `asr` | `llm`) is
    what the instance is; `capabilities` (free-form tags; well-known: `clone`, `design`,
    `preset`, `fast`, `streaming`, `longform`, `diarize`) is what it can do. Roles route
-   *by product function*; capabilities route *by request need*. The UI keeps selecting
-   by capability, never by brand (web-studio decision 6).
+   *by product function*; capabilities route *by request need*. Product workflows route
+   automatically by role or capability by default; the Web Studio also exposes an
+   explicit named-instance picker for operators and comparisons.
 3. **Selection is explicit-first, capability-second, role-default-last.** A request may
    name an instance (`?engine=` on the facade, `asrEngine`/`llmEngine`/`ttsEngine` in
    `session.start`); otherwise a capability need (voice registration → `clone`) picks
@@ -118,6 +119,10 @@ legacy role-named instances (`tts`, `asr`, `asr_longform`, `llm`).
    engine badges/filter, generation and conversation pickers carrying the engine
    choice. Gate: registering a voice while kokoro serves the conversation works end to
    end against the live two-TTS stack.
+   **Delivered 2026-07-29.** Conversation exposes one compact route picker for ASR,
+   LLM, and TTS; Generate exposes a TTS picker. “Automatic” keeps the gateway role
+   default, while an explicit choice is persisted locally and remains kind-checked by
+   the gateway.
 3. **Capability polish**: per-voice capability surfacing (clone voices vs bank
    presets), longform ASR routing in the Library panel, engine hints in `turn.timing`
    telemetry.
