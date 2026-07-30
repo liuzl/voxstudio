@@ -251,20 +251,16 @@ function StartCard({ starting, onStart }: { starting: boolean; onStart: () => vo
       </SectionCard>
 
       <div className="space-y-5">
-        <SectionCard className="overflow-hidden">
+        {/* No overflow-hidden here: the route picker's popover must escape the card. */}
+        <SectionCard>
           <div className="border-b border-ink-700 px-4 py-3.5">
             <h3 className="text-[13px] font-medium">{t("会话设置")}</h3>
             <p className="mt-0.5 text-[11px] text-ink-500">{t("开始前确认音色和运行路线")}</p>
           </div>
+          {/* Both pickers label themselves; wrapping them again doubled every label. */}
           <div className="space-y-4 p-4">
-            <label className="block">
-              <span className="mb-1.5 block text-[11px] font-medium text-ink-500">{t("音色")}</span>
-              <VoicePicker value={voice} engine={voiceEngine} onChange={setVoice} className="w-full" />
-            </label>
-            <div>
-              <span className="mb-1.5 block text-[11px] font-medium text-ink-500">{t("运行路线")}</span>
-              <ConversationRoutePicker />
-            </div>
+            <VoicePicker value={voice} engine={voiceEngine} onChange={setVoice} className="w-full" />
+            <ConversationRoutePicker />
           </div>
         </SectionCard>
 

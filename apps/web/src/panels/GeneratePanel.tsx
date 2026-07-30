@@ -118,15 +118,10 @@ export function GeneratePanel() {
             <div className="text-[13px] font-medium">{t("输出设置")}</div>
             <div className="mt-0.5 text-[11px] text-ink-500">{t("选择运行路线和输出音色")}</div>
           </div>
+          {/* Both pickers label themselves ("语音合成 TTS" / "音色"); no wrapper labels. */}
           <div className="space-y-5 p-4">
-            <div className="space-y-2">
-              <div className="text-[11px] font-medium text-ink-500">{t("运行路线")}</div>
-              <TtsEnginePicker value={engine} onChange={setEngine} />
-            </div>
-            <div className="space-y-2">
-              <div className="text-[11px] font-medium text-ink-500">{t("音色")}</div>
-              <VoicePicker value={voice} engine={engine} onChange={setVoice} className="w-full" />
-            </div>
+            <TtsEnginePicker value={engine} onChange={setEngine} />
+            <VoicePicker value={voice} engine={engine} onChange={setVoice} className="w-full" />
             <div className="border-t border-ink-700 pt-4">
               <div className="flex gap-2">
                 {busy && (
