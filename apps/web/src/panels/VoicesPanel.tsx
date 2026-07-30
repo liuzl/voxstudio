@@ -310,7 +310,7 @@ export function VoicesPanel() {
             {filtered.map(voice => (
               <div
                 key={`${voice.engine}/${voice.id}`}
-                className="group flex min-h-10 items-center gap-1 rounded-lg border border-ink-700/80 bg-ink-900 px-2.5 py-2 text-xs transition hover:border-[#d1d1ca] hover:bg-ink-950"
+                className="group flex min-h-10 items-center gap-1 rounded-lg border border-ink-700/80 bg-ink-900 px-2.5 py-2 text-xs transition hover:border-edge-hover hover:bg-ink-950"
               >
                 <button
                   onClick={() => void audition(voice.id, voice.engine)}

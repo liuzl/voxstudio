@@ -2,8 +2,39 @@
 
 @theme {
   /*
-   * The semantic names predate the light console. Keeping them stable lets the
-   * feature panels inherit the new visual system without touching their logic.
+   * Semantic tokens — the single source of color for the console. One role, one
+   * token; a future dark mode swaps these values without touching components.
+   * Values are the medians of the hand-tuned hexes they replaced (every merge
+   * is within a few gray steps). Decorative one-offs (template pastels, the
+   * agent avatar gradient) stay inline as content data.
+   */
+  --color-canvas: #ffffff; /* page and card background */
+  --color-surface: #fbfbfa; /* inputs, wells */
+  --color-fill-faint: #fafaf8; /* wide-row hover */
+  --color-fill-hover: #f5f5f2; /* menu-item / control hover */
+  --color-fill-active: #f1f1ee; /* selected nav, icon chips */
+  --color-edge-faint: #ecece8; /* dividers, table rules */
+  --color-edge: #e2e2dd; /* card and control borders */
+  --color-edge-strong: #deded9; /* button and input borders */
+  --color-edge-hover: #c9c9c4; /* border hover emphasis */
+  --color-ink: #11110f; /* brand black: primary buttons, headings, logo */
+  --color-ink-hover: #292926;
+  --color-fg: #20201e; /* primary text */
+  --color-fg-secondary: #4d4d48;
+  --color-fg-tertiary: #74746e; /* sidebar inactive */
+  --color-fg-muted: #85858a; /* descriptions */
+  --color-fg-faint: #999992; /* group labels, placeholders */
+  --color-accent: #f36f21;
+  --color-accent-deep: #d66b2e;
+  --color-accent-edge: #f2a56f;
+  --color-accent-surface: #fffaf6;
+  --color-danger: #c94c43;
+  --color-danger-surface: #fff3f1;
+
+  /*
+   * Legacy scale from the dark-era panels, value-remapped for the light console.
+   * New code uses the semantic tokens above; fold these into them as the old
+   * panels migrate, then delete.
    */
   --color-ink-950: #f7f7f5;
   --color-ink-900: #ffffff;
@@ -54,7 +85,7 @@ a:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-ink-100) 12%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-ink) 12%, transparent);
 }
 
 input,
@@ -66,16 +97,16 @@ select {
 input:hover,
 textarea:hover,
 select:hover {
-  border-color: #d1d1ca;
+  border-color: var(--color-edge-hover);
 }
 
 ::selection {
-  background: #d9d9d4;
-  color: #11110f;
+  background: var(--color-edge);
+  color: var(--color-ink);
 }
 
 * {
-  scrollbar-color: #d5d5cf transparent;
+  scrollbar-color: var(--color-edge-hover) transparent;
   scrollbar-width: thin;
 }
 

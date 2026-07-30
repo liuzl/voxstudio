@@ -17,15 +17,15 @@ export function PageHeader({
     <header className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
         {eyebrow && (
-          <div className="mb-2 text-[11px] font-medium text-[#999992]">
+          <div className="mb-2 text-[11px] font-medium text-fg-faint">
             {eyebrow}
           </div>
         )}
         <div className="flex flex-wrap items-center gap-2.5">
-          <h1 className="text-[23px] font-semibold tracking-[-0.035em] text-[#11110f] sm:text-[26px]">{title}</h1>
+          <h1 className="text-[23px] font-semibold tracking-[-0.035em] text-ink sm:text-[26px]">{title}</h1>
           {badge}
         </div>
-        {description && <p className="mt-1 max-w-2xl text-[14px] leading-5 text-[#85858a]">{description}</p>}
+        {description && <p className="mt-1 max-w-2xl text-[14px] leading-5 text-fg-muted">{description}</p>}
       </div>
       {actions && <div className="flex shrink-0 flex-wrap items-center gap-2 sm:pt-0.5">{actions}</div>}
     </header>
@@ -71,11 +71,11 @@ export function SectionCard({
   children: ReactNode;
   className?: string;
 }) {
-  return <section className={`rounded-xl border border-[#e3e3df] bg-white shadow-[0_1px_2px_rgba(0,0,0,0.025)] ${className}`}>{children}</section>;
+  return <section className={`rounded-xl border border-edge bg-canvas shadow-[0_1px_2px_rgba(0,0,0,0.025)] ${className}`}>{children}</section>;
 }
 
 export const primaryButton =
-  "inline-flex min-h-10 items-center justify-center gap-2 rounded-full bg-[#11110f] px-5 text-[13px] font-medium text-white shadow-[0_1px_2px_rgba(0,0,0,0.16)] transition hover:bg-[#292926] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-35";
+  "inline-flex min-h-10 items-center justify-center gap-2 rounded-full bg-ink px-5 text-[13px] font-medium text-white shadow-[0_1px_2px_rgba(0,0,0,0.16)] transition hover:bg-ink-hover active:scale-[0.98] disabled:pointer-events-none disabled:opacity-35";
 
 export const secondaryButton =
-  "inline-flex min-h-10 items-center justify-center gap-2 rounded-full border border-[#deded9] bg-white px-4 text-[13px] font-medium text-[#4d4d48] shadow-[0_1px_1px_rgba(0,0,0,0.02)] transition hover:border-[#c9c9c4] hover:bg-[#fafaf8] hover:text-[#181816] active:scale-[0.98] disabled:pointer-events-none disabled:opacity-35";
+  "inline-flex min-h-10 items-center justify-center gap-2 rounded-full border border-edge-strong bg-canvas px-4 text-[13px] font-medium text-fg-secondary shadow-[0_1px_1px_rgba(0,0,0,0.02)] transition hover:border-edge-hover hover:bg-fill-faint hover:text-ink active:scale-[0.98] disabled:pointer-events-none disabled:opacity-35";
