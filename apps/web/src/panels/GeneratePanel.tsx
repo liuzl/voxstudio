@@ -1,7 +1,16 @@
 import { estSeconds, chunkText } from "@voxstudio/text";
+import { Clock3, Download, FileAudio2, Sparkles, Trash2, WandSparkles, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { VoicePicker } from "../components/VoicePicker";
 import { TtsEnginePicker } from "../components/EngineRoutePicker";
+import {
+  PageHeader,
+  PageShell,
+  SectionCard,
+  StatusBadge,
+  primaryButton,
+  secondaryButton,
+} from "../components/StudioPage";
 import { synthesize } from "../lib/api";
 import { useStudio } from "../store";
 import { useT } from "../i18n";
@@ -61,57 +70,109 @@ export function GeneratePanel() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 px-4 py-6 md:px-8 md:py-10">
-      <h1 className="text-2xl font-semibold">{t("生成")}</h1>
+    <PageShell>
+      <PageHeader
+        title={t("文本转语音")}
+        description={t("把文本快速转换为可试听、可下载的语音，支持自动路由和指定音色。")}
+        badge={<StatusBadge>{t("本地会话")}</StatusBadge>}
+      />
 
-      <section className="space-y-3 rounded-xl border border-ink-700 bg-ink-900 p-4 md:p-5">
-        <textarea
-          value={text}
-          onChange={event => setText(event.target.value)}
-          onKeyDown={event => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !busy && text.trim()) {
-              event.preventDefault();
-              void generate();
-            }
-          }}
-          rows={5}
-          placeholder={t("输入要合成的文本…（⌘+Enter 生成）")}
-          className="w-full resize-y rounded-lg border border-ink-700 bg-ink-800 px-3 py-2.5 text-sm leading-relaxed text-ink-100 placeholder:text-ink-500"
-        />
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <TtsEnginePicker value={engine} onChange={setEngine} />
-          <VoicePicker value={voice} engine={engine} onChange={setVoice} />
-          {text.trim() && (
-            <span className="text-[11px] text-ink-500">
-              {t("预计 {seconds}s", { seconds })}
-              {chunks > 1 ? t(" · 长文将按 {chunks} 块合成（CLI 长文管线）", { chunks }) : ""}
-            </span>
-          )}
-          <div className="flex-1" />
-          {busy && (
-            <button
-              onClick={() => abort.current?.abort()}
-              className="rounded-lg border border-ink-700 px-4 py-2 text-sm text-ink-300 hover:text-ink-100"
-            >
-              {t("取消")}
-            </button>
-          )}
-          <button
-            onClick={() => void generate()}
-            disabled={busy || !text.trim()}
-            className="rounded-lg bg-accent-600 px-5 py-2 text-sm font-medium text-white hover:bg-accent-500 disabled:opacity-40"
-          >
-            {busy ? <>{t("合成中…")} <Elapsed since={busySince} /></> : t("生成")}
-          </button>
-        </div>
-      </section>
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_280px]">
+        <SectionCard className="overflow-hidden">
+          <div className="border-b border-ink-700 px-4 py-3.5 sm:px-5">
+            <div className="flex items-center gap-2 text-[13px] font-medium">
+              <WandSparkles className="size-4 text-ink-500" strokeWidth={1.8} />
+              {t("合成内容")}
+            </div>
+          </div>
+          <div className="p-4 sm:p-5">
+            <textarea
+              value={text}
+              onChange={event => setText(event.target.value)}
+              onKeyDown={event => {
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !busy && text.trim()) {
+                  event.preventDefault();
+                  void generate();
+                }
+              }}
+              rows={10}
+              placeholder={t("输入要合成的文本…（⌘+Enter 生成）")}
+              className="min-h-56 w-full resize-y rounded-lg border border-ink-700 bg-ink-950 px-3.5 py-3 text-sm leading-6 text-ink-100 placeholder:text-ink-500"
+            />
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-ink-500">
+              <span>{text.trim().length} {t("字符")}</span>
+              {text.trim() && (
+                <>
+                  <span>·</span>
+                  <Clock3 className="size-3" />
+                  <span>{t("预计 {seconds}s", { seconds })}</span>
+                  {chunks > 1 && <span>{t(" · 长文将按 {chunks} 块合成（CLI 长文管线）", { chunks })}</span>}
+                </>
+              )}
+            </div>
+          </div>
+        </SectionCard>
+
+        <SectionCard className="h-fit overflow-hidden">
+          <div className="border-b border-ink-700 px-4 py-3.5">
+            <div className="text-[13px] font-medium">{t("输出设置")}</div>
+            <div className="mt-0.5 text-[11px] text-ink-500">{t("选择运行路线和输出音色")}</div>
+          </div>
+          <div className="space-y-5 p-4">
+            <div className="space-y-2">
+              <div className="text-[11px] font-medium text-ink-500">{t("运行路线")}</div>
+              <TtsEnginePicker value={engine} onChange={setEngine} />
+            </div>
+            <div className="space-y-2">
+              <div className="text-[11px] font-medium text-ink-500">{t("音色")}</div>
+              <VoicePicker value={voice} engine={engine} onChange={setVoice} className="w-full" />
+            </div>
+            <div className="border-t border-ink-700 pt-4">
+              <div className="flex gap-2">
+                {busy && (
+                  <button onClick={() => abort.current?.abort()} className={`${secondaryButton} px-3`} aria-label={t("取消")}>
+                    <X className="size-3.5" />
+                  </button>
+                )}
+                <button
+                  onClick={() => void generate()}
+                  disabled={busy || !text.trim()}
+                  className={`${primaryButton} flex-1`}
+                >
+                  <Sparkles className="size-3.5" />
+                  {busy ? <>{t("合成中…")} <Elapsed since={busySince} /></> : t("生成")}
+                </button>
+              </div>
+              <p className="mt-2 text-center text-[10px] text-ink-500">⌘ + Enter</p>
+            </div>
+          </div>
+        </SectionCard>
+      </div>
 
       <section className="space-y-3">
-        <h2 className="text-sm font-medium text-ink-300">{t("生成记录（本页保留最近 30 条，刷新即失）")}</h2>
-        {takes.length === 0 && <p className="text-sm text-ink-500">{t("还没有生成记录。")}</p>}
+        <div className="flex items-center gap-3">
+          <div>
+            <h2 className="text-[13px] font-medium text-ink-100">{t("生成记录")}</h2>
+            <p className="mt-0.5 text-[11px] text-ink-500">{t("本页保留最近 30 条，刷新即失")}</p>
+          </div>
+          <div className="flex-1" />
+          <StatusBadge>{takes.length}</StatusBadge>
+        </div>
+        {takes.length === 0 && (
+          <SectionCard className="flex min-h-44 flex-col items-center justify-center p-6 text-center">
+            <span className="flex size-10 items-center justify-center rounded-full bg-ink-800">
+              <FileAudio2 className="size-4.5 text-ink-500" />
+            </span>
+            <p className="mt-3 text-[13px] font-medium">{t("还没有生成记录。")}</p>
+            <p className="mt-1 text-[11px] text-ink-500">{t("生成的语音会出现在这里，便于试听和下载。")}</p>
+          </SectionCard>
+        )}
         {takes.map(take => (
-          <div key={take.id} className="rounded-xl border border-ink-700 bg-ink-900 p-4">
+          <SectionCard key={take.id} className="p-4">
             <div className="flex items-start gap-3">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-ink-800">
+                <FileAudio2 className="size-4 text-ink-500" />
+              </span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm">{take.text}</p>
                 <p className="mt-1 text-[11px] text-ink-500">
@@ -121,21 +182,23 @@ export function GeneratePanel() {
               <a
                 href={take.url}
                 download={`take-${new Date(take.at).toISOString().replace(/[:.]/g, "-")}.wav`}
-                className="shrink-0 rounded border border-ink-700 px-2 py-1 text-[11px] text-ink-300 hover:text-ink-100"
+                className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-ink-700 text-ink-500 hover:bg-ink-800 hover:text-ink-100"
+                title={t("下载")}
               >
-                {t("下载")}
+                <Download className="size-3.5" />
               </a>
               <button
                 onClick={() => removeTake(take.id)}
-                className="shrink-0 rounded border border-ink-700 px-2 py-1 text-[11px] text-ink-300 hover:text-red-300"
+                className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-ink-700 text-ink-500 hover:bg-red-50 hover:text-red-600"
+                title={t("删除")}
               >
-                {t("删除")}
+                <Trash2 className="size-3.5" />
               </button>
             </div>
             <audio controls src={take.url} className="mt-3 h-9 w-full" />
-          </div>
+          </SectionCard>
         ))}
       </section>
-    </div>
+    </PageShell>
   );
 }

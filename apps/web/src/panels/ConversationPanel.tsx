@@ -1,6 +1,19 @@
 import { useEffect, useRef, useState } from "react";
+import {
+  AudioLines,
+  CircleStop,
+  Gauge,
+  Headphones,
+  Mic,
+  MicOff,
+  Radio,
+  ShieldCheck,
+  Sparkles,
+  VolumeX,
+} from "lucide-react";
 import { VoicePicker } from "../components/VoicePicker";
 import { ConversationRoutePicker } from "../components/EngineRoutePicker";
+import { PageHeader, SectionCard, StatusBadge, primaryButton, secondaryButton } from "../components/StudioPage";
 import { conversationControls, startConversation, stopConversation } from "../conversation";
 import { useStudio, type TurnView } from "../store";
 import { useT, type MessageKey } from "../i18n";
@@ -194,29 +207,73 @@ function StartCard({ starting, onStart }: { starting: boolean; onStart: () => vo
   const voice = useStudio(state => state.voice);
   const voiceEngine = useStudio(state => state.voiceEngine);
   const setVoice = useStudio(state => state.setVoice);
+  const capabilities = [
+    { icon: Headphones, label: t("低延迟流式播放") },
+    { icon: VolumeX, label: t("开口即可打断回答") },
+    { icon: Gauge, label: t("逐轮耗时可观测") },
+    { icon: ShieldCheck, label: t("音频默认不留存") },
+  ];
 
   return (
-    <div className="mx-auto flex h-full max-w-sm flex-col items-center justify-center gap-6 px-6 text-center">
-      <button
-        onClick={onStart}
-        disabled={starting}
-        className="flex size-24 items-center justify-center rounded-full bg-accent-600 text-4xl shadow-lg shadow-accent-600/25 transition hover:bg-accent-500 active:scale-95 disabled:opacity-50"
-        aria-label={t("开始对话")}
-      >
-        {starting ? "…" : "🎙"}
-      </button>
-      <div className="text-base font-medium">{starting ? t("启动中…") : t("开始对话")}</div>
-      <div className="flex w-full flex-wrap items-center justify-center gap-3">
-        {/* One decision on the start card: the voice. Choosing one routes the session's
-            TTS to its owning engine — a clone voice moves onto the quality line. The ASR
-            language hint is fixed to auto (measured identical to zh on SenseVoice); the
-            protocol still carries it for engines that care. */}
-        <VoicePicker value={voice} engine={voiceEngine} onChange={setVoice} className="max-w-44" />
-        <ConversationRoutePicker />
+    <div className="grid min-h-full gap-5 py-1 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.6fr)]">
+      <SectionCard className="flex min-h-[430px] flex-col overflow-hidden">
+        <div className="flex items-center gap-2 border-b border-ink-700 px-5 py-3.5 text-[12px] text-ink-500">
+          <Radio className="size-3.5" />
+          {t("实时试用")}
+          <span className="ml-auto flex items-center gap-1.5">
+            <span className="size-1.5 rounded-full bg-emerald-500" />
+            {t("网关就绪")}
+          </span>
+        </div>
+        <div className="flex flex-1 flex-col items-center justify-center px-6 py-10 text-center">
+          <span className="relative flex size-20 items-center justify-center rounded-full border border-ink-700 bg-ink-950 shadow-sm">
+            <span className="absolute inset-2 rounded-full border border-ink-700/60" />
+            <AudioLines className="relative size-7 text-ink-100" strokeWidth={1.55} />
+          </span>
+          <h2 className="mt-6 text-xl font-semibold tracking-[-0.03em]">
+            {starting ? t("启动中…") : t("和你的语音助手实时对话")}
+          </h2>
+          <p className="mt-2 max-w-md text-[13px] leading-5 text-ink-500">
+            {t("全双工会话支持实时转写、自然打断和逐轮延迟观测。")}
+          </p>
+          <button onClick={onStart} disabled={starting} className={`${primaryButton} mt-7 min-w-40`} aria-label={t("开始对话")}>
+            {starting ? <Sparkles className="size-4 animate-pulse" /> : <Mic className="size-4" />}
+            {starting ? t("启动中…") : t("开始对话")}
+          </button>
+          <p className="mt-3 text-[10px] text-ink-500">{t("首次使用需要授权麦克风")}</p>
+        </div>
+      </SectionCard>
+
+      <div className="space-y-5">
+        <SectionCard className="overflow-hidden">
+          <div className="border-b border-ink-700 px-4 py-3.5">
+            <h3 className="text-[13px] font-medium">{t("会话设置")}</h3>
+            <p className="mt-0.5 text-[11px] text-ink-500">{t("开始前确认音色和运行路线")}</p>
+          </div>
+          <div className="space-y-4 p-4">
+            <label className="block">
+              <span className="mb-1.5 block text-[11px] font-medium text-ink-500">{t("音色")}</span>
+              <VoicePicker value={voice} engine={voiceEngine} onChange={setVoice} className="w-full" />
+            </label>
+            <div>
+              <span className="mb-1.5 block text-[11px] font-medium text-ink-500">{t("运行路线")}</span>
+              <ConversationRoutePicker />
+            </div>
+          </div>
+        </SectionCard>
+
+        <SectionCard className="p-4">
+          <h3 className="text-[12px] font-medium">{t("体验能力")}</h3>
+          <div className="mt-3 space-y-3">
+            {capabilities.map(item => (
+              <div key={item.label} className="flex items-center gap-2.5 text-[11px] text-ink-300">
+                <item.icon className="size-3.5 text-ink-500" strokeWidth={1.8} />
+                <span>{item.label}</span>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
       </div>
-      <p className="text-xs leading-relaxed text-ink-500">
-        {t("授权麦克风后进入全双工对话：断句、识别、回答全自动，回答播放时直接开口即可打断，停顿后续说会自动合并。")}
-      </p>
     </div>
   );
 }
@@ -276,51 +333,58 @@ export function ConversationPanel() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink-700 px-4 py-3 md:px-6">
-        <h1 className="text-base font-semibold">{t("对话")}</h1>
-        <span className={`rounded-full px-2.5 py-0.5 text-xs ${state.tone}`}>{t(state.text)}</span>
-        {active && <MicLevel />}
-        {/* The voice picker lives on the start card, so what it chose stays visible here. */}
-        {(active || turns.length > 0) && (
-          <span
-            className="max-w-48 truncate rounded-full border border-ink-700 px-2.5 py-0.5 text-xs text-ink-300"
-            title={t("本次对话的 TTS 音色")}
-          >
-            🎭 {voice ? `${voice}${voiceEngine ? ` · ${voiceEngine}` : ""}` : t("默认音色")}
-          </span>
-        )}
-        <div className="flex-1" />
-        {active && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => conversationControls()?.setMuted(!muted)}
-              className={`rounded-lg border px-3 py-1.5 text-sm ${
-                muted ? "border-amber-400 text-amber-300" : "border-ink-700 text-ink-300 hover:text-ink-100"
-              }`}
-              title={t("空格键切换")}
-            >
-              {muted ? t("已静音") : t("静音")}
-            </button>
-            <button
-              onClick={() => conversationControls()?.interruptPlayback()}
-              className="rounded-lg border border-ink-700 px-3 py-1.5 text-sm text-ink-300 hover:text-ink-100"
-              title={t("停止当前回答（也可以直接开口打断）")}
-            >
-              {t("停止回答")}
-            </button>
-            <button
-              onClick={() => void stopConversation()}
-              className="rounded-lg border border-red-400/50 px-3 py-1.5 text-sm text-red-300 hover:bg-red-500/10"
-            >
-              {t("结束")}
-            </button>
-          </div>
-        )}
+      <header>
+        <div className="mx-auto w-full max-w-[1276px] px-4 pt-8 sm:px-8 sm:pt-12 lg:px-12 lg:pt-14">
+          <PageHeader
+            title={t("实时对话")}
+            description={t("全双工会话支持实时转写、自然打断和逐轮延迟观测。")}
+            badge={<StatusBadge tone={active ? "success" : "neutral"}>{t(state.text)}</StatusBadge>}
+            actions={(
+              <>
+                {active && <MicLevel />}
+                {(active || turns.length > 0) && (
+                  <span
+                    className="max-w-48 truncate rounded-full border border-ink-700 px-3 py-1.5 text-xs text-ink-300"
+                    title={t("本次对话的 TTS 音色")}
+                  >
+                    🎭 {voice ? `${voice}${voiceEngine ? ` · ${voiceEngine}` : ""}` : t("默认音色")}
+                  </span>
+                )}
+                {active && (
+                  <>
+                    <button
+                      onClick={() => conversationControls()?.setMuted(!muted)}
+                      className={`${secondaryButton} ${muted ? "border-amber-300 bg-amber-50 text-amber-700" : ""}`}
+                      title={t("空格键切换")}
+                    >
+                      {muted ? <MicOff className="size-3.5" /> : <Mic className="size-3.5" />}
+                      <span className="hidden sm:inline">{muted ? t("已静音") : t("静音")}</span>
+                    </button>
+                    <button
+                      onClick={() => conversationControls()?.interruptPlayback()}
+                      className={secondaryButton}
+                      title={t("停止当前回答（也可以直接开口打断）")}
+                    >
+                      <CircleStop className="size-3.5" />
+                      <span className="hidden sm:inline">{t("停止回答")}</span>
+                    </button>
+                    <button
+                      onClick={() => void stopConversation()}
+                      className="inline-flex min-h-10 items-center gap-2 rounded-full border border-red-200 bg-red-50 px-4 text-[13px] font-medium text-red-700 hover:bg-red-100"
+                    >
+                      {t("结束")}
+                    </button>
+                  </>
+                )}
+              </>
+            )}
+          />
+        </div>
       </header>
 
-      <div ref={scroller} className="flex-1 overflow-y-auto px-4 py-5 md:px-6">
+      <div ref={scroller} className="flex-1 overflow-y-auto">
         {/* Same content width as every other tab, so switching tabs doesn't reflow the eye. */}
-        <div className="mx-auto h-full max-w-6xl space-y-5">
+        <div className="mx-auto h-full w-full max-w-[1276px] space-y-5 px-4 pb-16 pt-8 sm:px-8 lg:px-12">
           {!active && turns.length === 0 ? (
             <StartCard starting={starting} onStart={() => void start()} />
           ) : (
@@ -339,9 +403,10 @@ export function ConversationPanel() {
                   <button
                     onClick={() => void start()}
                     disabled={starting}
-                    className="rounded-full bg-accent-600 px-6 py-2.5 text-sm font-medium text-white shadow-lg shadow-accent-600/25 transition hover:bg-accent-500 active:scale-95 disabled:opacity-50"
+                    className={primaryButton}
                   >
-                    {starting ? t("启动中…") : `🎙 ${t("重新开始")}`}
+                    <Mic className="size-4" />
+                    {starting ? t("启动中…") : t("重新开始")}
                   </button>
                   <button onClick={clearHistory} className="text-xs text-ink-500 hover:text-ink-300">
                     {t("清空记录")}
@@ -353,8 +418,8 @@ export function ConversationPanel() {
         </div>
       </div>
 
-      <footer className="border-t border-ink-700 px-4 py-2 md:px-6">
-        <div className="flex items-center gap-4 overflow-hidden text-[11px] text-ink-500">
+      <footer className="border-t border-ink-700 bg-ink-900 py-2">
+        <div className="mx-auto flex w-full max-w-[1276px] items-center gap-4 overflow-hidden px-4 text-[10px] text-ink-500 sm:px-8 lg:px-12">
           {capability && (
             <span className="shrink-0">
               AEC {capability.echoCancellation === false ? "✗" : "✓"} · NS {capability.noiseSuppression === false ? "✗" : "✓"} · AGC{" "}

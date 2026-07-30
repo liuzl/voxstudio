@@ -1,4 +1,6 @@
+import { Archive, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { PageHeader, PageShell, SectionCard, StatusBadge, secondaryButton } from "../components/StudioPage";
 import {
   captureAudioUrl,
   correctCapture,
@@ -153,32 +155,42 @@ export function LibraryPanel() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 px-4 py-6 md:px-8 md:py-10">
-      <div className="flex items-center gap-3">
-        <h1 className="text-2xl font-semibold">{t("素材库")}</h1>
-        {enabled === true && (
-          <span className="text-xs text-ink-500">
-            {t("共 {n} 条", { n: total })}
-            {maxBytes !== null && ` · ${t("已用 {used} / {max}", { used: formatBytes(bytes), max: formatBytes(maxBytes) })}`}
-          </span>
+    <PageShell>
+      <PageHeader
+        title={t("素材库")}
+        description={t("管理对话中明确留存的录音、转写校正与音色参考样本。")}
+        badge={enabled === true ? <StatusBadge>{t("共 {n} 条", { n: total })}</StatusBadge> : undefined}
+        actions={(
+          <button onClick={() => void refresh()} className={secondaryButton}>
+            <RefreshCw className="size-3.5" />
+            {t("刷新")}
+          </button>
         )}
-        <div className="flex-1" />
-        <button
-          onClick={() => void refresh()}
-          className="rounded-lg border border-ink-700 px-3 py-1.5 text-xs text-ink-300 hover:text-ink-100"
-        >
-          {t("刷新")}
-        </button>
-      </div>
+      />
+
+      {enabled === true && maxBytes !== null && (
+        <div className="flex items-center gap-2 text-[11px] text-ink-500">
+          <Archive className="size-3.5" />
+          {t("已用 {used} / {max}", { used: formatBytes(bytes), max: formatBytes(maxBytes) })}
+          <div className="ml-2 h-1.5 w-28 overflow-hidden rounded-full bg-ink-700">
+            <div className="h-full rounded-full bg-ink-100" style={{ width: `${Math.min(100, maxBytes > 0 ? bytes / maxBytes * 100 : 0)}%` }} />
+          </div>
+        </div>
+      )}
 
       {enabled === false && (
-        <section className="rounded-xl border border-ink-700 bg-ink-900 p-5 text-sm leading-relaxed text-ink-300">
+        <SectionCard className="p-5 text-sm leading-relaxed text-ink-300">
           <p>{t("素材库未启用。以 --library 目录 启动网关（vox studio --library DIR）后，对话中的每句话会连同转写自动归档到这里——留存是显式的部署决定。")}</p>
-        </section>
+        </SectionCard>
       )}
 
       {enabled === true && captures.length === 0 && (
-        <p className="text-sm text-ink-500">{t("还没有素材。开始一段对话，你说的每句话会自动出现在这里。")}</p>
+        <SectionCard className="flex min-h-48 flex-col items-center justify-center p-6 text-center">
+          <span className="flex size-10 items-center justify-center rounded-full bg-ink-800">
+            <Archive className="size-4.5 text-ink-500" />
+          </span>
+          <p className="mt-3 max-w-sm text-[13px] text-ink-500">{t("还没有素材。开始一段对话，你说的每句话会自动出现在这里。")}</p>
+        </SectionCard>
       )}
 
       {captures.map(capture => {
@@ -186,7 +198,7 @@ export function LibraryPanel() {
         const promoting = promotingId === capture.id;
         const rowBusy = busy === capture.id;
         return (
-          <div key={capture.id} className="rounded-xl border border-ink-700 bg-ink-900 p-4">
+          <SectionCard key={capture.id} className="p-4">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-500">
               <span>{formatWhen(capture.createdAt)}</span>
               <span>{(capture.durationMs / 1_000).toFixed(1)}s</span>
@@ -312,7 +324,7 @@ export function LibraryPanel() {
                 </button>
               </div>
             )}
-          </div>
+          </SectionCard>
         );
       })}
 
@@ -324,6 +336,6 @@ export function LibraryPanel() {
           {t("加载更多（{n} 条未显示）", { n: total - captures.length })}
         </button>
       )}
-    </div>
+    </PageShell>
   );
 }

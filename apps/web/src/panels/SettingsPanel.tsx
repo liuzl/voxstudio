@@ -1,5 +1,7 @@
+import { RefreshCw, Settings2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AccountSection } from "./AccountSection";
+import { PageHeader, PageShell, StatusBadge } from "../components/StudioPage";
 import { listEngines, type EngineEntry } from "../lib/api";
 import { useStudio } from "../store";
 import { useI18n, useT, type Locale } from "../i18n";
@@ -190,18 +192,33 @@ export function SettingsPanel() {
   useEffect(probe, []);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 px-4 py-6 md:space-y-8 md:px-8 md:py-10">
-      <h1 className="text-2xl font-semibold">{t("设置")}</h1>
+    <PageShell>
+      <PageHeader
+        title={t("运行时与设置")}
+        description={t("查看运行状态、引擎能力，并管理对话与界面偏好。")}
+        badge={(
+          <StatusBadge tone={health !== undefined && health !== "unreachable" && health.ok ? "success" : "neutral"}>
+            {health === undefined ? t("探测中") : health === "unreachable" ? t("网关离线") : health.ok ? t("在线") : t("异常")}
+          </StatusBadge>
+        )}
+      />
 
       <section className="rounded-xl border border-ink-700 bg-ink-900 p-5">
         <div className="flex items-center gap-3">
-          <h2 className="text-sm font-medium text-ink-300">{t("网关")}</h2>
+          <span className="flex size-8 items-center justify-center rounded-lg bg-ink-800">
+            <Settings2 className="size-4 text-ink-500" />
+          </span>
+          <div>
+            <h2 className="text-[13px] font-medium text-ink-100">{t("网关")}</h2>
+            <p className="text-[10px] text-ink-500">{t("实时会话与 REST 门面")}</p>
+          </div>
           <div className="flex-1" />
           <button
             onClick={probe}
-            className="rounded-lg border border-ink-700 px-3 py-1 text-xs text-ink-300 hover:text-ink-100"
+            className="flex size-8 items-center justify-center rounded-lg border border-ink-700 text-ink-500 hover:bg-ink-800 hover:text-ink-100"
+            title={t("刷新")}
           >
-            {t("刷新")}
+            <RefreshCw className="size-3.5" />
           </button>
         </div>
         {health === undefined && <p className="mt-2 text-sm text-ink-500">{t("探测中…")}</p>}
@@ -281,6 +298,6 @@ export function SettingsPanel() {
           {t("VoxStudio Web —— 自托管多语言语音工作台。设计与分期见 docs/web-studio.md；实时会话契约见 docs/duplex-audio-architecture.md。")}
         </p>
       </section>
-    </div>
+    </PageShell>
   );
 }

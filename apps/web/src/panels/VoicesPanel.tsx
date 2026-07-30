@@ -1,5 +1,7 @@
 import { writeWav } from "@voxstudio/audio";
+import { AudioLines, Plus, Search, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { PageHeader, PageShell, StatusBadge, primaryButton, secondaryButton } from "../components/StudioPage";
 import {
   createDesignProfile,
   deleteVoice,
@@ -251,29 +253,37 @@ export function VoicesPanel() {
     .sort((a, b) => Number(categoryOf(b.id) === ownCategory) - Number(categoryOf(a.id) === ownCategory));
 
   return (
-    <div className="mx-auto max-w-6xl space-y-5 px-4 py-6 md:px-8 md:py-10">
-      <h1 className="text-2xl font-semibold">{t("音色")}</h1>
+    <PageShell compact>
+      <PageHeader
+        title={t("音色")}
+        description={t("浏览、试听和管理可用于实时对话与语音生成的音色。")}
+        badge={<StatusBadge>{voicesList.length}</StatusBadge>}
+        actions={(
+          <button onClick={() => setShowRegister(value => !value)} className={showRegister ? secondaryButton : primaryButton}>
+            <Plus className="size-3.5" />
+            {showRegister ? t("收起注册") : t("＋ 注册音色")}
+          </button>
+        )}
+      />
 
-      <section className="rounded-xl border border-ink-700 bg-ink-900 p-4 md:p-5">
+      <section className="rounded-xl border border-ink-700 bg-ink-900 p-4 shadow-[0_1px_2px_rgba(0,0,0,0.02)] md:p-5">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <h2 className="text-sm font-medium text-ink-300">
+          <div className="flex size-8 items-center justify-center rounded-lg bg-ink-800">
+            <AudioLines className="size-4 text-ink-500" />
+          </div>
+          <h2 className="text-[13px] font-medium text-ink-100">
             {t("音色库")} <span className="text-ink-500">{filtered.length}/{voicesList.length}</span>
           </h2>
           <div className="flex-1" />
-          <input
-            value={query}
-            onChange={event => setQuery(event.target.value)}
-            placeholder={t("搜索…")}
-            className="w-32 rounded border border-ink-700 bg-ink-800 px-2 py-1 text-xs text-ink-100 placeholder:text-ink-500"
-          />
-          <button
-            onClick={() => setShowRegister(value => !value)}
-            className={`rounded-lg border px-3 py-1 text-xs ${
-              showRegister ? "border-accent-500/60 text-accent-500" : "border-ink-700 text-ink-300 hover:text-ink-100"
-            }`}
-          >
-            {showRegister ? t("收起注册") : t("＋ 注册音色")}
-          </button>
+          <label className="flex h-8 w-full items-center gap-2 rounded-lg border border-ink-700 bg-ink-950 px-2.5 sm:w-48">
+            <Search className="size-3.5 shrink-0 text-ink-500" />
+            <input
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              placeholder={t("搜索…")}
+              className="min-w-0 flex-1 bg-transparent text-xs text-ink-100 placeholder:text-ink-500"
+            />
+          </label>
         </div>
         {categories.length > 1 && (
           <div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -300,7 +310,7 @@ export function VoicesPanel() {
             {filtered.map(voice => (
               <div
                 key={`${voice.engine}/${voice.id}`}
-                className="group flex items-center gap-1 rounded-lg border border-ink-700/60 bg-ink-800/60 px-2 py-1.5 text-xs"
+                className="group flex min-h-10 items-center gap-1 rounded-lg border border-ink-700/80 bg-ink-900 px-2.5 py-2 text-xs transition hover:border-[#d1d1ca] hover:bg-ink-950"
               >
                 <button
                   onClick={() => void audition(voice.id, voice.engine)}
@@ -449,8 +459,9 @@ export function VoicesPanel() {
             <button
               onClick={() => void register()}
               disabled={registering || recorder !== undefined}
-              className="rounded-lg bg-accent-600 px-4 py-2 text-sm font-medium text-white hover:bg-accent-500 disabled:opacity-40"
+              className={primaryButton}
             >
+              <Sparkles className="size-3.5" />
               {registering ? t("注册中…") : t("注册")}
             </button>
           </div>
@@ -467,7 +478,7 @@ export function VoicesPanel() {
         auditioning={auditioning}
         playing={playing}
       />
-    </div>
+    </PageShell>
   );
 }
 

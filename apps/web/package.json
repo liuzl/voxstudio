@@ -12,6 +12,7 @@
     "@voxstudio/audio": "workspace:*",
     "@voxstudio/realtime-gateway": "workspace:*",
     "@voxstudio/text": "workspace:*",
+    "lucide-react": "^1.28.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zustand": "^5.0.8"
