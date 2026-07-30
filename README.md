@@ -17,6 +17,7 @@ flowchart LR
   end
   GW["realtime-gateway<br/>WS /v1/realtime (native + OpenAI dialect)<br/>REST facade · credential hiding · engine routing"]
   CORE["core orchestration (packages/)<br/>conversation loop · duplex session<br/>chunking · voice profiles"]
+  AGENT["agent executor<br/>lifecycle + sandbox policy contracts landed<br/>isolated runner + gateway integration planned"]
   subgraph engines["engines"]
     ASR["ASR<br/>SenseVoice/FunASR — realtime slot<br/>parakeet.cpp · moss-transcribe (longform)"]
     TTS["TTS<br/>VoxCPM2 — quality: clone + design<br/>kokoro — fast lane · VoxCPM.cpp — fallback"]
@@ -27,6 +28,8 @@ flowchart LR
   OAI -->|"OpenAI Realtime wire"| GW
   MCP --> CORE
   APP -.-> CORE
+  CORE -.-> AGENT
+  AGENT -.->|"model + governed tools"| LLM
   CORE -->|"/v1/* contract"| ASR & TTS & LLM
 ```
 
@@ -38,22 +41,25 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 |---|---|
 | `engines/voxcpm2-server/` | Our TTS engine wrapper — FastAPI over OpenBMB VoxCPM2 |
 | `engines/voxcpm2-cpp/` | Deployment entry for the C++ voxcpm-server (liuzl/VoxCPM.cpp) — no-Python clone/long-form line, streamed first audio ~0.5s on Apple Silicon |
-| `engines/parakeet/` | Deployment and integration notes for the default real-time ASR engine |
+| `engines/parakeet/` | Deployment and integration notes for the CPU multilingual ASR alternative |
 | `engines/moss-transcribe/` | Evaluation notes for long-form ASR and speaker diarization |
 | `engines/funasr/` | Realtime-slot ASR server (SenseVoice-Small / Paraformer, OpenAI-compatible) |
 | `engines/kokoro/` | Local CPU TTS server — the conversation fast lane (fixed voice bank, ~0.2s first audio) |
 | `packages/` | Shared TypeScript contracts, clients, configuration, text, audio, and orchestration |
+| `packages/agent-executor/` | Vox-owned agent boundary, fake executor, tool runner, and invocation ledger; gateway integration is still planned |
 | `packages/duplex-session/` | Platform-neutral realtime turn state, cancellation, and events |
 | `packages/conversation/` | The shared conversation loop (VAD turns, barge-in policy, speculative turn-taking, streaming replies, typed tools with a spoken confirmation flow) behind `vox listen` and the gateway |
 | `packages/mcp/` | The MCP client bridge: configured servers' tools join the conversation with annotation-derived effects |
 | `platforms/bun/` | Filesystem, process, recording, and playback adapters for Bun apps |
+| `platforms/macos-audio/` | Native macOS capture/playback helper and the real-device AEC/NS/AGC measurement gate |
 | `apps/cli/` | Compiled TypeScript `vox` CLI |
 | `apps/realtime-gateway/` | Web Studio server: the duplex session protocol over WebSocket plus a credential-hiding REST facade |
 | `apps/web/` | The browser studio (React + Tailwind + Zustand): conversation, generation, voice bank + design profiles, captures library, and engine settings panels |
 | `apps/mcp/` | `vox-mcp` — voxstudio's voice and curation surface as an MCP server (speak / transcribe / generate / voice-bank management) for any agent |
-| `skills/` | Agent Skills playbooks — `voice-design` teaches any bash-capable harness the reproducible-experiment discipline over the `vox` CLI |
+| `skills/` | Agent Skills playbooks — reproducible voice design and discovery-first use of a hosted Vox API |
 | `tools/` | Measurement and calibration scripts (Python) — the constants in `packages/` stay re-derivable |
 | `docs/` | Product design docs |
+| `research/` | Research registry and, as common schemas land, reproducible protocols, experiment records, and reports |
 
 The product workspace uses Bun 1.3.14. Shared packages use Web APIs and remain independent
 of Bun; operating-system integration stays in `platforms/`. The measurement scripts in
@@ -144,11 +150,29 @@ phases — is specified in [docs/web-studio.md](./docs/web-studio.md).
 
 | Layer | Engine |
 |---|---|
-| ASR (realtime slot) | SenseVoice-Small via FunASR — Mandarin-first, zh/en code-switch; parakeet.cpp (`nemotron-3.5-asr-streaming-0.6b`) as the alternative |
+| ASR (realtime draft) | SenseVoice-Small via FunASR — Mandarin-first, zh/en code-switch |
+| ASR (optional final revision) | Qwen3-ASR-0.6B via audio.cpp — requested with `revise=true`, falling back to the SenseVoice draft |
+| ASR (CPU alternative) | parakeet.cpp with `nemotron-3.5-asr-streaming-0.6b` |
 | ASR (longform) | moss-transcribe — timestamps + anonymous per-recording speakers |
 | TTS (quality) | **VoxCPM2 PyTorch** (this repo) — 48kHz, 30 languages + 9 Chinese dialects, voice cloning + zero-shot voice design |
 | TTS (fast lane) | kokoro — local CPU, fixed voice bank, ~0.2s first audio |
-| LLM | Gemma (llama.cpp) |
+| LLM | Gemma 4 12B QAT via llama.cpp |
+
+## Research
+
+VoxStudio keeps research evidence separate from product claims. The
+[research taxonomy](./docs/research-taxonomy.md) defines the long-term domain
+map and cross-cutting evaluation lenses without mirroring today's packages.
+The categorized [research registry](./research/registry/) records subjects that
+received substantive investigation, their evidence level, disposition,
+summary, and durable supporting record. A project mention is not enough to
+enter the registry.
+
+Large generated audio, models, private transcripts, participant data,
+machine-specific logs, and deployment details remain outside Git. As common
+schemas are established, `research/` will also hold versioned protocols,
+approved dataset manifests, immutable experiment records, and cross-experiment
+reports.
 
 ## Status
 
@@ -156,6 +180,15 @@ The engine backend and compiled TypeScript CLI are verified end-to-end against l
 engines. Long-text synthesis streams, and named voices support file input, microphone
 recording, automatic ASR, and transcript editing. Native CI builds and executes the CLI on
 macOS arm64, Linux x64, and Windows x64.
+
+The agent executor boundary, lifecycle state model, invocation ledger, and
+sandbox/tool-broker policy contracts and validator have landed. A real isolated
+runner, the production pi dependency, and realtime gateway/session integration
+have not; the dashed agent node in the architecture diagram is planned work,
+not a shipped execution path. See
+[the voice-agent roadmap](./docs/voice-agent-roadmap.md),
+[agent lifecycle](./docs/agent-lifecycle.md), and
+[sandbox boundary](./docs/agent-execution-sandbox.md).
 
 The conversation does things, politely: a measured tool loop (voice-switch, speed,
 hang-up by voice — [docs/tool-loop.md](./docs/tool-loop.md)), external MCP tools behind a

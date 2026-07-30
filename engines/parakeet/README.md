@@ -6,12 +6,14 @@ of NVIDIA Parakeet speech-recognition models.
 
 ## Role in voxstudio
 
-Parakeet is voxstudio's default ASR engine for voice input and interactive workloads. It
-complements the long-form MOSS engine:
+Parakeet is voxstudio's CPU multilingual ASR alternative for voice input and
+interactive workloads. SenseVoice-Small currently owns the default realtime
+draft role, while Parakeet complements both that path and the long-form MOSS
+engine:
 
 | Profile | Engine | Intended workload |
 |---|---|---|
-| Real-time ASR | parakeet.cpp | Voice input, interactive conversation, short recordings |
+| CPU multilingual alternative | parakeet.cpp | Voice input, interactive conversation, short recordings |
 | Long-form ASR | moss-transcribe.cpp | Meetings, interviews, speaker diarization, subtitles |
 
 The configured model is `nvidia/nemotron-3.5-asr-streaming-0.6b`. It supports more than 40
@@ -65,10 +67,10 @@ Relevant upstream alternatives have different product boundaries:
 
 | Model | Languages | Mode | Suitable here? |
 |---|---|---|---|
-| `nemotron-3.5-asr-streaming-0.6b` | 40+ locales | Offline and streaming RNNT | Yes; default |
+| `nemotron-3.5-asr-streaming-0.6b` | 40+ locales | Offline and streaming RNNT | Yes; CPU multilingual alternative |
 | `parakeet_realtime_eou_120m-v1` | English | Streaming RNNT with EOU detection | English-only specialized option |
 | `parakeet-tdt-0.6b-v3` | 25 European languages | Offline TDT | No Mandarin |
-| Other Parakeet CTC/RNNT/TDT checkpoints | Primarily English | Offline | Not the multilingual default |
+| Other Parakeet CTC/RNNT/TDT checkpoints | Primarily English | Offline | Not suitable for the Mandarin requirement |
 
 GGUF builds are published in the
 [`mudler/parakeet-cpp-gguf`](https://huggingface.co/mudler/parakeet-cpp-gguf)
