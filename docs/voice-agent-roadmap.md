@@ -360,7 +360,12 @@ The 2026-07-29 audio.cpp evaluation produced these decisions:
   FunASR adapter forwards `revise=true` and falls back to SenseVoice.
 - **No TTS engine change**: audio.cpp VoxCPM2 measured RTF 1.46 and Qwen3-TTS
   1.18 versus VoxStudio’s 0.41–0.63. The Metal conv-transpose occupancy fix was
-  contributed upstream as 0xShug0/audio.cpp#149.
+  contributed upstream as 0xShug0/audio.cpp#149 (merged 2026-07-29; maintainer
+  measured exact WAV parity and 49–61% end-to-end reduction across VoxCPM2
+  paths). Post-merge retest 2026-07-31 on yutu (upstream `f32876c`,
+  voxcpm2-q8_0, offline voice-design): RTF 0.79–0.84 — AudioVAE decode is now
+  ~0.10 RTF and the AR generator (~0.69 RTF) dominates, so the 0.7 re-eval
+  trigger was not met and this decision stands.
 - **Mandarin streaming ASR remains open**: Nemotron measured about 6% CER and
   missed domain terms; Voxtral substituted, truncated, and omitted
   punctuation. Neither clears the speculative-turn-taking bar.
@@ -382,7 +387,9 @@ Mandarin streaming path.
 Re-evaluate when:
 
 - audio.cpp or another engine gains production-quality Mandarin streaming ASR;
-- audio.cpp VoxCPM2 on Metal drops below RTF 0.7 after the occupancy fix;
+- audio.cpp VoxCPM2 on Metal drops below RTF 0.7 (retested 2026-07-31 after
+  the merged occupancy fix: 0.79–0.84, not triggered; the remaining gap is in
+  the AR generator, so only a generator-side speedup would re-open this);
 - a voiceprint sidecar is justified by a concrete cross-session identity
   product requirement.
 
