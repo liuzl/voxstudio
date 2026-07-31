@@ -28,6 +28,25 @@ describe("transcribe command", () => {
     expect(JSON.parse(captured.out[0] as string)).toEqual({ text: "你好", lang: "zh" });
   });
 
+  test("--revise forwards the flag and keeps text output", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "vox-transcribe-"));
+    const path = join(dir, "term.wav");
+    await writeFile(path, "wav bytes");
+    const fetch: Fetch = async (_input, init) => {
+      expect((init?.body as FormData).get("revise")).toBe("true");
+      return Response.json({ text: "机器学习中的过拟合", engine: "revise" });
+    };
+    const captured = output();
+    await runTranscribe([path, "--revise"], parseConfig(), captured.io, fetch);
+    expect(captured.out[0]).toBe("机器学习中的过拟合");
+  });
+
+  test("--revise rejects longform mode", async () => {
+    const fetch: Fetch = async () => { throw new Error("must not fetch"); };
+    await expect(runTranscribe(["a.wav", "--mode", "longform", "--revise"], parseConfig(), output().io, fetch))
+      .rejects.toThrow("--revise requires --mode realtime");
+  });
+
   test("rejects missing files before the request", async () => {
     const fetch: Fetch = async () => { throw new Error("must not fetch"); };
     await expect(runTranscribe(["missing.wav"], parseConfig(), output().io, fetch))

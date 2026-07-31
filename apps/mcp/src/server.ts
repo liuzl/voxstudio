@@ -94,9 +94,10 @@ export function createAgentVoiceServer(config: VoxConfig, options: AgentVoiceOpt
     inputSchema: {
       path: z.string().describe("音频文件的本地路径（wav 等）"),
       language: z.string().optional().describe("识别语言提示，如 zh、en；缺省自动"),
+      revise: z.boolean().optional().describe("走精修档（更准但慢约半秒），不可用时静默回落草稿引擎"),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ path, language }) => {
+  }, async ({ path, language, revise }) => {
     const file = Bun.file(path);
     if (!await file.exists()) return refuse(`文件不存在：${path}`);
     try {
@@ -105,9 +106,14 @@ export function createAgentVoiceServer(config: VoxConfig, options: AgentVoiceOpt
         new File([await file.arrayBuffer()], basename(path)),
         basename(path),
         language ?? "auto",
+        revise ? { revise: true } : {},
       );
-      log(`transcribe: ${basename(path)} -> ${result.text.length} chars`);
-      return ok({ text: result.text, ...(result.lang === null ? {} : { lang: result.lang }) });
+      log(`transcribe: ${basename(path)} -> ${result.text.length} chars${result.engine ? ` (${result.engine})` : ""}`);
+      return ok({
+        text: result.text,
+        ...(result.lang === null ? {} : { lang: result.lang }),
+        ...(result.engine === undefined ? {} : { engine: result.engine }),
+      });
     } catch (error) {
       return refuse(`转写失败：${error instanceof Error ? error.message : String(error)}`);
     }

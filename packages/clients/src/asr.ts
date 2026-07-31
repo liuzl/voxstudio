@@ -26,6 +26,7 @@ export class AsrClient extends EngineClient {
     if (options.maxNewTokens !== undefined) {
       form.set("max_new_tokens", String(options.maxNewTokens));
     }
+    if (options.revise) form.set("revise", "true");
     form.set("file", audio, filename);
     const response = await this.request("/v1/audio/transcriptions", {
       method: "POST",
@@ -42,10 +43,12 @@ export class AsrClient extends EngineClient {
     const record = payload as Record<string, unknown>;
     const segments = parseSegments(record.segments);
     const duration = typeof record.duration === "number" ? record.duration : undefined;
+    const engine = typeof record.engine === "string" && record.engine ? record.engine : undefined;
     return {
       ...transcription,
       ...(duration === undefined ? {} : { duration }),
       ...(segments === undefined ? {} : { segments }),
+      ...(engine === undefined ? {} : { engine }),
     };
   }
 }

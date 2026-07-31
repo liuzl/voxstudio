@@ -83,6 +83,8 @@ export interface Transcription {
   lang: string | null;
   duration?: number;
   segments?: TranscriptionSegment[];
+  /** Which engine answered when the adapter reports it — "revise" means the accuracy tier, not the draft. */
+  engine?: string;
 }
 
 export interface TranscriptionSegment {
@@ -96,6 +98,8 @@ export interface TranscriptionSegment {
 export interface TranscriptionOptions {
   responseFormat?: "json" | "verbose_json";
   maxNewTokens?: number;
+  /** Route through the adapter's accuracy tier (funasr → Qwen3-ASR); silently falls back to the draft engine. */
+  revise?: boolean;
 }
 
 export interface SpeechRequest {

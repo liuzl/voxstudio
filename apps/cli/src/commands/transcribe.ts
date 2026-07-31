@@ -6,8 +6,11 @@ import type { CliIo } from "../io";
 
 export const transcribeUsage = `usage: vox transcribe AUDIO [--language LANGUAGE] [--mode {realtime,longform}]
                       [--format {text,json,srt,ass} | --json] [--max-new-tokens N]
+                      [--revise]
 
-Transcribe an audio file. Subtitle formats require --mode longform.`;
+Transcribe an audio file. Subtitle formats require --mode longform.
+--revise routes through the accuracy tier (slower, better on domain terms);
+it falls back to the draft engine silently and requires --mode realtime.`;
 
 interface TranscribeArgs {
   audio: string;
@@ -15,6 +18,7 @@ interface TranscribeArgs {
   format: "text" | "json" | "srt" | "ass";
   mode: "realtime" | "longform";
   maxNewTokens?: number;
+  revise: boolean;
 }
 
 function srtTime(seconds: number): string {
@@ -71,6 +75,7 @@ function parse(args: string[]): TranscribeArgs {
   let format: "text" | "json" | "srt" | "ass" = "text";
   let mode: "realtime" | "longform" = "realtime";
   let maxNewTokens: number | undefined;
+  let revise = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
     if (arg === "--language") {
@@ -92,6 +97,8 @@ function parse(args: string[]): TranscribeArgs {
         throw new TypeError("transcribe: --mode must be realtime or longform");
       }
       mode = value;
+    } else if (arg === "--revise") {
+      revise = true;
     } else if (arg === "--max-new-tokens") {
       const value = Number(args[++index]);
       if (!Number.isInteger(value) || value <= 0) {
@@ -113,12 +120,16 @@ function parse(args: string[]): TranscribeArgs {
   if (maxNewTokens !== undefined && mode !== "longform") {
     throw new TypeError("transcribe: --max-new-tokens requires --mode longform");
   }
+  if (revise && mode !== "realtime") {
+    throw new TypeError("transcribe: --revise requires --mode realtime");
+  }
   return {
     audio,
     language,
     format,
     mode,
     ...(maxNewTokens === undefined ? {} : { maxNewTokens }),
+    revise,
   };
 }
 
@@ -139,6 +150,7 @@ export async function runTranscribe(
     {
       responseFormat: options.mode === "longform" ? "verbose_json" : "json",
       ...(options.maxNewTokens === undefined ? {} : { maxNewTokens: options.maxNewTokens }),
+      ...(options.revise ? { revise: true } : {}),
     },
   );
   if (options.format === "json") io.out(JSON.stringify(result));

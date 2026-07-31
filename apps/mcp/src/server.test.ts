@@ -141,6 +141,34 @@ describe("agent voice server", () => {
     await client.close();
   });
 
+  test("transcribe forwards revise and surfaces the answering engine", async () => {
+    let heardRevise: unknown;
+    const client = await connect({
+      fetch: engineFetch({
+        "/v1/audio/transcriptions": async request => {
+          heardRevise = (await request.formData()).get("revise");
+          return Response.json({ text: "机器学习中的过拟合", engine: "revise" });
+        },
+      }),
+    });
+    const { tools } = await client.listTools();
+    const transcribe = tools.find(tool => tool.name === "transcribe");
+    expect(transcribe?.inputSchema).toMatchObject({ type: "object", required: ["path"] });
+    expect((transcribe?.inputSchema as { required?: string[] }).required).not.toContain("revise");
+
+    const path = `${process.env.TMPDIR ?? "/tmp"}/agent-voice-revise-${Date.now()}.wav`;
+    await Bun.write(path, writeWav(new Float32Array(16_000).fill(0.1), 16_000));
+    const revised = await client.callTool({ name: "transcribe", arguments: { path, revise: true } });
+    expect(payload(revised)).toMatchObject({ text: "机器学习中的过拟合", engine: "revise" });
+    expect(heardRevise).toBe("true");
+
+    heardRevise = undefined;
+    const draft = await client.callTool({ name: "transcribe", arguments: { path } });
+    expect(payload(draft)).toMatchObject({ text: "机器学习中的过拟合" });
+    expect(heardRevise).toBeNull();
+    await client.close();
+  });
+
   test("failures are structured refusals and the server keeps answering", async () => {
     const client = await connect({
       fetch: engineFetch({

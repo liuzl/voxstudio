@@ -57,6 +57,29 @@ describe("engine HTTP clients", () => {
     });
   });
 
+  test("ASR forwards the revise flag and surfaces the answering engine", async () => {
+    const fetch: Fetch = async (_input, init) => {
+      const form = init?.body as FormData;
+      expect(form.get("revise")).toBe("true");
+      return json({ text: "机器学习中的过拟合", engine: "revise" });
+    };
+    const client = new AsrClient({ baseUrl: "https://voice.example", model: "sensevoice" }, fetch);
+
+    await expect(client.transcribe(new Blob(["wav"]), "sample.wav", "zh", { revise: true }))
+      .resolves.toEqual({ text: "机器学习中的过拟合", lang: null, engine: "revise" });
+  });
+
+  test("ASR omits the revise field unless requested", async () => {
+    const fetch: Fetch = async (_input, init) => {
+      expect((init?.body as FormData).get("revise")).toBeNull();
+      return json({ text: "draft" });
+    };
+    const client = new AsrClient({ baseUrl: "https://voice.example", model: "sensevoice" }, fetch);
+
+    await expect(client.transcribe(new Blob(["wav"]), "sample.wav"))
+      .resolves.toEqual({ text: "draft", lang: null });
+  });
+
   test("LLM preserves wire names and authorization", async () => {
     const fetch: Fetch = async (_input, init) => {
       const headers = new Headers(init?.headers);
