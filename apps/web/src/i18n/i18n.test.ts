@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "fs";
 import { join } from "path";
 import { en, type MessageKey } from "./en";
-import { allCatalogs, resolveLocale, t } from "./index";
+import { allCatalogs, resolveLocale, t, useI18n, type Locale } from "./index";
 
 const keys = Object.keys(en) as MessageKey[];
 
@@ -56,7 +56,14 @@ describe("i18n catalogs", () => {
   });
 
   test("t() falls back to English for unresolvable locales and formats params", () => {
-    expect(resolveLocale("en")).toBe("en");
-    expect(t("共 {n} 条", { n: 3 })).toContain("3");
+    const previous = useI18n.getState().locale;
+    try {
+      const invalid = "xx" as Locale;
+      expect(resolveLocale(invalid)).toBe("en");
+      useI18n.setState({ locale: invalid });
+      expect(t("共 {n} 条", { n: 3 })).toBe("3 total");
+    } finally {
+      useI18n.setState({ locale: previous });
+    }
   });
 });

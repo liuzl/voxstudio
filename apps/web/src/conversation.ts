@@ -122,7 +122,7 @@ export class ConversationController {
             store.addTake({
               id: crypto.randomUUID(),
               text: event.text,
-              voice: `${event.voice ?? ""} (对话)`.trim(),
+              voice: `${event.voice ?? ""} (${t("对话")})`.trim(),
               at: Date.now(),
               url,
             });

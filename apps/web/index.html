@@ -6,11 +6,18 @@
     <title>VoxStudio</title>
     <script>
       // Pre-paint theme: src/theme.ts owns it once the app boots; this only avoids a flash.
-      var voxTheme = localStorage.getItem("voxstudio.theme");
+      var voxTheme;
+      try {
+        voxTheme = localStorage.getItem("voxstudio.theme");
+      } catch {
+        // Sandboxed/private contexts may expose localStorage but deny access to it.
+      }
+      var voxSystemDark =
+        typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches;
       document.documentElement.dataset.theme =
         voxTheme === "light" || voxTheme === "dark"
           ? voxTheme
-          : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          : voxSystemDark ? "dark" : "light";
     </script>
   </head>
   <body>

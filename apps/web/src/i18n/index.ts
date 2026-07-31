@@ -61,7 +61,10 @@ function detect(): UiLocale {
 }
 
 export function resolveLocale(locale: Locale): UiLocale {
-  return locale === "auto" ? detect() : locale;
+  if (locale === "auto") return detect();
+  // Keep the runtime boundary defensive too: JavaScript callers, stale persisted
+  // state, and test seams are not constrained by the Locale TypeScript union.
+  return isUiLocale(locale) ? locale : "en";
 }
 
 const storedLocale = (): Locale => {
@@ -99,8 +102,8 @@ function format(template: string, params?: Record<string, string | number>): str
 /** Translate a message; usable outside React (reads the store imperatively). */
 export function t(key: MessageKey, params?: Record<string, string | number>): string {
   const locale = resolveLocale(useI18n.getState().locale);
-  // The ?? chain is defense in depth; the Record types make it unreachable.
-  const text = locale === "zh" ? key : (catalogs[locale][key] ?? en[key] ?? key);
+  // Optional chaining is runtime defense in depth; the Record types cover typed callers.
+  const text = locale === "zh" ? key : (catalogs[locale]?.[key] ?? en[key] ?? key);
   return format(text, params);
 }
 
