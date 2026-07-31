@@ -567,6 +567,11 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
                     language: { type: "string", description: "`auto` unless you know better." },
                     response_format: { type: "string", default: "json" },
                     max_new_tokens: { type: "integer" },
+                    revise: {
+                      type: "string",
+                      enum: ["true"],
+                      description: "Route through the ASR accuracy tier (slower; silently falls back to the draft engine). The response's `engine` field reports which tier answered.",
+                    },
                   },
                   required: ["file"],
                 },
@@ -576,7 +581,18 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
           responses: {
             "200": {
               description: "The transcript.",
-              content: { "application/json": { schema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] } } },
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      text: { type: "string" },
+                      engine: { type: "string", description: "Which engine answered when the adapter reports it — `revise` means the accuracy tier." },
+                    },
+                    required: ["text"],
+                  },
+                },
+              },
             },
             "401": errorResponse("Missing or invalid key."),
             "429": quota429,

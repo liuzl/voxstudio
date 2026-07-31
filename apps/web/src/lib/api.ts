@@ -122,11 +122,13 @@ export async function deleteVoice(id: string, engine?: string): Promise<void> {
   if (!response.ok) await fail(response, "删除音色");
 }
 
-/** Transcribe a recording through the facade — prefills the reference transcript. */
-export async function transcribe(audio: File, language = "auto"): Promise<string> {
+/** Transcribe a recording through the facade — prefills the reference transcript.
+ * `revise` routes through the ASR accuracy tier (slower; silently falls back to the draft engine). */
+export async function transcribe(audio: File, language = "auto", revise = false): Promise<string> {
   const form = new FormData();
   form.set("model", "default");
   form.set("language", language);
+  if (revise) form.set("revise", "true");
   form.set("file", audio);
   const response = await fetch("/v1/audio/transcriptions", { method: "POST", body: form });
   if (!response.ok) await fail(response, "识别");

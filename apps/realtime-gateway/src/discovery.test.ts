@@ -250,7 +250,9 @@ describe("openapi document", () => {
     };
     const form = transcribe.requestBody.content["multipart/form-data"]?.schema;
     expect(form?.required).toEqual(["file"]);
-    expect(Object.keys(form?.properties ?? {})).toContain("language");
+    for (const field of ["language", "revise"]) {
+      expect(Object.keys(form?.properties ?? {})).toContain(field);
+    }
 
     // Voice registration is multipart id/text/audio, and the id pattern is the engine's.
     const register = document.paths["/v1/voices"]?.post as {

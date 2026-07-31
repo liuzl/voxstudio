@@ -116,7 +116,7 @@ export function LibraryPanel() {
     setBusy(capture.id);
     try {
       const audio = await (await fetch(captureAudioUrl(capture.id))).blob();
-      const text = await transcribe(new File([audio], `${capture.id}.wav`, { type: "audio/wav" }));
+      const text = await transcribe(new File([audio], `${capture.id}.wav`, { type: "audio/wav" }), "auto", true);
       setPromotingId("");
       setEditingId(capture.id);
       setDraft(text);

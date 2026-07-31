@@ -195,7 +195,8 @@ export function VoicesPanel() {
     }
     setTranscribing(true);
     try {
-      const text = await transcribe(file, "zh");
+      // The reference transcript travels with the voice forever — accuracy over speed.
+      const text = await transcribe(file, "zh", true);
       if (!text) toast("error", t("ASR 没有识别出内容；请人工填写逐字稿。"));
       setNewText(text);
     } catch (error) {
