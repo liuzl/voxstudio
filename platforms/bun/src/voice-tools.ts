@@ -87,6 +87,18 @@ export function parseAvfoundationAudioDevices(output: string): AudioInputDevice[
   return devices;
 }
 
+export function parseDshowAudioDevices(output: string): AudioInputDevice[] {
+  const devices: AudioInputDevice[] = [];
+  for (const line of output.split(/\r?\n/)) {
+    // FFmpeg 8 prefixes DirectShow enumeration with [in#0 ...]; older
+    // releases used [dshow ...]. This parser only receives output from the
+    // explicit `-f dshow -list_devices true` command below.
+    const match = /^\[[^\]]+]\s+"(.+)"\s+\(audio\)\s*$/.exec(line);
+    if (match?.[1]) devices.push({ id: match[1], name: match[1] });
+  }
+  return devices;
+}
+
 export async function listInputDevices(system: HostSystem = hostSystem()): Promise<AudioInputDevice[]> {
   if (system === "Linux") {
     const pactl = Bun.which("pactl");
@@ -118,12 +130,7 @@ export async function listInputDevices(system: HostSystem = hostSystem()): Promi
   const [, output, error] = await Promise.all([child.exited, new Response(stdout).text(), new Response(stderr).text()]);
   const text = `${output}\n${error}`;
   if (system === "Darwin") return parseAvfoundationAudioDevices(text);
-  const devices: AudioInputDevice[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    const match = /\[dshow[^]]*]\s+"(.+)"\s+\(audio\)/.exec(line);
-    if (match?.[1]) devices.push({ id: match[1], name: match[1] });
-  }
-  return devices;
+  return parseDshowAudioDevices(text);
 }
 
 export function decodePcm16le(bytes: Uint8Array): Float32Array {

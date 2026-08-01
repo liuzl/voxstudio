@@ -4,6 +4,7 @@ import {
   decodePcm16le,
   hasAudibleAudio,
   parseAvfoundationAudioDevices,
+  parseDshowAudioDevices,
   recordCommand,
   splitCommand,
 } from "./voice-tools";
@@ -51,6 +52,19 @@ describe("voice platform tools", () => {
 `)).toEqual([
       { id: "0", name: "Teams Audio" },
       { id: "1", name: "MacBook Pro Microphone" },
+    ]);
+  });
+
+  test("parses DirectShow audio devices across FFmpeg log prefixes", () => {
+    expect(parseDshowAudioDevices(`
+[dshow @ 000001] "Legacy Camera" (video)
+[dshow @ 000001] "Legacy Microphone" (audio)
+[in#0 @ 000002] "Current Microphone" (audio)
+[in#0 @ 000002]   Alternative name "@device_cm_{example}"
+Error opening input file dummy.
+`)).toEqual([
+      { id: "Legacy Microphone", name: "Legacy Microphone" },
+      { id: "Current Microphone", name: "Current Microphone" },
     ]);
   });
 
