@@ -1,9 +1,10 @@
 # Web Studio
 
 Status: Accepted, 2026-07-14; living delivery record. The realtime gateway,
-five core panels, single-binary packaging, hosted authentication, and explicit
-engine-route selection are delivered. The real-browser double-talk gate and
-production hosting operations remain.
+five original functional panels, single-binary packaging, hosted authentication,
+and explicit engine-route selection are delivered. A visual Agents list now
+exists, but its registry-backed Builder remains proposed. The real-browser
+double-talk gate and production hosting operations remain.
 
 ## Scope
 
@@ -19,18 +20,26 @@ studio of this kind: a generation panel, voice-profile management, a captures li
 pairing audio with transcripts, and a settings surface. Its own documentation states it
 has no bidirectional conversation — generation is batch with async queues. That gap is
 this product's centerpiece: the measured conversation loop (sub-2s reply, certified
-barge-in, conversation memory) becomes the first tab rather than a missing feature.
+barge-in, conversation memory) becomes a headline capability rather than a missing
+feature.
 
 Where the lineage and this design diverge, the reasons are recorded in the decisions
 below rather than relitigated per feature.
 
 ## Decisions
 
-1. **Live conversation is the headline tab.** The studio opens on it. It renders the
-   duplex session — captions, turn states, barge-in and reopen events, per-turn timing —
-   over the realtime gateway specified in
+1. **Live conversation is the headline capability; Agents is the Studio home.**
+   The authenticated Studio opens on its saved Agents because configuration and
+   Try it live are now the primary workflow. The standalone Conversation panel
+   remains the unscoped diagnostic workspace. It renders the duplex session —
+   captions, turn states, barge-in and reopen events, per-turn timing — over the
+   realtime gateway specified in
    [duplex-audio-architecture.md](./duplex-audio-architecture.md); this document does not
    redefine that contract.
+   The durable console route is `/studio/agents`. Until the future public Portal
+   ships, `/` redirects there. Later, hosted `/` may become the public Portal while
+   Better Auth gates only `/studio/*`; self-hosted operation continues to bypass
+   the account card.
 2. **Web-first, no desktop shell.** Capabilities that require system integration — global
    hotkey dictation, focus-follows push-to-talk — are physically unavailable to a browser
    and belong to the CLI (which already has them) or a future menubar companion. They are
@@ -72,21 +81,26 @@ below rather than relitigated per feature.
 
 ## Panels
 
-1. **对话 Conversation** — live duplex session: mic capture with negotiated AEC (browser
+1. **Agents** — saved voice-agent list and the configuration, speech,
+   deployment, conversations, statistics, draft/publish, and Try-it-live
+   workflow specified in [agent-builder-ui.md](./agent-builder-ui.md). This
+   panel is proposed; the current visual list is not yet backed by the Agent
+   registry.
+2. **对话 Conversation** — live duplex session: mic capture with negotiated AEC (browser
    constraints verified per the duplex doc), agent audio playback, streaming captions,
    visible turn/barge-in/reopen state, per-turn latency readout (the `turn.timing`
    event), push-to-talk and mute as first-class controls, plus an optional named
    ASR/LLM/TTS route picker that defaults to automatic routing.
-2. **生成 Generate** — text in, audio out: voice/profile and named-TTS pickers,
+3. **生成 Generate** — text in, audio out: voice/profile and named-TTS pickers,
    chunking preview for long text, bounded in-browser takes history, effect
    chain slot (v2).
-3. **音色 Voices** — registered voices and design profiles with fingerprint badges,
+4. **音色 Voices** — registered voices and design profiles with fingerprint badges,
    audit status against the running engine, and create/verify/audition flows
    corresponding to the relevant CLI operations.
-4. **素材库 Library** — the captures surface: every recording/utterance with its
+5. **素材库 Library** — the captures surface: every recording/utterance with its
    transcript, re-transcribe, inline correction (feeding the ASR reference workflow),
    promote-to-voice-sample.
-5. **设置 Settings** — the complete named-instance registry with health, roles,
+6. **设置 Settings** — the complete named-instance registry with health, roles,
    capabilities, model identities and manifests; gateway status and MCP bindings (v2).
 
 ## Delivery phases
@@ -103,8 +117,10 @@ below rather than relitigated per feature.
 2. **Conversation panel**: browser endpoint with `getUserMedia` AEC. Gate: the duplex
    doc's browser quality measurements (negotiated-capability snapshot, double-talk and
    barge-in behavior on a real browser/route) — the same discipline as the macOS gate.
-   **Implemented 2026-07-15, gate pending.** `apps/web` (React + Tailwind + Zustand)
-   ships the studio shell with 对话 as the opening tab: AudioWorklet microphone capture
+   **Implemented 2026-07-15, gate pending.** At that delivery point, `apps/web`
+   (React + Tailwind + Zustand) shipped 对话 as the opening tab; Agents became the
+   shell's current home in the later UI work recorded above. The panel provides
+   AudioWorklet microphone capture
    resampled to the protocol's 16kHz frames, gapless streamed playback, live captions
    with turn/reopen/false-barge-in state and per-turn timing chips, mute and manual
    stop, and the negotiated AEC/NS/AGC snapshot surfaced in 对话 and 设置. The endpoint

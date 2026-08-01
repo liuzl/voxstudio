@@ -83,6 +83,28 @@ the 07-17 survey:
   first-class config; agents have a draft → Try-it-live → Publish lifecycle
   and five persona templates.
 
+### Re-survey 2026-08-01 — Agent Builder and responsive preview
+
+The authenticated Agent detail page now presents five stable sections rather
+than the four observed on 07-17: Configuration, Speech, Deployment,
+Conversations, and **Statistics**. Statistics covers live calls, conversation
+volume, minutes, cost, tool calls, p50 duration, p50 time to first audio, error
+rate, and transfer rate, with an honest empty state when the selected window has
+no data.
+
+Try it live is a persistent right-side drawer on desktop and a full-screen
+surface on mobile. It preserves builder context while providing transcript,
+text input, microphone/talk/stop controls, reset, voice settings, and response
+feedback. The Agent header keeps identity, publish state, last-published time,
+Try it live, and Publish visible across all sections. Dependency failures such
+as an unauthenticated connector appear as an actionable page-level alert.
+
+The management hierarchy is worth borrowing, while the preview's mostly blank
+conversation body can be improved with a stronger stateful voice presentation.
+The resulting Vox-specific requirements, including StreamCore-inspired visual
+reuse for preview and a future Portal homepage, are recorded in
+[agent-builder-ui.md](./agent-builder-ui.md).
+
 ## OpenAI: GPT-Live + the unified ChatGPT desktop — surveyed 2026-07-24
 
 Two launches in one week reshaped the reference landscape:

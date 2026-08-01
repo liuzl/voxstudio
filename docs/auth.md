@@ -1,6 +1,6 @@
 # Authentication and identity
 
-Status: living. Accepted 2026-07-26; last revised 2026-07-27.
+Status: living. Accepted 2026-07-26; last revised 2026-08-01.
 
 ## Scope
 
@@ -23,9 +23,10 @@ arrive. The hosted product owns its identity; OIDC/SSO demotes to a future plugi
 
 ## Current state
 
-Everything described under "How it works" is implemented and tested. What remains before
-voxstudio.cc can open is mostly configuration — with two exceptions, marked, that are
-unbuilt work rather than a value someone has to supply:
+Everything described under "How it works" is implemented and tested except the
+passages explicitly marked as the proposed Agent registry integration. What remains
+before voxstudio.cc can open is mostly configuration — with two exceptions, marked,
+that are unbuilt work rather than a value someone has to supply:
 
 | Blocking launch | What it needs |
 |---|---|
@@ -117,9 +118,11 @@ same voices and library as its owner.
 
 Four properties, each testable:
 
-1. **An agent is not an account type.** It is a caller holding one of a user's keys.
-   Ownership and quota land on that userId — audit does not exist yet, see below. No
-   agent registry, no agent OAuth.
+1. **An agent is not an account type.** A machine caller is software holding one
+   of a user's keys. A saved Voice Agent introduced by the Agent Builder is a
+   product resource owned by that same user. Neither receives a Better Auth user,
+   OAuth flow, independent quota, or ambient browser authority. Ownership and
+   quota land on the resolved userId.
 2. **One door.** The machine surface *is* the existing OpenAI-compatible `/v1` contract
    plus the realtime WebSocket — no separate "agent API".
 3. **A pasted key is enough.** `vox --server …` with `VOX_API_KEY`. Judging that copying
@@ -164,7 +167,8 @@ moment to design one deliberately rather than accrete it.
 ### Ownership
 
 Ownership landed *before* login, because accounts are meaningless while everyone shares one
-resource pool. Three resources, three mechanisms:
+resource pool. The delivered resources use three mechanisms, and the proposed Agent
+registry adds a fourth behind the same identity seam:
 
 ```text
 captures     owner_user_id column; every /v1/library route filters by it.
@@ -174,11 +178,30 @@ voices       No new store. The gateway maps a display name to an engine-side id,
              ends silent same-name overwrites: it is a per-user namespace.
 sessions     Each records its owner; attach verifies it, so reconnect grace
              survives and cross-owner takeover does not.
+agents       Registry key is (userId, agentId). Self-hosted `owner` keeps readable
+             flat YAML; hosted owner directories use the full hexadecimal SHA-256
+             digest of userId.
+             Draft and immutable published snapshots stay outside auth.db.
 ```
 
 Internal engine ids are not part of the public contract. A name shaped like one is refused
 for every caller, the self-hosted owner included, so nobody reaches another bank by naming
 it.
+
+Agent CRUD, publish, audit, version reads, and realtime resolution receive only
+`AuthContext.userId`; Better Auth types do not cross the gateway seam. The same
+owner reached by a browser cookie or one of that user's API keys sees the same
+Agent ids. Another owner's id reads as absent. A saved Voice Agent is not a
+credential or principal, and organizations/shared ownership remain a later
+widening. See [agent-builder-ui.md](./agent-builder-ui.md).
+
+That key/session parity is intentional: an API key has the owner's current full
+authority, so an explicit request for the owner's Agent draft is not a separate
+browser privilege. Ordinary session start still defaults to an immutable
+published version. Agent writes authenticated by a browser session require the
+same exact hosted Origin check as the realtime upgrade; Better Auth's CSRF
+handling protects `/v1/auth/*`, not new product routes. API-key calls remain
+header-authenticated machine requests and do not require a browser Origin.
 
 ### Quota
 
@@ -293,7 +316,8 @@ not front, where something coarse beats nothing.
   authorization never reaches an engine.
 - `auth.db` is owned entirely by Better Auth — user, session, account, verification, and
   apikey tables, with schema and migrations delegated to it. Product code reads a userId
-  out of it and nothing else, and never writes it.
+  out of it and nothing else, and never writes it. Agent records and published
+  snapshots therefore live in the product registry, never in Better Auth tables.
 - A self-hosted binary with no auth config behaves exactly as it did before accounts
   existed — verified by the pre-existing admission tests running unmodified.
 
@@ -378,7 +402,7 @@ condition rather than a debate with a slogan.
 | OIDC / SSO | An enterprise deployment. The plugin exists; the work is integration, not architecture. |
 | Social login | **Already justified — see [The human door](#the-human-door).** The recorded trigger used to be "a measured signup drop-off", which was the wrong reason: what makes it worth doing is that it closes the verification and recovery gaps as configuration. It is the intended launch door. |
 | Anonymous trial accounts | Evidence that signup friction, not interest, is the drop-off. |
-| Agent-specific identities or per-agent quota | An agent that must be metered separately from its owner. An agent is a key holder; that has been enough. |
+| Agent-specific identities or per-Agent quota | A saved Voice Agent that must be authorized or metered separately from its owner. Today it is an owned resource; machine callers hold an owner's key, and all work is charged to that owner. |
 | Remote/HTTP MCP | A caller that cannot spawn the local stdio server. The API key is already the credential, so nothing is rebuilt. |
 | A rate-limiting framework, or any database beyond SQLite | A second gateway process. Both the quota and the auth limiter are in-memory and per-process — honest for one gateway, wrong for two. |
 | Cloudflare Access on the public entrance | Nothing; it is the wrong tool for a self-serve product. It stays available for private self-hosted deployments. |
