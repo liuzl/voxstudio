@@ -14,9 +14,12 @@ added.
 - [`registry/`](./registry/) — categorized index of subjects that have received
   substantive investigation, including evidence level, disposition, summary,
   and supporting record.
+- [`reports/`](./reports/) — dated source surveys and comparative analyses that
+  preserve the reasoning behind registry dispositions. Reports are research
+  evidence, not accepted product architecture.
 
+The current reports are source surveys or single-subject comparisons.
 Protocols, dataset manifests, immutable experiment records, schemas, and
-cross-experiment reports will be added after their common metadata contracts
-are defined. Large audio, models, private transcripts, machine-specific logs,
-and participant data are never committed here.
-
+cross-experiment synthesis reports will be added after their common metadata
+contracts are defined. Large audio, models, private transcripts,
+machine-specific logs, and participant data are never committed here.

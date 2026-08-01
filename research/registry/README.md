@@ -138,6 +138,7 @@ judgment about a project.
 |---|---:|---|---|---|
 | Multi-engine registry and explicit route selection | E5 | adopted | Separates engine instances, role defaults, capability routing, and explicit user choice. Invalid explicit selections fail rather than silently falling back. | [`engine-registry.md`](../../docs/engine-registry.md), [`technical-report.md`](../../docs/technical-report.md) |
 | Long-text TTS chunking and continuation | E4 | adopted | Uses predicted speech duration, language-aware seams, bounded chunk size, trimmed edges, loudness matching, and continuation state. Measurements explicitly account for stochastic duration and timbre drift. | [`chunking.md`](../../docs/chunking.md), [`tools/README.md`](../../tools/README.md) |
+| StreamCore Server as a WebRTC/WHIP media-edge reference | E1 | candidate | Source and implementation survey found a useful Pion/WHIP/RTP/Opus reference for browser media ingress. The upstream project family also reports telephony and embedded clients, but those paths were not reproduced. It is a candidate for a controlled, independently implemented Vox-owned transport-adapter experiment, not a replacement for Vox turn policy or engine orchestration. Direct interoperability needs adapters, and the surveyed revision has no session resume, horizontal scaling, metrics export, or Go tests. | [`2026-08-01-streamcore-server-survey.md`](../reports/2026-08-01-streamcore-server-survey.md), [pinned upstream](https://github.com/streamcoreai/streamcore-server/tree/a5cac73895ebcf61dd1ec5f91671d6c189c61b8a) |
 
 ## Trust, safety, and governance
 
@@ -179,4 +180,3 @@ Update an entry when:
 Do not silently rewrite a historical result to match a new model version.
 Create a new experiment record, link it, and update the disposition with the
 date and reason.
-
