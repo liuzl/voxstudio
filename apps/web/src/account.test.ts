@@ -20,7 +20,7 @@ function stubGateway(auth: "self" | "accounts", session: unknown, options: { sig
 }
 
 beforeEach(() => {
-  useAccount.setState({ status: "loading", mode: undefined, user: null });
+  useAccount.setState({ status: "loading", mode: undefined, doors: { password: false, providers: [] }, user: null });
 });
 
 afterEach(() => {
@@ -34,6 +34,14 @@ describe("account state", () => {
     expect(useAccount.getState().status).toBe("self");
     expect(useAccount.getState().user).toBeNull();
     expect(seen).toEqual(["GET /healthz"]);
+  });
+
+  test("an unreachable gateway stays outside the studio instead of becoming self-hosted", async () => {
+    globalThis.fetch = (() => Promise.reject(new Error("offline"))) as unknown as typeof fetch;
+    await useAccount.getState().refresh();
+    expect(useAccount.getState().status).toBe("unavailable");
+    expect(useAccount.getState().mode).toBe("unavailable");
+    expect(useAccount.getState().user).toBeNull();
   });
 
   test("hosted with no session is signed-out; with one, signed-in and carrying the user", async () => {

@@ -406,14 +406,12 @@ and redirects `/` directly to `/studio/agents` unless its operator enables the
 Portal.
 
 This route split is one coordinated authentication migration, not only a router
-change. Today `AuthGate` wraps the entire React root, social sign-in defaults its
-callback to `/`, and a failed `/healthz` probe is interpreted as self-hosted. The
-Portal delivery must change all three together: gate only `/studio/*`, preserve a
-validated same-origin requested Studio URL through sign-in, and fail closed on
-the Studio branch when an accounts deployment cannot be determined. A transient
-gateway failure must not turn a hosted Studio route into self-hosted mode. The
-product APIs remain server-authenticated regardless of which static shell route
-is visible.
+change. The Auth UI already preserves a validated same-origin requested URL
+through social sign-in and fails closed when `/healthz` cannot determine the
+deployment mode. `AuthGate` still wraps the entire React root. Portal delivery
+must move that gate to `/studio/*` and constrain the preserved callback to the
+Studio branch. The product APIs remain server-authenticated regardless of which
+static shell route is visible.
 
 Portal-specific requirements:
 

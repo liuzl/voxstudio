@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   AuthError,
+  authReturnPath,
   createApiKey,
   fetchAuthMode,
   fetchSession,
@@ -53,16 +54,33 @@ describe("auth mode discovery", () => {
     expect(await fetchAuthMode()).toBe("self");
   });
 
-  test("an unreachable or older gateway reads as self-hosted, never as a login wall", async () => {
+  test("an unreachable gateway fails closed while an older gateway stays self-hosted", async () => {
     stubFetch({ "/healthz": () => new Response("nope", { status: 503 }) });
-    expect(await fetchAuthMode()).toBe("self");
+    expect(await fetchAuthMode()).toBe("unavailable");
 
     // A gateway predating the field (no `auth` key at all).
     stubFetch({ "/healthz": () => Response.json({ ok: true, protocol: 1 }) });
     expect(await fetchAuthMode()).toBe("self");
 
     globalThis.fetch = (() => Promise.reject(new Error("offline"))) as unknown as typeof fetch;
-    expect(await fetchAuthMode()).toBe("self");
+    expect(await fetchAuthMode()).toBe("unavailable");
+  });
+
+  test("an unknown explicit auth mode fails closed", async () => {
+    stubFetch({ "/healthz": () => Response.json({ ok: true, auth: "future-mode" }) });
+    expect(await fetchAuthMode()).toBe("unavailable");
+  });
+});
+
+describe("auth return path", () => {
+  test("preserves one same-origin route through social sign-in", () => {
+    expect(authReturnPath({ pathname: "/settings", search: "?section=account", hash: "#keys" }))
+      .toBe("/settings?section=account#keys");
+  });
+
+  test("refuses absolute and protocol-relative callback targets", () => {
+    expect(authReturnPath({ pathname: "https://evil.test", search: "", hash: "" })).toBe("/");
+    expect(authReturnPath({ pathname: "//evil.test", search: "", hash: "" })).toBe("/");
   });
 });
 

@@ -340,6 +340,8 @@ export const en = {
   "注册账户": "Sign up",
   "邮箱": "Email",
   "密码": "Password",
+  "显示密码": "Show password",
+  "隐藏密码": "Hide password",
   "请稍候…": "Please wait…",
   "注册成功。如果这个部署开启了邮箱验证，请查收验证邮件。":
     "Account created. If this deployment has email verification enabled, check your inbox for the link.",
@@ -368,6 +370,8 @@ export const en = {
   "最近使用 {when}": "Last used {when}",
   "尚未使用": "Never used",
   "撤销": "Revoke",
+  "撤销 API 密钥？": "Revoke API key?",
+  "撤销后，使用此密钥的应用会立即失去访问权限。": "Apps using this key will lose access immediately.",
   "已撤销 {name}": "Revoked {name}",
   "VoxStudio Web —— 自托管多语言语音工作台。设计与分期见 docs/web-studio.md；实时会话契约见 docs/duplex-audio-architecture.md。":
     "VoxStudio Web — a self-hosted multilingual voice studio. Design and phases: docs/web-studio.md; the realtime session contract: docs/duplex-audio-architecture.md.",

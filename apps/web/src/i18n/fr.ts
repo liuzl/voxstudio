@@ -338,6 +338,8 @@ export const fr: Record<MessageKey, string> = {
   "注册账户": "Créer un compte",
   "邮箱": "E-mail",
   "密码": "Mot de passe",
+  "显示密码": "Afficher le mot de passe",
+  "隐藏密码": "Masquer le mot de passe",
   "请稍候…": "Veuillez patienter…",
   "注册成功。如果这个部署开启了邮箱验证，请查收验证邮件。":
     "Compte créé. Si ce déploiement a activé la vérification par e-mail, consultez votre boîte de réception.",
@@ -366,6 +368,8 @@ export const fr: Record<MessageKey, string> = {
   "最近使用 {when}": "Dernière utilisation {when}",
   "尚未使用": "Jamais utilisée",
   "撤销": "Révoquer",
+  "撤销 API 密钥？": "Révoquer la clé API ?",
+  "撤销后，使用此密钥的应用会立即失去访问权限。": "Les applications utilisant cette clé perdront immédiatement leur accès.",
   "已撤销 {name}": "{name} révoquée",
   "VoxStudio Web —— 自托管多语言语音工作台。设计与分期见 docs/web-studio.md；实时会话契约见 docs/duplex-audio-architecture.md。":
     "VoxStudio Web — un studio vocal multilingue auto-hébergé. Design et phases : docs/web-studio.md ; contrat des sessions temps réel : docs/duplex-audio-architecture.md.",

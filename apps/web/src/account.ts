@@ -9,7 +9,7 @@ import { onUnauthorized } from "./lib/unauthorized";
  * A self-hosted deployment resolves to mode "self" and stays there — no session probe,
  * no login card, nothing changed from before accounts existed.
  */
-export type AccountStatus = "loading" | "self" | "signed-in" | "signed-out";
+export type AccountStatus = "loading" | "self" | "signed-in" | "signed-out" | "unavailable";
 
 interface AccountState {
   status: AccountStatus;
@@ -31,9 +31,14 @@ export const useAccount = create<AccountState>((set, get) => ({
   user: null,
 
   refresh: async () => {
+    if (get().status === "unavailable") set({ status: "loading" });
     const { mode, doors } = await fetchDoor();
     if (mode === "self") {
       set({ status: "self", mode, doors, user: null });
+      return;
+    }
+    if (mode === "unavailable") {
+      set({ status: "unavailable", mode, doors, user: null });
       return;
     }
     const user = await fetchSession().catch(() => null);

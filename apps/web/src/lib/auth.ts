@@ -9,7 +9,7 @@
  */
 
 /** Which door this deployment serves, from the unauthenticated /healthz probe. */
-export type AuthMode = "self" | "accounts";
+export type AuthMode = "self" | "accounts" | "unavailable";
 
 /** Which sign-in doors are open. A self-hosted studio has none and needs none. */
 export interface LoginDoors {
@@ -71,8 +71,8 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 }
 
 /**
- * The deployment's door. Any failure reads as "self": a studio that cannot reach its
- * gateway must not present a login form it has no way to satisfy.
+ * The deployment's door. An unreachable gateway is distinct from self-hosting: the
+ * authenticated shell must never appear merely because identity could not be checked.
  */
 export async function fetchAuthMode(): Promise<AuthMode> {
   return (await fetchDoor()).mode;
@@ -80,16 +80,17 @@ export async function fetchAuthMode(): Promise<AuthMode> {
 
 /**
  * The deployment's door and, under accounts, which ways in it opens. A gateway that
- * predates the field, or one that cannot be reached, reads as self-hosted: a studio must
- * never present a login form it has no way to satisfy.
+ * predates the field remains self-hosted for compatibility; an explicit failure is an
+ * unavailable identity state and fails closed at the AuthGate.
  */
 export async function fetchDoor(): Promise<{ mode: AuthMode; doors: LoginDoors }> {
   const closed: LoginDoors = { password: false, providers: [] };
   try {
     const response = await fetch("/healthz");
-    if (!response.ok) return { mode: "self", doors: closed };
+    if (!response.ok) return { mode: "unavailable", doors: closed };
     const body = await response.json() as { auth?: string; login?: Partial<LoginDoors> };
-    if (body.auth !== "accounts") return { mode: "self", doors: closed };
+    if (body.auth === undefined || body.auth === "self") return { mode: "self", doors: closed };
+    if (body.auth !== "accounts") return { mode: "unavailable", doors: closed };
     return {
       mode: "accounts",
       doors: {
@@ -100,8 +101,25 @@ export async function fetchDoor(): Promise<{ mode: AuthMode; doors: LoginDoors }
       },
     };
   } catch {
-    return { mode: "self", doors: closed };
+    return { mode: "unavailable", doors: closed };
   }
+}
+
+export interface AuthReturnLocation {
+  pathname: string;
+  search: string;
+  hash: string;
+}
+
+/**
+ * Preserve the page a person asked for through social sign-in without ever accepting
+ * an absolute/protocol-relative destination. Better Auth still performs its own origin
+ * validation; this keeps the browser client safe and deterministic too.
+ */
+export function authReturnPath(location: AuthReturnLocation = window.location): string {
+  const pathname = location.pathname || "/";
+  if (!pathname.startsWith("/") || pathname.startsWith("//")) return "/";
+  return `${pathname}${location.search}${location.hash}`;
 }
 
 /**

@@ -224,8 +224,11 @@ LLM, and TTS on their role defaults unless explicitly pinned; tool
 caption chips, including the amber pending-confirmation chip
 ([mcp-tools.md](./mcp-tools.md)); conversation-etiquette fields in Settings,
 persisted in localStorage ([conversation-etiquette.md](./conversation-etiquette.md));
-and every tab a URL over the History API — deep links and refresh land on the
-right panel through the gateway's existing SPA fallback.
+every tab a URL over the History API — deep links and refresh land on the right
+panel through the gateway's existing SPA fallback; and the hosted Auth UI now
+shares the light console system across sign-in, verification, account identity,
+and API-key management, preserving the requested path through social sign-in and
+failing closed when deployment identity cannot be determined.
 
 No phase creates empty directories; each is introduced with its first tested module
 (the same rule the duplex phases follow).

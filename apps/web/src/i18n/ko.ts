@@ -338,6 +338,8 @@ export const ko: Record<MessageKey, string> = {
   "注册账户": "회원가입",
   "邮箱": "이메일",
   "密码": "비밀번호",
+  "显示密码": "비밀번호 표시",
+  "隐藏密码": "비밀번호 숨기기",
   "请稍候…": "잠시만 기다려 주세요…",
   "注册成功。如果这个部署开启了邮箱验证，请查收验证邮件。":
     "가입이 완료되었어요. 이 배포에 이메일 인증이 켜져 있다면 인증 메일을 확인해 주세요.",
@@ -366,6 +368,8 @@ export const ko: Record<MessageKey, string> = {
   "最近使用 {when}": "마지막 사용 {when}",
   "尚未使用": "사용한 적 없음",
   "撤销": "폐기",
+  "撤销 API 密钥？": "API 키를 폐기할까요?",
+  "撤销后，使用此密钥的应用会立即失去访问权限。": "이 키를 사용하는 앱은 즉시 접근 권한을 잃습니다.",
   "已撤销 {name}": "{name}을(를) 폐기했어요",
   "VoxStudio Web —— 自托管多语言语音工作台。设计与分期见 docs/web-studio.md；实时会话契约见 docs/duplex-audio-architecture.md。":
     "VoxStudio Web — 셀프 호스팅 다국어 보이스 스튜디오예요. 설계와 단계는 docs/web-studio.md, 실시간 세션 계약은 docs/duplex-audio-architecture.md를 참고하세요.",

@@ -18,6 +18,7 @@ import { LibraryPanel } from "./panels/LibraryPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { VoicesPanel } from "./panels/VoicesPanel";
 import { useGatewayHealth } from "./lib/useGatewayHealth";
+import { useAccount } from "./account";
 import { useStudio, type ToastView } from "./store";
 import { useT, type MessageKey } from "./i18n";
 
@@ -112,6 +113,15 @@ export function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
   const hasTakes = useStudio(state => state.takes.length > 0);
+  const accountStatus = useAccount(state => state.status);
+  const accountUser = useAccount(state => state.user);
+  const accountName = accountUser?.name.trim() || accountUser?.email.split("@")[0] || "VoxStudio";
+  const accountInitials = accountName
+    .split(/\s+/)
+    .slice(0, 2)
+    .map(part => Array.from(part)[0] ?? "")
+    .join("")
+    .toUpperCase();
 
   const setTab = (next: Tab): void => {
     if (next !== tab) window.history.pushState(null, "", tabPath(next));
@@ -225,13 +235,23 @@ export function App() {
       </nav>
 
       <div className="flex h-[58px] items-center gap-2 border-t border-edge-faint px-4">
-        <div className="flex min-w-0 flex-1 items-center gap-2.5 px-1.5">
-          <span className="flex size-6 items-center justify-center rounded-full bg-fill-active text-[9px] font-semibold text-fg-tertiary">VS</span>
-          <div className="min-w-0">
-            <div className="truncate text-[11px] font-medium text-fg-secondary">{t("自托管语音工作台")}</div>
-            <ConnectionDot />
+        {accountStatus === "signed-in" && accountUser ? (
+          <button onClick={() => setTab("settings")} className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-1.5 py-1 text-left hover:bg-fill-hover" aria-label={t("账户")}>
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-ink text-[9px] font-semibold text-on-ink">{accountInitials || "VS"}</span>
+            <span className="min-w-0">
+              <span className="block truncate text-[11px] font-medium text-fg-secondary">{accountName}</span>
+              <span className="block truncate text-[10px] text-fg-faint">{accountUser.email}</span>
+            </span>
+          </button>
+        ) : (
+          <div className="flex min-w-0 flex-1 items-center gap-2.5 px-1.5">
+            <span className="flex size-6 items-center justify-center rounded-full bg-fill-active text-[9px] font-semibold text-fg-tertiary">VS</span>
+            <div className="min-w-0">
+              <div className="truncate text-[11px] font-medium text-fg-secondary">{t("自托管语音工作台")}</div>
+              <ConnectionDot />
+            </div>
           </div>
-        </div>
+        )}
         <button onClick={() => setTab("settings")} aria-label={t("设置")} className="flex size-8 items-center justify-center rounded-lg text-fg-tertiary hover:bg-fill-hover">
           <Settings className="size-[16px]" strokeWidth={1.7} />
         </button>
