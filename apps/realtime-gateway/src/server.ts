@@ -607,6 +607,10 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       config: options.config,
       owner,
       mapVoiceId: ownerVoice,
+      // A deployment default such as `laok` is shared engine configuration, not a
+      // user-created voice. Keep that exact registered voice for account holders instead
+      // of rewriting it to `u<owner>.laok`; omission would put VoxCPM in design mode.
+      ...(owner === OWNER_USER_ID ? {} : { deploymentDefaultVoice: options.config.ttsDefaults.voice }),
       // A conversation is metered per turn: one charge at start bought the session, and
       // each turn's model work costs one more (adversarial review 2026-07-26 — a single
       // charge used to buy unbounded engine work).
@@ -1057,7 +1061,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         // Synthesis names a voice, so it is an ownership path too: hiding a voice from
         // the bank listing means nothing if the engine will still speak it for whoever
         // guesses its id (adversarial review 2026-07-26). A voice-less request keeps
-        // the engine's default.
+        // the engine's own voice-less semantics (VoxCPM uses design mode).
         if (url.pathname === "/v1/audio/speech") {
           return (async (): Promise<Response> => {
             const body = await request.json().catch(() => null) as Record<string, unknown> | null;

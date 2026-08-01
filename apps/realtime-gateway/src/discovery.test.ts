@@ -238,7 +238,7 @@ describe("openapi document", () => {
       requestBody: { content: Record<string, { schema: { properties: Record<string, unknown>; required: string[] } }> };
     };
     const body = speech.requestBody.content["application/json"]?.schema;
-    // `input` is the only required field; voice is optional (the engine default applies).
+    // `input` is the only required field; voice is optional (engine voice-less mode applies).
     expect(body?.required).toEqual(["input"]);
     for (const field of ["input", "voice", "response_format", "cfg_value", "timesteps", "seed", "speed", "stream"]) {
       expect(Object.keys(body?.properties ?? {})).toContain(field);

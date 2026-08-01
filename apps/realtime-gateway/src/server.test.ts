@@ -1122,7 +1122,7 @@ describe("voice namespace enforcement on every synthesis path (adversarial revie
     expect((await speak("myvoice")).status).toBe(200);
     expect(bodies[0]?.voice).toBe(`${voicePrefix("alice")}myvoice`);
 
-    // A voice-less request still reaches the engine (its default voice).
+    // A voice-less request still reaches the engine without inventing a voice id.
     expect((await speak(undefined)).status).toBe(200);
     expect(bodies[1]?.voice).toBeUndefined();
 
@@ -1131,6 +1131,38 @@ describe("voice namespace enforcement on every synthesis path (adversarial revie
     expect(stolen.status).toBe(400);
     expect((await stolen.json() as { error: { code: string } }).error.code).toBe("bad_voice_id");
     expect(bodies).toHaveLength(2);
+  });
+
+  test("an account's realtime default stays engine-owned instead of entering the user's namespace", async () => {
+    const bodies: { voice?: string }[] = [];
+    gateway = startGateway({
+      config,
+      port: 0,
+      authResolver: asAlice,
+      fetch: engineFetch({
+        "/v1/chat/completions": async () => Response.json({
+          choices: [{ message: {
+            content: `${"第一句保持同一个音色".repeat(20)}。${"第二句仍然保持同一个音色".repeat(20)}。`,
+          } }],
+        }),
+        "/v1/audio/speech": async request => {
+          bodies.push(await request.json() as { voice?: string });
+          return new Response(new Uint8Array(writeWav(new Float32Array(4_800).fill(0.1), 24_000)));
+        },
+      }),
+    });
+    const client = new TestClient(gateway.url, "/v1/realtime?user=alice");
+    await client.ready();
+    const { voice: _configuredVoice, ...engineDefaultOptions } = startOptions;
+    client.command({ type: "session.start", idempotencyKey: "default-voice-1", options: engineDefaultOptions });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "snapshot");
+
+    client.sendPcm(2, 0.2);
+    client.sendPcm(2, 0);
+    await client.until(events => events.some(event => event.type === "turn.completed"), "turn");
+    expect(bodies.length).toBeGreaterThan(1);
+    expect(bodies.every(body => body.voice === config.ttsDefaults.voice)).toBe(true);
+    client.close();
   });
 
   test("a realtime session synthesizes through its owner's namespace, at start and after set_voice", async () => {

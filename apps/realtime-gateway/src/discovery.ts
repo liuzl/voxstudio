@@ -522,7 +522,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
                   additionalProperties: true,
                   properties: {
                     input: { type: "string", description: "The text to speak." },
-                    voice: { type: "string", description: "A display name from GET /v1/voices. Omit for the engine default." },
+                    voice: { type: "string", description: "A display name from GET /v1/voices. Omit for the engine's voice-less mode." },
                     response_format: { type: "string", description: "Engine-dependent; `wav` unless the deployment says otherwise." },
                     cfg_value: { type: "number" },
                     timesteps: { type: "integer" },

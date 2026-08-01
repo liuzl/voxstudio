@@ -176,6 +176,9 @@ voices       No new store. The gateway maps a display name to an engine-side id,
              u<short-user-id>.<name>, inside the engines' [A-Za-z0-9._-]{1,64}
              contract. Listings filter by prefix and strip it. The prefix also
              ends silent same-name overwrites: it is a per-user namespace.
+             The configured tts_defaults.voice stays a bare, deployment-owned voice;
+             it is shared configuration, not a user voice to prefix. A truly omitted
+             voice retains the engine's voice-less semantics (VoxCPM design mode).
 sessions     Each records its owner; attach verifies it, so reconnect grace
              survives and cross-owner takeover does not.
 agents       Registry key is (userId, agentId). Self-hosted `owner` keeps readable

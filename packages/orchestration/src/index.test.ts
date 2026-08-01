@@ -114,6 +114,15 @@ describe("streaming reply orchestration", () => {
     expect(tts.calls[0]?.continuation_end).toBe(true);
   });
 
+  test("an empty configured voice omits voice so the engine applies its voice-less mode", async () => {
+    const tts = new FakeTts();
+    await drainReply(tts, ["使用引擎默认音色。"], {
+      ttsDefaults: { ...ttsDefaults, voice: "" },
+    });
+    expect(tts.calls).toHaveLength(1);
+    expect(tts.calls[0]).not.toHaveProperty("voice");
+  });
+
   test("applies the chunk transform before synthesis and drops chunks it empties", async () => {
     const tts = new FakeTts();
     const pieces = await drainReply(tts, ["**你好。**", "正文继续。"], {

@@ -76,7 +76,7 @@ function pacedFrames(
   })();
 }
 
-interface Synthesized { input: string; voice: string; speed: number | undefined }
+interface Synthesized { input: string; voice?: string; speed: number | undefined }
 
 async function runStudio(config: {
   llm: ChatEngine;
@@ -110,7 +110,11 @@ async function runStudio(config: {
     llm: config.llm,
     tts: {
       speech: async input => {
-        synthesized.push({ input: input.input, voice: input.voice, speed: input.speed });
+        synthesized.push({
+          input: input.input,
+          ...(input.voice === undefined ? {} : { voice: input.voice }),
+          speed: input.speed,
+        });
         return new Uint8Array(writeWav(new Float32Array(48_000).fill(0.1), 24_000));
       },
     },

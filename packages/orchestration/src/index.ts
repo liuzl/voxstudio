@@ -48,9 +48,10 @@ export interface SynthesisOptions {
 }
 
 function speechInput(text: string, options: SynthesisOptions, end: boolean): SpeechInput {
+  const voice = options.voice ?? options.ttsDefaults.voice;
   return {
     input: `${options.promptPrefix ?? ""}${text}`,
-    voice: options.voice ?? options.ttsDefaults.voice,
+    ...(voice ? { voice } : {}),
     response_format: options.ttsDefaults.responseFormat,
     cfg_value: options.cfgValue ?? options.ttsDefaults.cfgValue,
     timesteps: options.timesteps ?? options.ttsDefaults.timesteps,

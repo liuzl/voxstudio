@@ -59,10 +59,13 @@ async function main(): Promise<number> {
   };
 
   // The live TTS behind a recorder: every synthesis request the loop makes is evidence.
-  const synthesized: { input: string; voice: string }[] = [];
+  const synthesized: { input: string; voice?: string }[] = [];
   const speechEngine = {
     speech: async (input: SpeechInput, signal?: AbortSignal): Promise<ArrayBuffer | Uint8Array> => {
-      synthesized.push({ input: input.input, voice: input.voice });
+      synthesized.push({
+        input: input.input,
+        ...(input.voice === undefined ? {} : { voice: input.voice }),
+      });
       return tts.speech(input, signal);
     },
   };

@@ -50,6 +50,12 @@ export interface GatewaySessionOptions {
    */
   mapVoiceId?: (displayName: string) => string | null;
   /**
+   * Deployment-owned voice that account sessions may use without a user namespace.
+   * This is the configured `tts_defaults.voice`, not an omitted engine voice: some
+   * engines interpret omission as reference-less design mode and re-roll every request.
+   */
+  deploymentDefaultVoice?: string;
+  /**
    * Asks whether this conversation may spend one more turn (docs/auth.md phase 4).
    * Called once per conversational turn, when the user's utterance is finalized and
    * before the reply's model work begins — never per audio frame. A refusal ends the
@@ -225,6 +231,7 @@ export class GatewaySession {
   private ownedVoice(input: SpeechInput): SpeechInput {
     const map = this.options.mapVoiceId;
     if (map === undefined || input.voice === undefined) return input;
+    if (input.voice === this.options.deploymentDefaultVoice) return input;
     const engineVoice = map(input.voice);
     if (engineVoice === null) throw new TypeError(`unknown voice ${input.voice}`);
     return { ...input, voice: engineVoice };

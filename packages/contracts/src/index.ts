@@ -105,7 +105,8 @@ export interface TranscriptionOptions {
 export interface SpeechRequest {
   input: string;
   model: string;
-  voice: string;
+  /** Omit to use the selected TTS engine's voice-less behavior (for example, design mode). */
+  voice?: string;
   response_format: string;
   cfg_value: number;
   timesteps: number;
