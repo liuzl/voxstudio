@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { PageHeader, pageShellClass, primaryButton, secondaryButton } from "../components/StudioPage";
 import { startConversation, stopConversation } from "../conversation";
-import { resolveLocale, useI18n, useT } from "../i18n";
+import { resolveLocale, useI18n, useT, type UiLocale } from "../i18n";
 import {
   auditAgent,
   createAgent,
@@ -123,10 +123,23 @@ function avatarStyle(id: string): React.CSSProperties {
   };
 }
 
-function displayTime(value: string): string {
+const dateLocales: Record<UiLocale, string> = {
+  zh: "zh-CN",
+  en: "en",
+  ja: "ja",
+  ko: "ko",
+  es: "es",
+  fr: "fr",
+  de: "de",
+  pt: "pt-BR",
+  ru: "ru",
+  it: "it",
+};
+
+export function displayTime(value: string, locale: UiLocale): string {
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) return "—";
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date);
+  return new Intl.DateTimeFormat(dateLocales[locale], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
 function agentSlug(value: string): string {
@@ -152,6 +165,7 @@ export function AgentsPanel({ agentId, onOpenAgent, onCloseAgent, onDirtyChange 
 
 function AgentList({ onOpenAgent }: { onOpenAgent(id: string): void }) {
   const t = useT();
+  const locale = resolveLocale(useI18n(state => state.locale));
   const toast = useStudio(state => state.toast);
   const [agents, setAgents] = useState<AgentRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -258,7 +272,7 @@ function AgentList({ onOpenAgent }: { onOpenAgent(id: string): void }) {
               <span className="min-w-0"><span className="block truncate text-[13px] font-medium text-fg">{agent.name}</span><span className="mt-0.5 block truncate text-[10px] text-fg-faint">{agent.id}</span></span>
               {agent.published ? <span className="hidden rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300 sm:inline">v{agent.published.version}</span> : <span className="hidden rounded-full bg-fill-active px-2 py-0.5 text-[9px] text-fg-muted sm:inline">{t("草稿")}</span>}
             </span>
-            <span className="text-[11px] text-fg-muted">{displayTime(agent.updatedAt)}</span>
+            <span className="text-[11px] text-fg-muted">{displayTime(agent.updatedAt, locale)}</span>
             <span data-agent-actions className="relative justify-self-end">
               <button aria-label={t("助手操作")} onClick={event => { event.stopPropagation(); setActionsId(current => current === agent.id ? undefined : agent.id); }} className="flex size-8 items-center justify-center rounded-lg text-fg-muted opacity-70 hover:bg-fill-active hover:text-fg group-hover:opacity-100"><MoreHorizontal className="size-4.5" /></button>
               {actionsId === agent.id && (
