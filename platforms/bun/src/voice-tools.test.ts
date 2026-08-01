@@ -60,11 +60,15 @@ describe("voice platform tools", () => {
 [dshow @ 000001] "Legacy Camera" (video)
 [dshow @ 000001] "Legacy Microphone" (audio)
 [in#0 @ 000002] "Current Microphone" (audio)
+[in#0 @ 000002] "USB Capture Device" (video, audio)
+[in#0 @ 000002] "Conference Device" (audio, video)
 [in#0 @ 000002]   Alternative name "@device_cm_{example}"
 Error opening input file dummy.
 `)).toEqual([
       { id: "Legacy Microphone", name: "Legacy Microphone" },
       { id: "Current Microphone", name: "Current Microphone" },
+      { id: "USB Capture Device", name: "USB Capture Device" },
+      { id: "Conference Device", name: "Conference Device" },
     ]);
   });
 

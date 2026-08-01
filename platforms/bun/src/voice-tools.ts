@@ -93,8 +93,12 @@ export function parseDshowAudioDevices(output: string): AudioInputDevice[] {
     // FFmpeg 8 prefixes DirectShow enumeration with [in#0 ...]; older
     // releases used [dshow ...]. This parser only receives output from the
     // explicit `-f dshow -list_devices true` command below.
-    const match = /^\[[^\]]+]\s+"(.+)"\s+\(audio\)\s*$/.exec(line);
-    if (match?.[1]) devices.push({ id: match[1], name: match[1] });
+    const match = /^\[[^\]]+]\s+"(.+)"\s+\(([^)]+)\)\s*$/.exec(line);
+    const name = match?.[1];
+    const mediaTypes = match?.[2];
+    if (name && mediaTypes?.split(",").some((type) => type.trim() === "audio")) {
+      devices.push({ id: name, name });
+    }
   }
   return devices;
 }
