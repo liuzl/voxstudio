@@ -1,8 +1,10 @@
 import { ffmpegPcmDecoder, loadConfig, loadSileroVadModel, persistPronunciationsFile, resolveConfigPath } from "@voxstudio/platform-bun";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { parseByteSize } from "./library";
 import { startGateway } from "./server";
 
-const usage = `usage: vox-gateway [--config CONFIG] [--host HOST] [--port PORT] [--token TOKEN]
+const usage = `usage: vox-gateway [--config CONFIG] [--host HOST] [--port PORT] [--token TOKEN] [--agents DIR]
 
 Realtime gateway for the Web Studio: the duplex session protocol over WebSocket at
 /v1/realtime, plus a REST facade over the engine contract. Binds loopback by default;
@@ -35,7 +37,9 @@ synthesis. Off by default.
 --max-concurrent-synthesis N (VOX_GATEWAY_MAX_CONCURRENT_SYNTHESIS) admits N
 syntheses at once and queues --max-queued-synthesis Q (default N) more; past that a
 caller gets 429 with Retry-After. Measured: throughput is flat past two in flight
-while latency grows linearly, so admitting more finishes nothing sooner.`;
+while latency grows linearly, so admitting more finishes nothing sooner.
+--agents DIR (VOX_GATEWAY_AGENTS; default ~/.config/voxstudio/agents) stores Agent
+drafts and immutable published versions.`;
 
 /**
  * OAuth providers from the environment. Credentials never travel in argv, where a
@@ -64,6 +68,7 @@ async function main(args: string[]): Promise<number> {
   let host = process.env.VOX_GATEWAY_HOST;
   let port = process.env.VOX_GATEWAY_PORT;
   let token = process.env.VOX_GATEWAY_TOKEN;
+  let agentsDir = process.env.VOX_GATEWAY_AGENTS ?? join(homedir(), ".config", "voxstudio", "agents");
   let maxSessions = process.env.VOX_GATEWAY_MAX_SESSIONS;
   let maxSessionSeconds = process.env.VOX_GATEWAY_MAX_SESSION_SECONDS;
   let demoMode = process.env.VOX_GATEWAY_DEMO === "1";
@@ -86,6 +91,7 @@ async function main(args: string[]): Promise<number> {
       console.log(usage);
       return 0;
     } else if (arg === "--config") explicit = value();
+    else if (arg === "--agents") agentsDir = value();
     else if (arg === "--host") host = value();
     else if (arg === "--port") port = value();
     else if (arg === "--token") token = value();
@@ -157,6 +163,7 @@ async function main(args: string[]): Promise<number> {
     ...(host === undefined ? {} : { hostname: host }),
     ...(parsedPort === undefined ? {} : { port: parsedPort }),
     ...(token === undefined || token === "" ? {} : { token }),
+    ...(agentsDir === "" ? {} : { agentsDir }),
     ...(cappedSessions === undefined ? {} : { maxSessions: cappedSessions }),
     ...(cappedSeconds === undefined ? {} : { maxSessionSeconds: cappedSeconds }),
     ...(demoMode ? { demoMode } : {}),

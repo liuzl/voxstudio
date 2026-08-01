@@ -1,6 +1,13 @@
 /** REST facade helpers: same-origin /v1 endpoints proxied by the gateway. */
 import { t, type MessageKey } from "../i18n";
 import { reportUnauthorized } from "./unauthorized";
+import type {
+  AgentAudit,
+  AgentPublishedVersion,
+  AgentRecord,
+  AgentSpec,
+  CreateAgentInput,
+} from "@voxstudio/agents";
 
 async function fail(response: Response, what: MessageKey): Promise<never> {
   // A hosted session that expired (or was signed out elsewhere) must send the shell
@@ -18,6 +25,74 @@ async function fail(response: Response, what: MessageKey): Promise<never> {
     status: response.status,
     detail: detail ? `: ${detail}` : "",
   }));
+}
+
+export type { AgentAudit, AgentPublishedVersion, AgentRecord, AgentSpec };
+
+async function agentJson<T>(response: Response, what: MessageKey): Promise<T> {
+  if (!response.ok) await fail(response, what);
+  return response.json() as Promise<T>;
+}
+
+export async function listAgents(): Promise<AgentRecord[]> {
+  const payload = await agentJson<{ agents?: AgentRecord[] }>(await fetch("/v1/agents"), "获取助手列表");
+  return payload.agents ?? [];
+}
+
+export async function getAgent(id: string): Promise<AgentRecord> {
+  return agentJson(await fetch(`/v1/agents/${encodeURIComponent(id)}`), "获取助手");
+}
+
+export async function createAgent(input: CreateAgentInput): Promise<AgentRecord> {
+  return agentJson(await fetch("/v1/agents", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  }), "创建助手");
+}
+
+export async function updateAgent(id: string, revision: number, input: {
+  name?: string;
+  description?: string | null;
+  avatar?: string | null;
+  spec?: AgentSpec;
+}): Promise<AgentRecord> {
+  return agentJson(await fetch(`/v1/agents/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ revision, ...input }),
+  }), "保存助手");
+}
+
+export async function deleteAgent(id: string, revision: number): Promise<void> {
+  await agentJson(await fetch(`/v1/agents/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ revision }),
+  }), "删除助手");
+}
+
+export async function publishAgent(id: string, revision: number): Promise<{
+  record: AgentRecord;
+  version: AgentPublishedVersion;
+}> {
+  return agentJson(await fetch(`/v1/agents/${encodeURIComponent(id)}/publish`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ revision }),
+  }), "发布助手");
+}
+
+export async function auditAgent(id: string): Promise<AgentAudit> {
+  return agentJson(await fetch(`/v1/agents/${encodeURIComponent(id)}/audit`, { method: "POST" }), "检查助手版本");
+}
+
+export async function listAgentVersions(id: string): Promise<AgentPublishedVersion[]> {
+  const payload = await agentJson<{ versions?: AgentPublishedVersion[] }>(
+    await fetch(`/v1/agents/${encodeURIComponent(id)}/versions`),
+    "获取助手版本",
+  );
+  return payload.versions ?? [];
 }
 
 export interface DesignProfileMeta {

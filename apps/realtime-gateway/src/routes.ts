@@ -63,6 +63,33 @@ export const apiRoutes: readonly ApiRoute[] = [
   },
   { path: "/v1/engines", methods: ["GET"] },
   {
+    path: "/v1/agents",
+    methods: ["GET", "POST"],
+    demoRefusable: ["POST"],
+  },
+  {
+    path: "/v1/agents/{id}",
+    match: /^\/v1\/agents\/[A-Za-z0-9._-]{1,64}$/,
+    methods: ["GET", "PATCH", "DELETE"],
+    demoRefusable: ["PATCH", "DELETE"],
+  },
+  {
+    path: "/v1/agents/{id}/publish",
+    match: /^\/v1\/agents\/[A-Za-z0-9._-]{1,64}\/publish$/,
+    methods: ["POST"],
+    demoRefusable: ["POST"],
+  },
+  {
+    path: "/v1/agents/{id}/audit",
+    match: /^\/v1\/agents\/[A-Za-z0-9._-]{1,64}\/audit$/,
+    methods: ["POST"],
+  },
+  {
+    path: "/v1/agents/{id}/versions",
+    match: /^\/v1\/agents\/[A-Za-z0-9._-]{1,64}\/versions$/,
+    methods: ["GET"],
+  },
+  {
     path: "/v1/voices",
     methods: ["GET", "POST"],
     charged: ["POST"],

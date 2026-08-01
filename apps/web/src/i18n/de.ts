@@ -1,7 +1,8 @@
-import type { MessageKey } from "./en";
+import { agentBuilderMessages, type MessageKey } from "./en";
 
 /** German catalog — machine-drafted, pending native review. Keys are the Chinese source strings. */
 export const de: Record<MessageKey, string> = {
+  ...agentBuilderMessages,
   // App shell
   "对话": "Gespräch",
   "生成": "Generieren",
@@ -31,7 +32,6 @@ export const de: Record<MessageKey, string> = {
   // Agents panel
   "语音助手": "Sprachagenten",
   "创建、配置和测试实时语音助手。": "Sprachagenten in Echtzeit erstellen, konfigurieren und testen.",
-  "默认语音助手": "Standard-Sprachagent",
   "搜索助手": "Agenten suchen",
   "创建助手": "Agent erstellen",
   "显示模板": "Vorlagen anzeigen",
@@ -48,21 +48,16 @@ export const de: Record<MessageKey, string> = {
   "协助处理日常事务": "Bei Alltagsaufgaben unterstützen",
   "线索筛选": "Lead-Qualifizierung",
   "筛选和跟进入站线索": "Eingehende Leads prüfen und nachfassen",
-  "助手名称已更新": "Agentenname aktualisiert",
   "已载入「{name}」模板": "Vorlage „{name}“ geladen",
   "更新时间": "Aktualisiert",
   "操作": "Aktionen",
-  "刚刚": "gerade eben",
   "助手操作": "Agentenaktionen",
   "已复制助手 ID": "Agenten-ID kopiert",
   "复制助手 ID": "Agenten-ID kopieren",
-  "重命名": "Umbenennen",
   "已从列表移除助手": "Agent aus der Liste entfernt",
   "删除助手": "Agent löschen",
   "没有匹配的助手。": "Keine passenden Agenten.",
   "还没有助手。": "Noch keine Agenten.",
-  "重命名助手": "Agent umbenennen",
-  "输入一个容易识别的助手名称。": "Geben Sie einen leicht erkennbaren Namen für den Agenten ein.",
   "保存": "Speichern",
   // Library panel
   "管理对话中明确留存的录音、转写校正与音色参考样本。": "Ausdrücklich aufbewahrte Aufnahmen, Transkriptkorrekturen und Stimmreferenzproben verwalten.",

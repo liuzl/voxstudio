@@ -18,6 +18,14 @@ import type { DuplexEventPayload, DuplexSessionSnapshot, DuplexState } from "@vo
 export const protocolVersion = 1;
 
 export interface SessionStartOptions {
+  /** Saved Agent id. Ordinary callers resolve its latest immutable published version. */
+  agent?: string;
+  /** Builder preview may explicitly select the current draft; default is published. */
+  agentSource?: "draft" | "published";
+  /** Expected draft revision when agentSource is draft. */
+  agentRevision?: number;
+  /** Exact immutable version; absent means the latest published pointer. */
+  agentVersion?: number;
   language?: string;
   system?: string;
   maxTokens?: number;
@@ -158,6 +166,28 @@ function parseStartOptions(value: unknown): SessionStartOptions {
     throw new ProtocolError("maxTokens must be a positive integer");
   }
   const options: SessionStartOptions = {};
+  const agent = optionalString(value, "agent");
+  const agentSource = optionalChoice(value, "agentSource", ["draft", "published"] as const);
+  const agentRevision = optionalNumber(value, "agentRevision");
+  const agentVersion = optionalNumber(value, "agentVersion");
+  if (agentRevision !== undefined && (!Number.isInteger(agentRevision) || agentRevision === 0)) {
+    throw new ProtocolError("agentRevision must be a positive integer");
+  }
+  if (agentVersion !== undefined && (!Number.isInteger(agentVersion) || agentVersion === 0)) {
+    throw new ProtocolError("agentVersion must be a positive integer");
+  }
+  if (agent === undefined && (agentSource !== undefined || agentRevision !== undefined || agentVersion !== undefined)) {
+    throw new ProtocolError("agentSource, agentRevision, and agentVersion require agent");
+  }
+  if (agentSource === "draft" && agentVersion !== undefined) {
+    throw new ProtocolError("agentVersion cannot be used with a draft Agent");
+  }
+  if (agentSource === "draft" && agentRevision === undefined) {
+    throw new ProtocolError("agentRevision is required with agentSource draft");
+  }
+  if (agentSource !== "draft" && agentRevision !== undefined) {
+    throw new ProtocolError("agentRevision requires agentSource draft");
+  }
   const language = optionalString(value, "language");
   const system = optionalString(value, "system");
   const voice = optionalString(value, "voice");
@@ -172,6 +202,10 @@ function parseStartOptions(value: unknown): SessionStartOptions {
   const minSpeechMs = optionalNumber(value, "minSpeechMs");
   const welcome = optionalString(value, "welcome");
   const nudgeAfterSeconds = optionalNumber(value, "nudgeAfterSeconds");
+  if (agent !== undefined) options.agent = agent;
+  if (agentSource !== undefined) options.agentSource = agentSource;
+  if (agentRevision !== undefined) options.agentRevision = agentRevision;
+  if (agentVersion !== undefined) options.agentVersion = agentVersion;
   if (language !== undefined) options.language = language;
   if (system !== undefined) options.system = system;
   if (asrEngine !== undefined) options.asrEngine = asrEngine;

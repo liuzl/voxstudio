@@ -1,4 +1,5 @@
 import { auditDesignProfile, TtsClient, type Fetch, type PcmStreamDecoder } from "@voxstudio/clients";
+import { AgentRegistry, AgentRegistryError, type AgentSpec, type CreateAgentInput, type UpdateAgentInput } from "@voxstudio/agents";
 import { engine, engineByCapability, enginesOfKind, roleInstance } from "@voxstudio/config";
 import type { EngineKind, ResolvedEngineConfig, VoxConfig } from "@voxstudio/contracts";
 import type { SpeechProbabilityModel } from "@voxstudio/duplex-session";
@@ -18,7 +19,7 @@ import { QuotaLedger } from "./quota";
 import { SynthesisBusyError, SynthesisGate } from "./synthesis-gate";
 import { discoveryPaths, isCharged, routeFor } from "./routes";
 import { CaptureLibrary } from "./library";
-import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand } from "./protocol";
+import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand, type SessionStartOptions } from "./protocol";
 import { studioToolNames } from "@voxstudio/conversation";
 import { estSeconds } from "@voxstudio/text";
 import { builtinToolNames, GatewaySession, type EventSink } from "./session";
@@ -121,6 +122,8 @@ export interface GatewayServerOptions {
    * own machine, wrong for anything long-running or shared.
    */
   libraryMaxBytes?: number;
+  /** Agent drafts and immutable published snapshots. Off when absent. */
+  agentsDir?: string;
   loadSileroVad?: () => Promise<SpeechProbabilityModel>;
   /** Decodes compressed (Opus) TTS streams from engines configured with stream_format. */
   pcmDecoder?: PcmStreamDecoder;
@@ -145,6 +148,12 @@ export interface GatewayServer {
 interface SocketData {
   session: GatewaySession | undefined;
   sink: EventSink | undefined;
+  /** Native Agent resolution is asynchronous; this closes the pre-session race window. */
+  pendingStart?: string | undefined;
+  /** Audio arriving behind session.start is ordered here until the session is ready. */
+  pendingAudio?: Uint8Array[] | undefined;
+  /** Prevents an async start from creating a session after its socket has gone away. */
+  closed?: boolean | undefined;
   /** Resolved once at upgrade (docs/auth.md phase 1); no per-frame credential work. */
   ctx: AuthContext;
   /** Present when the connection speaks the OpenAI Realtime dialect instead of the native protocol. */
@@ -165,6 +174,7 @@ const voiceEntryPattern = /^\/v1\/voices\/[A-Za-z0-9._-]{1,64}$/;
 
 /** Library entries: gateway-minted UUIDs, plus the audio and promote sub-resources. */
 const libraryEntryPattern = /^\/v1\/library\/([A-Za-z0-9-]{1,64})(\/audio|\/promote)?$/;
+const agentEntryPattern = /^\/v1\/agents\/([A-Za-z0-9._-]{1,64})(?:\/(publish|audit|versions))?$/;
 const voiceIdPattern = /^[A-Za-z0-9._-]{1,64}$/;
 
 /**
@@ -379,6 +389,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         log,
       })
     : undefined;
+  const agents = options.agentsDir === undefined ? undefined : new AgentRegistry(options.agentsDir);
 
   const assets = options.staticAssets && Object.keys(options.staticAssets).length > 0
     ? options.staticAssets
@@ -588,7 +599,11 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     }
   }
 
-  const createSession = (extraTools: ConversationTool[] = [], owner: string = OWNER_USER_ID): GatewaySession => {
+  const createSession = (
+    extraTools: ConversationTool[] = [],
+    owner: string = OWNER_USER_ID,
+    agentSpec?: AgentSpec,
+  ): GatewaySession => {
     if (options.maxSessions !== undefined && sessions.size >= options.maxSessions) {
       log(`session refused: at the ${options.maxSessions}-session capacity`);
       throw new CapacityError();
@@ -611,6 +626,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // user-created voice. Keep that exact registered voice for account holders instead
       // of rewriting it to `u<owner>.laok`; omission would put VoxCPM in design mode.
       ...(owner === OWNER_USER_ID ? {} : { deploymentDefaultVoice: options.config.ttsDefaults.voice }),
+      ...(agentSpec === undefined ? {} : { agentSpec }),
       // A conversation is metered per turn: one charge at start bought the session, and
       // each turn's model work costs one more (adversarial review 2026-07-26 — a single
       // charge used to buy unbounded engine work).
@@ -673,7 +689,8 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         // call an ambient tool had been absorbing.
         const taken = new Set<string>([...builtinToolNames, ...studioToolNames]);
         const composed: ConversationTool[] = [];
-        for (const tool of [...extraTools, ...(mcpSource ? (await mcpSource).tools() : [])]) {
+        const agentMcp = agentSpec === undefined ? undefined : agentSpec.mcpServers ?? [];
+        for (const tool of [...extraTools, ...(mcpSource ? (await mcpSource).tools(agentMcp) : [])]) {
           if (taken.has(tool.name)) continue;
           taken.add(tool.name);
           composed.push(tool);
@@ -692,7 +709,9 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       }),
       loadSileroVad: options.loadSileroVad,
       ...(options.reconnectGraceMs === undefined ? {} : { reconnectGraceMs: options.reconnectGraceMs }),
-      ...(options.maxSessionSeconds === undefined ? {} : { maxSessionSeconds: options.maxSessionSeconds }),
+      ...((options.maxSessionSeconds === undefined && agentSpec?.maxSessionSeconds === undefined) ? {} : {
+        maxSessionSeconds: Math.min(options.maxSessionSeconds ?? Number.POSITIVE_INFINITY, agentSpec?.maxSessionSeconds ?? Number.POSITIVE_INFINITY),
+      }),
       onClosed: closed => { sessions.delete(closed.id); },
       ...(options.log === undefined ? {} : { log: options.log }),
     });
@@ -700,32 +719,107 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     return session;
   };
 
+  const resolveAgentStart = async (
+    owner: string,
+    start: SessionStartOptions,
+  ): Promise<{ start: SessionStartOptions; spec?: AgentSpec }> => {
+    if (start.agent === undefined) return { start };
+    if (agents === undefined) throw new AgentRegistryError("not_found", "this deployment has no Agent registry configured");
+    const source = start.agentSource === "draft"
+      ? { type: "draft" as const, ...(start.agentRevision === undefined ? {} : { revision: start.agentRevision }) }
+      : { type: "published" as const, ...(start.agentVersion === undefined ? {} : { version: start.agentVersion }) };
+    const resolved = await agents.resolve(owner, start.agent, source);
+    const spec = resolved.spec;
+    const {
+      agent: _agent,
+      agentSource: _agentSource,
+      agentRevision: _agentRevision,
+      agentVersion: _agentVersion,
+      ...explicit
+    } = start;
+    const defaults: SessionStartOptions = {
+      ...(spec.instructions === undefined ? {} : { system: spec.instructions }),
+      ...(spec.voice === undefined ? {} : { voice: spec.voice }),
+      ...(spec.language === undefined ? {} : { language: spec.language }),
+      ...(spec.welcome === undefined ? {} : { welcome: spec.welcome }),
+      ...(spec.nudgeAfterSeconds === undefined ? {} : { nudgeAfterSeconds: spec.nudgeAfterSeconds }),
+      ...(spec.asrEngine === undefined ? {} : { asrEngine: spec.asrEngine }),
+      ...(spec.llmEngine === undefined ? {} : { llmEngine: spec.llmEngine }),
+      ...(spec.ttsEngine === undefined ? {} : { ttsEngine: spec.ttsEngine }),
+      ...(spec.turnTaking === undefined ? {} : { turnTaking: spec.turnTaking }),
+      ...(spec.reopenMs === undefined ? {} : { reopenMs: spec.reopenMs }),
+      ...(spec.vad === undefined ? {} : { vad: spec.vad }),
+      ...(spec.threshold === undefined ? {} : { threshold: spec.threshold }),
+      ...(spec.silenceMs === undefined ? {} : { silenceMs: spec.silenceMs }),
+      ...(spec.minSpeechMs === undefined ? {} : { minSpeechMs: spec.minSpeechMs }),
+    };
+    const merged: SessionStartOptions = { ...defaults, ...explicit };
+    // Tool policy is a ceiling: the caller may turn an allowed capability off, never
+    // turn one on that the saved Agent did not grant.
+    merged.studioTools = spec.studioTools === true && explicit.studioTools !== false;
+    return { start: merged, spec };
+  };
+
   const handleFirstCommand = (ws: ServerWebSocket<SocketData>, command: GatewayCommand): void => {
     const sink = sinkFor(ws);
     if (command.type === "session.start") {
-      let session: GatewaySession;
-      try {
-        session = createSession([], ws.data.ctx.userId);
-      } catch (error) {
-        if (error instanceof QuotaError) {
-          // The same contract the REST 429 carries: how long to wait, and an id to quote.
-          sink.send(rejection("", "quota_exceeded", command, {
-            retryAfterSeconds: error.retryAfterSeconds,
-            requestId: crypto.randomUUID(),
-          }));
-          return;
-        }
-        sink.send(rejection("", error instanceof CapacityError ? "session_capacity" : "session_unavailable", command));
+      if (ws.data.pendingStart !== undefined) {
+        sink.send(rejection("", "session_starting", command));
         return;
       }
-      ws.data.session = session;
-      session.recordCommand(command);
-      void session.start(command.options ?? {}, sink)
-        .then(() => {
+      const pendingKey = command.idempotencyKey;
+      ws.data.pendingStart = pendingKey;
+      ws.data.pendingAudio = [];
+      void (async (): Promise<void> => {
+        let session: GatewaySession;
+        let resolved: Awaited<ReturnType<typeof resolveAgentStart>>;
+        try {
+          // Resolution precedes charging and engine admission: an unknown, unpublished,
+          // cross-owner, or stale draft Agent costs no quota and starts no session.
+          resolved = await resolveAgentStart(ws.data.ctx.userId, command.options ?? {});
+          if (ws.data.closed === true || ws.data.pendingStart !== pendingKey) return;
+          session = createSession([], ws.data.ctx.userId, resolved.spec);
+        } catch (error) {
+          if (ws.data.pendingStart === pendingKey) {
+            ws.data.pendingStart = undefined;
+            ws.data.pendingAudio = undefined;
+          }
+          if (ws.data.closed === true) return;
+          if (error instanceof QuotaError) {
+            sink.send(rejection("", "quota_exceeded", command, {
+              retryAfterSeconds: error.retryAfterSeconds,
+              requestId: crypto.randomUUID(),
+            }));
+            return;
+          }
+          const reason = error instanceof CapacityError ? "session_capacity"
+            : error instanceof AgentRegistryError
+              ? error.code === "not_published" ? "agent_not_published"
+                : error.code === "conflict" ? "agent_revision_conflict" : "unknown_agent"
+              : "session_unavailable";
+          sink.send(rejection("", reason, command));
+          return;
+        }
+        ws.data.session = session;
+        session.recordCommand(command);
+        try {
+          await session.start(resolved.start, sink);
+          // The close callback can mutate socket data while session.start awaits; keep
+          // this read opaque to TypeScript's pre-await control-flow narrowing.
+          if (Boolean(ws.data.closed)) {
+            ws.data.session = undefined;
+            session.stop();
+            return;
+          }
+          const pendingAudio = ws.data.pendingStart === pendingKey ? ws.data.pendingAudio ?? [] : [];
+          ws.data.pendingStart = undefined;
+          ws.data.pendingAudio = undefined;
           session.accept(command);
           session.emit(session.snapshotPayload());
-        })
-        .catch(error => {
+          for (const bytes of pendingAudio) session.pushAudio(bytes);
+        } catch (error) {
+          ws.data.pendingStart = undefined;
+          ws.data.pendingAudio = undefined;
           session.emit({
             type: "command.rejected",
             reason: error instanceof Error ? error.message : String(error),
@@ -734,7 +828,8 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           });
           ws.data.session = undefined;
           session.stop();
-        });
+        }
+      })();
       return;
     }
     if (command.type === "session.attach") {
@@ -845,6 +940,77 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         refund();
         return response;
       };
+      const agentMatch = agentEntryPattern.exec(url.pathname);
+      if (url.pathname === "/v1/agents" || agentMatch !== null) {
+        if (agents === undefined) {
+          return problem(404, "agents_disabled", "this deployment has no Agent registry configured");
+        }
+        const mutating = request.method === "PATCH" || request.method === "DELETE"
+          || (request.method === "POST" && agentMatch?.[2] !== "audit");
+        if (mutating && options.demoMode === true) {
+          return problem(403, "demo_mode", "Agent registry writes are disabled in demo mode");
+        }
+        // Better Auth protects its own mutations only. Product writes made with an
+        // ambient browser session receive the same exact hosted-Origin check as the
+        // realtime upgrade; API keys remain explicit non-browser credentials.
+        if (mutating && (ctx.via === "session" || ctx.via === "none") && !upgradeOriginAllowed(request, originPolicy())) {
+          return problem(403, "forbidden_origin", "this origin may not modify Agents");
+        }
+        const body = async (): Promise<Record<string, unknown> | null> => {
+          const parsed = await request.json().catch(() => null) as unknown;
+          return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown> : null;
+        };
+        const revision = (value: unknown): number => {
+          if (!Number.isInteger(value) || (value as number) < 1) {
+            throw new AgentRegistryError("invalid", "revision must be a positive integer");
+          }
+          return value as number;
+        };
+        const recordResponse = (record: { revision: number }, status = 200): Response => Response.json(record, {
+          status,
+          headers: { etag: `\"${record.revision}\"` },
+        });
+        try {
+          if (url.pathname === "/v1/agents") {
+            if (request.method === "GET") return Response.json({ agents: await agents.list(ctx.userId) });
+            const parsed = await body();
+            if (parsed === null) throw new AgentRegistryError("invalid", "expected a JSON object");
+            return recordResponse(await agents.create(ctx.userId, parsed as unknown as CreateAgentInput), 201);
+          }
+          const id = agentMatch?.[1] as string;
+          const action = agentMatch?.[2];
+          if (action === "publish") {
+            const parsed = await body();
+            if (parsed === null) throw new AgentRegistryError("invalid", "expected a JSON object");
+            const result = await agents.publish(ctx.userId, id, revision(parsed.revision));
+            return recordResponse({ ...result, revision: result.record.revision });
+          }
+          if (action === "audit") return Response.json(await agents.audit(ctx.userId, id));
+          if (action === "versions") return Response.json({ versions: await agents.versions(ctx.userId, id) });
+          if (request.method === "GET") {
+            const record = await agents.get(ctx.userId, id);
+            return record === undefined ? problem(404, "agent_not_found", `agent ${id} was not found`) : recordResponse(record);
+          }
+          const parsed = await body();
+          if (parsed === null) throw new AgentRegistryError("invalid", "expected a JSON object");
+          if (request.method === "PATCH") {
+            return recordResponse(await agents.update(ctx.userId, id, {
+              ...parsed as unknown as UpdateAgentInput,
+              revision: revision(parsed.revision),
+            }));
+          }
+          await agents.remove(ctx.userId, id, revision(parsed.revision));
+          return Response.json({ deleted: true });
+        } catch (error) {
+          if (!(error instanceof AgentRegistryError)) throw error;
+          const status = error.code === "invalid" ? 400
+            : error.code === "not_found" ? 404
+              : 409;
+          const code = error.code === "not_found" ? "agent_not_found" : `agent_${error.code}`;
+          return problem(status, code, error.message);
+        }
+      }
       if (url.pathname === "/v1/realtime") {
         // Browsers always send Origin on an upgrade; a cross-site one is refused before
         // the socket exists (CSWSH under a token, CSRF under a cookie session). Hosted
@@ -865,6 +1031,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           session: undefined,
           sink: undefined,
           ctx,
+          closed: false,
           ...(openai ? { openaiModel: url.searchParams.get("model") ?? "voxstudio-realtime" } : {}),
         };
         // Clients that offer subprotocols (the OpenAI SDKs offer `realtime`) get their
@@ -1132,6 +1299,15 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           const bytes = data instanceof ArrayBuffer
             ? new Uint8Array(data)
             : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+          if (ws.data.pendingStart !== undefined) {
+            const buffered = ws.data.pendingAudio ?? [];
+            // One second of 16 kHz float32 audio is enough to preserve speech begun on
+            // the start gesture without letting an unresolved session grow unbounded.
+            const retained = buffered.reduce((sum, entry) => sum + entry.byteLength, 0);
+            if (retained + bytes.byteLength <= 64_000) buffered.push(bytes.slice());
+            ws.data.pendingAudio = buffered;
+            return;
+          }
           ws.data.session?.pushAudio(bytes);
           return;
         }
@@ -1143,11 +1319,18 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           sinkFor(ws).send(rejection(ws.data.session?.id ?? "", reason));
           return;
         }
+        if (ws.data.pendingStart !== undefined) {
+          sinkFor(ws).send(rejection("", "session_starting", command));
+          return;
+        }
         const session = ws.data.session;
         if (session) session.handleCommand(command);
         else handleFirstCommand(ws, command);
       },
       close(ws) {
+        ws.data.closed = true;
+        ws.data.pendingStart = undefined;
+        ws.data.pendingAudio = undefined;
         if (ws.data.openai) {
           // No reattach in this dialect: the socket's end is the session's end.
           ws.data.openai.handleClose();

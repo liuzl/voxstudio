@@ -66,7 +66,7 @@ describe("agent onboarding page", () => {
     const page = agentPage(options);
     expect(page).toContain("no SLA");
     // Nothing about signup, organizations, scopes, or device authorization: they do not exist.
-    for (const absent of ["organization", "scope:", "device_code", "/v1/agents", "billing"]) {
+    for (const absent of ["organization", "scope:", "device_code", "billing"]) {
       expect(page.toLowerCase()).not.toContain(absent.toLowerCase());
     }
   });

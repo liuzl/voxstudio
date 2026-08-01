@@ -1,11 +1,13 @@
 import type { VoxConfig } from "@voxstudio/contracts";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { ffmpegPcmDecoder, loadSileroVadModel, persistPronunciationsFile, resolveConfigPath } from "@voxstudio/platform-bun";
 import { parseByteSize, startGateway, type GatewayServer, type GatewayServerOptions } from "@voxstudio/realtime-gateway";
 import { webAssets } from "../generated/web-assets";
 import type { CliIo } from "../io";
 
 export const studioUsage = `usage: vox studio [--host HOST] [--port PORT] [--token TOKEN]
-                 [--library DIR] [--library-max-bytes SIZE] [--accounts DIR]
+                 [--agents DIR] [--library DIR] [--library-max-bytes SIZE] [--accounts DIR]
                  [--quota N] [--quota-window SECONDS] [--max-synthesis-seconds N]
                  [--max-concurrent-synthesis N] [--max-queued-synthesis Q]
                  [--max-sessions N] [--max-session-seconds N] [--demo]
@@ -23,6 +25,8 @@ options:
   --port PORT    listen port (default 8790)
   --token TOKEN  bearer token required on /v1 requests and the realtime socket
                  (VOX_GATEWAY_TOKEN)
+  --agents DIR   Agent drafts and immutable published versions
+                 (default ~/.config/voxstudio/agents; VOX_GATEWAY_AGENTS)
   --library DIR  retain every finalized utterance (WAV + transcript) in DIR and serve
                  the 素材库 panel at /v1/library; off by default (an explicit retention
                  opt-in; VOX_GATEWAY_LIBRARY), and demo mode keeps it off regardless
@@ -121,6 +125,7 @@ export async function runStudio(
   let maxSessionSeconds = positiveEnv("VOX_GATEWAY_MAX_SESSION_SECONDS");
   let demoMode = process.env.VOX_GATEWAY_DEMO === "1";
   let libraryDir = process.env.VOX_GATEWAY_LIBRARY;
+  let agentsDir = process.env.VOX_GATEWAY_AGENTS ?? join(homedir(), ".config", "voxstudio", "agents");
   let accountsDir = process.env.VOX_GATEWAY_ACCOUNTS;
   // A quota typo fails closed, exactly like the guardrail envs above.
   let quotaOperations = positiveEnv("VOX_GATEWAY_QUOTA", true);
@@ -148,6 +153,7 @@ export async function runStudio(
       }
       port = parsed;
     } else if (arg === "--token") token = value();
+    else if (arg === "--agents") agentsDir = value();
     else if (arg === "--max-sessions") maxSessions = positiveNumber(value(), arg, true);
     else if (arg === "--max-session-seconds") maxSessionSeconds = positiveNumber(value(), arg);
     else if (arg === "--demo") demoMode = true;
@@ -198,6 +204,7 @@ export async function runStudio(
     ...(maxSessions === undefined ? {} : { maxSessions }),
     ...(maxSessionSeconds === undefined ? {} : { maxSessionSeconds }),
     ...(demoMode ? { demoMode } : {}),
+    ...(agentsDir === "" ? {} : { agentsDir }),
     ...(libraryDir === undefined || libraryDir === "" ? {} : { libraryDir }),
     ...(libraryMaxBytes === undefined ? {} : { libraryMaxBytes }),
     ...(hasAccounts ? {

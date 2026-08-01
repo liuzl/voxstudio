@@ -682,6 +682,59 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
           },
         },
       },
+      "/v1/agents": {
+        get: {
+          summary: "List the caller's Agent drafts",
+          responses: { "200": { description: "Owner-scoped Agent records." } },
+        },
+        post: {
+          summary: "Create an Agent draft",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: {
+              type: "object",
+              properties: {
+                id: { type: "string", pattern: "^[A-Za-z0-9._-]{1,64}$" },
+                name: { type: "string" },
+                description: { type: "string" },
+                spec: { type: "object" },
+              },
+              required: ["id", "name"],
+            } } },
+          },
+          responses: { "201": { description: "Draft created." }, "400": errorResponse("Invalid Agent."), "409": errorResponse("Agent id already exists.") },
+        },
+      },
+      "/v1/agents/{id}": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", pattern: "^[A-Za-z0-9._-]{1,64}$" } }],
+        get: { summary: "Get one Agent draft", responses: { "200": { description: "The Agent record." }, "404": errorResponse("No such Agent.") } },
+        patch: {
+          summary: "Update an Agent draft at an expected revision",
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { revision: { type: "integer", minimum: 1 }, name: { type: "string" }, description: { type: ["string", "null"] }, spec: { type: "object" } }, required: ["revision"] } } } },
+          responses: { "200": { description: "Updated Agent record." }, "400": errorResponse("Invalid patch."), "404": errorResponse("No such Agent."), "409": errorResponse("Draft revision conflict.") },
+        },
+        delete: {
+          summary: "Delete an Agent draft at an expected revision",
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { revision: { type: "integer", minimum: 1 } }, required: ["revision"] } } } },
+          responses: { "200": { description: "Deleted." }, "404": errorResponse("No such Agent."), "409": errorResponse("Draft revision conflict.") },
+        },
+      },
+      "/v1/agents/{id}/publish": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        post: {
+          summary: "Publish an immutable Agent version",
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", properties: { revision: { type: "integer", minimum: 1 } }, required: ["revision"] } } } },
+          responses: { "200": { description: "Updated record and immutable version." }, "404": errorResponse("No such Agent."), "409": errorResponse("Draft revision conflict.") },
+        },
+      },
+      "/v1/agents/{id}/audit": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        post: { summary: "Compare the draft with its immutable published snapshot", responses: { "200": { description: "Hash audit verdict." }, "404": errorResponse("No such Agent.") } },
+      },
+      "/v1/agents/{id}/versions": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        get: { summary: "List immutable published Agent versions", responses: { "200": { description: "Published versions, newest first." }, "404": errorResponse("No such Agent.") } },
+      },
       "/v1/voices": {
         get: {
           summary: "The caller's voice bank across every TTS instance",

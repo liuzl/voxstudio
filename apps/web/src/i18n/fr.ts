@@ -1,7 +1,8 @@
-import type { MessageKey } from "./en";
+import { agentBuilderMessages, type MessageKey } from "./en";
 
 /** French catalog — machine-drafted, pending native review. Keys are the Chinese source strings. */
 export const fr: Record<MessageKey, string> = {
+  ...agentBuilderMessages,
   // App shell
   "对话": "Conversation",
   "生成": "Générer",
@@ -31,7 +32,6 @@ export const fr: Record<MessageKey, string> = {
   // Agents panel
   "语音助手": "Agents vocaux",
   "创建、配置和测试实时语音助手。": "Créez, configurez et testez des agents vocaux en temps réel.",
-  "默认语音助手": "Agent vocal par défaut",
   "搜索助手": "Rechercher un agent",
   "创建助手": "Créer un agent",
   "显示模板": "Afficher les modèles",
@@ -48,21 +48,16 @@ export const fr: Record<MessageKey, string> = {
   "协助处理日常事务": "Aider dans les tâches quotidiennes",
   "线索筛选": "Qualification de leads",
   "筛选和跟进入站线索": "Filtrer et suivre les leads entrants",
-  "助手名称已更新": "Nom de l'agent mis à jour",
   "已载入「{name}」模板": "Modèle « {name} » chargé",
   "更新时间": "Mis à jour",
   "操作": "Actions",
-  "刚刚": "à l'instant",
   "助手操作": "Actions de l'agent",
   "已复制助手 ID": "ID de l'agent copié",
   "复制助手 ID": "Copier l'ID de l'agent",
-  "重命名": "Renommer",
   "已从列表移除助手": "Agent retiré de la liste",
   "删除助手": "Supprimer l'agent",
   "没有匹配的助手。": "Aucun agent correspondant.",
   "还没有助手。": "Aucun agent pour l'instant.",
-  "重命名助手": "Renommer l'agent",
-  "输入一个容易识别的助手名称。": "Saisissez un nom qui rend cet agent facile à identifier.",
   "保存": "Enregistrer",
   // Library panel
   "管理对话中明确留存的录音、转写校正与音色参考样本。": "Gérez les enregistrements explicitement conservés, les corrections de transcription et les échantillons de référence des voix.",

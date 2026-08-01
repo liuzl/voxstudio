@@ -20,7 +20,7 @@ import type { ConversationTool, ToolEffect } from "@voxstudio/conversation";
 
 export interface McpToolSource {
   /** Fresh tool objects per call; handlers close over the shared clients. */
-  tools(): ConversationTool[];
+  tools(servers?: readonly string[]): ConversationTool[];
   close(): Promise<void>;
 }
 
@@ -158,7 +158,10 @@ export async function connectMcpServers(
   }
 
   return {
-    tools: () => bridged.map(entry => entry.tool),
+    tools: servers => {
+      const allowed = servers === undefined ? undefined : new Set(servers);
+      return bridged.filter(entry => allowed === undefined || allowed.has(entry.serverName)).map(entry => entry.tool);
+    },
     close: async () => {
       await Promise.allSettled(clients.map(entry => entry.client.close()));
     },

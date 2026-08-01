@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@better-auth/api-key": "^1.6.25",
+    "@voxstudio/agents": "workspace:*",
     "@voxstudio/audio": "workspace:*",
     "@voxstudio/clients": "workspace:*",
     "@voxstudio/config": "workspace:*",

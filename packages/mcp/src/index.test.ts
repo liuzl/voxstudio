@@ -51,6 +51,8 @@ describe("mcp bridge", () => {
       properties: { content: { type: "string" } },
       required: ["content"],
     });
+    expect(source.tools([])).toEqual([]);
+    expect(source.tools(["memo"]).map(tool => tool.name).sort()).toEqual([...byName.keys()].sort());
     await source.close();
   });
 

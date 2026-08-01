@@ -1,7 +1,8 @@
-import type { MessageKey } from "./en";
+import { agentBuilderMessages, type MessageKey } from "./en";
 
 /** Korean catalog — machine-drafted, pending native review. Keys are the Chinese source strings. */
 export const ko: Record<MessageKey, string> = {
+  ...agentBuilderMessages,
   // App shell
   "对话": "대화",
   "生成": "생성",
@@ -31,7 +32,6 @@ export const ko: Record<MessageKey, string> = {
   // Agents panel
   "语音助手": "음성 에이전트",
   "创建、配置和测试实时语音助手。": "실시간 음성 에이전트를 만들고 구성하고 테스트하세요.",
-  "默认语音助手": "기본 음성 에이전트",
   "搜索助手": "에이전트 검색",
   "创建助手": "에이전트 만들기",
   "显示模板": "템플릿 보기",
@@ -48,21 +48,16 @@ export const ko: Record<MessageKey, string> = {
   "协助处理日常事务": "일상 업무 지원",
   "线索筛选": "리드 선별",
   "筛选和跟进入站线索": "인바운드 리드 선별 및 후속 관리",
-  "助手名称已更新": "에이전트 이름을 업데이트했어요",
   "已载入「{name}」模板": "'{name}' 템플릿을 불러왔어요",
   "更新时间": "업데이트",
   "操作": "작업",
-  "刚刚": "방금",
   "助手操作": "에이전트 작업",
   "已复制助手 ID": "에이전트 ID를 복사했어요",
   "复制助手 ID": "에이전트 ID 복사",
-  "重命名": "이름 변경",
   "已从列表移除助手": "목록에서 에이전트를 제거했어요",
   "删除助手": "에이전트 삭제",
   "没有匹配的助手。": "일치하는 에이전트가 없어요.",
   "还没有助手。": "아직 에이전트가 없어요.",
-  "重命名助手": "에이전트 이름 변경",
-  "输入一个容易识别的助手名称。": "알아보기 쉬운 에이전트 이름을 입력하세요.",
   "保存": "저장",
   // Library panel
   "管理对话中明确留存的录音、转写校正与音色参考样本。": "대화에서 명시적으로 보존한 녹음, 전사 교정, 보이스 참조 샘플을 관리하세요.",

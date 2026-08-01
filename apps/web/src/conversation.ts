@@ -1,4 +1,4 @@
-import type { GatewayEvent } from "@voxstudio/realtime-gateway/protocol";
+import type { GatewayEvent, SessionStartOptions } from "@voxstudio/realtime-gateway/protocol";
 import { t } from "./i18n";
 import { synthesize } from "./lib/api";
 import { MicCapture, SpeakerOutput } from "./lib/audio";
@@ -15,15 +15,28 @@ export class ConversationController {
   private speaker: SpeakerOutput | undefined;
   private playbackTurnId: string | undefined;
   private lastLevelAt = 0;
+  private stopped = false;
 
-  async start(): Promise<void> {
+  async start(overrides?: SessionStartOptions): Promise<void> {
     const store = useStudio.getState();
     const speaker = new SpeakerOutput();
-    await speaker.resume();
     this.speaker = speaker;
+    await speaker.resume();
+    if (this.stopped) {
+      if (this.speaker === speaker) this.speaker = undefined;
+      await speaker.close().catch(() => {});
+      throw new Error("conversation start cancelled");
+    }
     const client = new GatewayClient({
       url: realtimeUrl(),
-      startOptions: {
+      startOptions: overrides?.agent ? {
+        // Agent preview/runtime options are already a complete behavior snapshot on the
+        // gateway. Only endpoint capabilities belong here; local conversation prefs must
+        // not silently override the saved Agent's voice, prompt, or greeting.
+        bargeIn: true,
+        playbackAck: true,
+        ...overrides,
+      } : {
         // The ASR hint stays "auto": measured identical to "zh" on the SenseVoice slot
         // (2026-07-17, pure-zh / code-switched / pure-en all byte-equal), and neutral if
         // the conversation ASR is ever routed to an engine that does care.
@@ -50,6 +63,10 @@ export class ConversationController {
       client.sendAudio(samples);
       this.tapLevel(samples);
     });
+    if (this.stopped) {
+      await mic.stop().catch(() => {});
+      throw new Error("conversation start cancelled");
+    }
     this.mic = mic;
     useStudio.getState().setCapability(mic.capability());
     client.connect();
@@ -90,6 +107,7 @@ export class ConversationController {
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
     this.client?.stopSession();
     this.client = undefined;
     await this.mic?.stop();
@@ -164,14 +182,16 @@ function realtimeUrl(): string {
  */
 let current: ConversationController | undefined;
 
-export async function startConversation(): Promise<void> {
-  if (current) return;
+export async function startConversation(options?: SessionStartOptions): Promise<void> {
+  if (current) throw new Error("conversation is already starting or active");
   const next = new ConversationController();
   current = next;
   try {
-    await next.start();
+    await next.start(options);
   } catch (error) {
-    current = undefined;
+    // A cancelled start may finish after another caller has begun a replacement;
+    // never let the stale controller clear ownership of that newer conversation.
+    if (current === next) current = undefined;
     await next.stop().catch(() => {});
     throw error;
   }

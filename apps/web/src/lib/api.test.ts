@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { transcribe } from "./api";
+import { createAgent, deleteAgent, listAgents, publishAgent, transcribe, updateAgent } from "./api";
 
 const realFetch = globalThis.fetch;
 
@@ -34,5 +34,42 @@ describe("api transcribe", () => {
       .resolves.toBe("机器学习中的过拟合");
     expect(form?.get("language")).toBe("zh");
     expect(form?.get("revise")).toBe("true");
+  });
+});
+
+describe("Agent API", () => {
+  test("carries revisions through create, update, publish, and delete", async () => {
+    const calls: Array<{ path: string; method: string; body?: unknown }> = [];
+    stubFetch((input, init) => {
+      const path = String(input);
+      const method = init?.method ?? "GET";
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) as unknown : undefined;
+      calls.push({ path, method, ...(body === undefined ? {} : { body }) });
+      if (method === "POST" && path.endsWith("/publish")) {
+        return Response.json({
+          record: { id: "support", name: "Support", revision: 3, createdAt: "now", updatedAt: "now", spec: {}, published: { version: 1, hash: "a".repeat(64), publishedAt: "now" } },
+          version: { id: "support", version: 1, hash: "a".repeat(64), publishedAt: "now", spec: {} },
+        });
+      }
+      if (method === "DELETE") return Response.json({ deleted: true });
+      return Response.json({ id: "support", name: "Support", revision: method === "PATCH" ? 2 : 1, createdAt: "now", updatedAt: "now", spec: {} });
+    });
+
+    const created = await createAgent({ id: "support", name: "Support" });
+    const updated = await updateAgent("support", created.revision, { name: "Support v2", spec: { voice: "calm" } });
+    const published = await publishAgent("support", updated.revision);
+    await deleteAgent("support", published.record.revision);
+
+    expect(calls).toEqual([
+      { path: "/v1/agents", method: "POST", body: { id: "support", name: "Support" } },
+      { path: "/v1/agents/support", method: "PATCH", body: { revision: 1, name: "Support v2", spec: { voice: "calm" } } },
+      { path: "/v1/agents/support/publish", method: "POST", body: { revision: 2 } },
+      { path: "/v1/agents/support", method: "DELETE", body: { revision: 3 } },
+    ]);
+  });
+
+  test("lists the owner-visible records", async () => {
+    stubFetch(() => Response.json({ agents: [{ id: "a", name: "A", revision: 1, createdAt: "now", updatedAt: "now", spec: {} }] }));
+    await expect(listAgents()).resolves.toMatchObject([{ id: "a", name: "A", revision: 1 }]);
   });
 });

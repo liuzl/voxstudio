@@ -104,12 +104,21 @@ const tabPath = (tab: Tab): string => (tab === "agents" ? "/" : `/${tab}`);
 
 function tabFromPath(pathname: string): Tab {
   const name = pathname.replace(/^\/+|\/+$/g, "");
+  if (name.startsWith("agents/")) return "agents";
   return tabIds.find(id => id === name) ?? "agents";
+}
+
+function agentFromPath(pathname: string): string | undefined {
+  const match = /^\/agents\/([^/]+)\/?$/.exec(pathname);
+  if (!match?.[1]) return undefined;
+  try { return decodeURIComponent(match[1]); } catch { return undefined; }
 }
 
 export function App() {
   const t = useT();
   const [tab, setTabState] = useState<Tab>(() => tabFromPath(window.location.pathname));
+  const [agentId, setAgentId] = useState<string | undefined>(() => agentFromPath(window.location.pathname));
+  const [agentDirty, setAgentDirty] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
   const hasTakes = useStudio(state => state.takes.length > 0);
@@ -123,18 +132,52 @@ export function App() {
     .join("")
     .toUpperCase();
 
+  const confirmAgentLeave = (): boolean => !agentDirty || window.confirm(t("放弃未保存的更改？"));
+
   const setTab = (next: Tab): void => {
-    if (next !== tab) window.history.pushState(null, "", tabPath(next));
+    if (agentId && !confirmAgentLeave()) return;
+    const path = tabPath(next);
+    if (window.location.pathname !== path) window.history.pushState(null, "", path);
     setTabState(next);
+    setAgentId(undefined);
+    setAgentDirty(false);
     setMobileNavOpen(false);
+  };
+
+  const openAgent = (id: string): void => {
+    if (agentId === id) return;
+    if (agentId && !confirmAgentLeave()) return;
+    window.history.pushState(null, "", `/agents/${encodeURIComponent(id)}`);
+    setTabState("agents");
+    setAgentId(id);
+    setAgentDirty(false);
+    setMobileNavOpen(false);
+  };
+
+  const closeAgent = (): void => {
+    if (!confirmAgentLeave()) return;
+    window.history.pushState(null, "", "/");
+    setTabState("agents");
+    setAgentId(undefined);
+    setAgentDirty(false);
   };
 
   // Back/forward move between tabs like between pages — that is the point of the URLs.
   useEffect(() => {
-    const onPop = (): void => setTabState(tabFromPath(window.location.pathname));
+    const onPop = (): void => {
+      const nextTab = tabFromPath(window.location.pathname);
+      const nextAgentId = agentFromPath(window.location.pathname);
+      if (agentDirty && agentId && nextAgentId !== agentId && !window.confirm(t("放弃未保存的更改？"))) {
+        window.history.pushState(null, "", `/agents/${encodeURIComponent(agentId)}`);
+        return;
+      }
+      setTabState(nextTab);
+      setAgentId(nextAgentId);
+      setAgentDirty(false);
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, []);
+  }, [agentDirty, agentId, t]);
 
   useEffect(() => {
     if (!mobileNavOpen) return;
@@ -147,19 +190,19 @@ export function App() {
 
   useEffect(() => {
     if (mainRef.current) mainRef.current.scrollTop = 0;
-  }, [tab]);
+  }, [tab, agentId]);
 
   // Generation takes are in-memory object URLs; a reload silently discards them.
   useEffect(() => {
-    if (!hasTakes) return;
+    if (!hasTakes && !agentDirty) return;
     const guard = (event: BeforeUnloadEvent) => event.preventDefault();
     window.addEventListener("beforeunload", guard);
     return () => window.removeEventListener("beforeunload", guard);
-  }, [hasTakes]);
+  }, [agentDirty, hasTakes]);
 
   const panel = (
     <>
-      {tab === "agents" && <AgentsPanel onOpenAgent={() => setTab("conversation")} />}
+      {tab === "agents" && <AgentsPanel agentId={agentId} onOpenAgent={openAgent} onCloseAgent={closeAgent} onDirtyChange={setAgentDirty} />}
       {tab === "conversation" && <ConversationPanel />}
       {tab === "generate" && <GeneratePanel />}
       {tab === "voices" && <VoicesPanel />}

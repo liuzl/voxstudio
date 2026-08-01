@@ -1,4 +1,5 @@
 import { type PcmStreamDecoder, AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
+import type { AgentSpec } from "@voxstudio/agents";
 import { engine, enginesOfKind, roleInstance } from "@voxstudio/config";
 import {
   builtinToolNames,
@@ -55,6 +56,8 @@ export interface GatewaySessionOptions {
    * engines interpret omission as reference-less design mode and re-roll every request.
    */
   deploymentDefaultVoice?: string;
+  /** Resolved Agent behavior for overlays that are not direct realtime wire fields. */
+  agentSpec?: AgentSpec;
   /**
    * Asks whether this conversation may spend one more turn (docs/auth.md phase 4).
    * Called once per conversational turn, when the user's utterance is finalized and
@@ -285,11 +288,12 @@ export class GatewaySession {
       // A session-local copy: remember_pronunciation mutates it, config stays shared. The
       // map must exist whenever the studio tools do.
       ...(studioActive || Object.keys(config.pronunciations).length > 0
-        ? { pronunciations: { ...config.pronunciations } } : {}),
+          || Object.keys(this.options.agentSpec?.pronunciations ?? {}).length > 0
+        ? { pronunciations: { ...config.pronunciations, ...this.options.agentSpec?.pronunciations } } : {}),
     } as Parameters<typeof runConversation>[1];
     conversationOptions.onControls = handle => { this.controls = handle; };
     conversationOptions.keyterms = createKeytermProvider({
-      configTerms: config.keyterms,
+      configTerms: [...config.keyterms, ...(this.options.agentSpec?.keyterms ?? [])],
       listVoices: async () => await this.options.listVoices?.() ?? [],
     });
     // The shared phase-1 session tools (docs/tool-loop.md), wired to this session's
