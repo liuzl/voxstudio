@@ -11,6 +11,7 @@ import {
   Headphones,
   LoaderCircle,
   Mic,
+  MicOff,
   MoreHorizontal,
   Plus,
   RotateCw,
@@ -23,8 +24,8 @@ import {
   Volume2,
 } from "lucide-react";
 import { PageHeader, pageShellClass, primaryButton, secondaryButton } from "../components/StudioPage";
-import { startConversation, stopConversation } from "../conversation";
-import { resolveLocale, useI18n, useT, type UiLocale } from "../i18n";
+import { conversationControls, startConversation, stopConversation } from "../conversation";
+import { resolveLocale, useI18n, useT, type MessageKey, type UiLocale } from "../i18n";
 import {
   auditAgent,
   createAgent,
@@ -39,6 +40,7 @@ import {
   type AgentSpec,
   type VoiceEntry,
 } from "../lib/api";
+import type { ConnectionState } from "../lib/client";
 import { useStudio } from "../store";
 
 const templates = [
@@ -540,69 +542,193 @@ function VoiceSelect({ draft, voices, onChange }: { draft: AgentDraft; voices: V
   );
 }
 
+const previewSessionLabels: Record<string, MessageKey> = {
+  listening: "聆听中",
+  speech_started: "你在说话",
+  finalizing: "断句中",
+  thinking: "思考中",
+  speaking: "回答中",
+  closed: "已结束",
+};
+
+export function previewStatusLabel(connection: ConnectionState, sessionState: string): MessageKey {
+  if (connection === "connecting") return "连接中";
+  if (connection === "reconnecting" || connection === "disconnected") return "重连中";
+  return previewSessionLabels[sessionState] ?? "聆听中";
+}
+
 function TryItLive({ record, dirty, onSave, audit }: { record: AgentRecord; dirty: boolean; onSave(): Promise<AgentRecord | undefined>; audit: AgentAudit | undefined }) {
   const t = useT();
   const active = useStudio(state => state.active);
   const connection = useStudio(state => state.connection);
   const sessionState = useStudio(state => state.sessionState);
   const turns = useStudio(state => state.turns);
+  const muted = useStudio(state => state.muted);
   const micLevel = useStudio(state => state.micLevel);
   const clearHistory = useStudio(state => state.clearHistory);
   const toast = useStudio(state => state.toast);
   const [starting, setStarting] = useState(false);
+  const [hasUnseen, setHasUnseen] = useState(false);
   const previewOwned = useRef(false);
   const previewStarting = useRef(false);
   const mounted = useRef(false);
+  const operationGeneration = useRef(0);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      if (previewOwned.current || previewStarting.current) void stopConversation();
+      operationGeneration.current += 1;
+      const shouldStop = previewOwned.current || previewStarting.current;
+      previewOwned.current = false;
+      previewStarting.current = false;
+      if (shouldStop) void stopConversation();
     };
   }, []);
 
-  const toggle = async () => {
-    if (active && previewOwned.current) {
-      previewOwned.current = false;
-      await stopConversation();
+  useEffect(() => {
+    if (!followLatest.current) {
+      setHasUnseen(true);
       return;
     }
+    const frame = requestAnimationFrame(() => {
+      const messages = messagesRef.current;
+      if (messages) messages.scrollTo({ top: messages.scrollHeight, behavior: "auto" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [turns]);
+
+  const scrollToLatest = () => {
+    followLatest.current = true;
+    setHasUnseen(false);
+    const messages = messagesRef.current;
+    if (messages) messages.scrollTo({ top: messages.scrollHeight, behavior: "smooth" });
+  };
+
+  const onMessagesScroll = () => {
+    const messages = messagesRef.current;
+    if (!messages) return;
+    const atLatest = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 48;
+    followLatest.current = atLatest;
+    if (atLatest) setHasUnseen(false);
+  };
+
+  const start = async () => {
+    if (previewStarting.current) return;
     if (active) { toast("error", t("请先结束当前实时对话")); return; }
+    const generation = ++operationGeneration.current;
+    const current = () => mounted.current && operationGeneration.current === generation;
     previewStarting.current = true;
     setStarting(true);
     try {
       const saved = dirty ? await onSave() : record;
       if (!saved) return;
-      if (!mounted.current) return;
+      if (!current()) return;
       clearHistory();
+      followLatest.current = true;
+      setHasUnseen(false);
       await startConversation({ agent: saved.id, agentSource: "draft", agentRevision: saved.revision });
-      if (!mounted.current) {
-        await stopConversation();
-        return;
-      }
+      if (!current()) return;
       previewOwned.current = true;
     } catch (error) {
-      if (mounted.current) toast("error", error instanceof Error ? error.message : String(error));
+      if (current()) toast("error", error instanceof Error ? error.message : String(error));
     } finally {
-      previewStarting.current = false;
-      if (mounted.current) setStarting(false);
+      if (current()) {
+        previewStarting.current = false;
+        setStarting(false);
+      }
+    }
+  };
+
+  const end = async () => {
+    operationGeneration.current += 1;
+    previewStarting.current = false;
+    previewOwned.current = false;
+    await stopConversation();
+  };
+
+  const restart = async () => {
+    if (!previewOwned.current || previewStarting.current) return;
+    const generation = ++operationGeneration.current;
+    const current = () => mounted.current && operationGeneration.current === generation;
+    // Keep the old session alive while a dirty draft saves; only replace it once the
+    // revision needed by the new preview is durable.
+    setStarting(true);
+    previewStarting.current = true;
+    try {
+      const saved = dirty ? await onSave() : record;
+      if (!saved || !current()) return;
+      previewOwned.current = false;
+      await stopConversation();
+      if (!current()) return;
+      clearHistory();
+      followLatest.current = true;
+      setHasUnseen(false);
+      await startConversation({ agent: saved.id, agentSource: "draft", agentRevision: saved.revision });
+      if (!current()) return;
+      previewOwned.current = true;
+    } catch (error) {
+      if (current()) toast("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      if (current()) {
+        previewStarting.current = false;
+        setStarting(false);
+      }
     }
   };
 
   const isPreview = active && previewOwned.current;
+  const previewConnected = isPreview && connection === "connected";
+  const stateLabel = isPreview ? t(previewStatusLabel(connection, sessionState)) : t("未开始");
+  const latestTurn = turns.at(-1);
+  const liveAnnouncement = latestTurn?.status === "completed" && latestTurn.reply ? latestTurn.reply : stateLabel;
   return (
-    <aside className="overflow-hidden rounded-2xl border border-edge bg-canvas shadow-[0_8px_30px_rgba(0,0,0,0.05)] xl:sticky xl:top-[90px]">
-      <header className="flex items-start justify-between gap-4 border-b border-edge-faint px-5 py-4"><div><div className="flex items-center gap-2"><h2 className="text-[13px] font-semibold">Try it live</h2>{audit?.status === "current" ? <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">v{audit.version}</span> : null}</div><p className="mt-1 text-[11px] text-fg-muted">{t("使用当前草稿进行实时测试。")}</p></div><span className={`mt-1 size-2 rounded-full ${isPreview ? "bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.12)]" : "bg-edge-hover"}`} /></header>
-      <div className="flex min-h-[420px] flex-col bg-surface/50">
-        <div className="flex-1 space-y-4 overflow-y-auto p-5">
-          {turns.length === 0 ? <div className="flex min-h-[290px] flex-col items-center justify-center text-center"><span className="flex size-12 items-center justify-center rounded-full border border-edge bg-canvas shadow-sm"><Mic className="size-5 text-fg-muted" /></span><p className="mt-4 text-[12px] font-medium">{t("在浏览器中与助手对话")}</p><p className="mt-1 max-w-[250px] text-[10px] leading-5 text-fg-faint">{t("开始后会使用当前草稿 revision，不影响已发布版本。")}</p></div> : turns.slice(-8).map(turn => <div key={turn.id} className="space-y-2">{turn.transcript && <div className="ml-auto w-fit max-w-[86%] rounded-2xl rounded-br-md bg-ink px-3.5 py-2 text-[11px] leading-5 text-on-ink">{turn.transcript}</div>}{turn.reply && <div className="w-fit max-w-[90%] rounded-2xl rounded-bl-md border border-edge bg-canvas px-3.5 py-2 text-[11px] leading-5 text-fg shadow-sm">{turn.reply}</div>}</div>)}
+    <aside className="flex h-[70dvh] max-h-[680px] flex-col overflow-hidden rounded-2xl border border-edge bg-canvas shadow-[0_8px_30px_rgba(0,0,0,0.05)] xl:sticky xl:top-[90px] xl:h-[calc(100dvh-114px)] xl:max-h-none">
+      <header className="flex shrink-0 items-start justify-between gap-4 border-b border-edge-faint bg-canvas px-5 py-4">
+        <div>
+          <div className="flex items-center gap-2"><h2 className="text-[13px] font-semibold">{t("实时试用")}</h2>{audit?.status === "current" ? <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">v{audit.version}</span> : null}</div>
+          <p className="mt-1 text-[11px] text-fg-muted">{t("使用当前草稿进行实时测试。")}</p>
         </div>
-        <div className="border-t border-edge-faint bg-canvas p-4">
-          <div className="mb-3 flex items-center justify-between text-[10px] text-fg-faint"><span>{isPreview ? (sessionState || connection) : t("麦克风将在开始后启用")}</span><span className="flex h-3 items-end gap-[2px]">{[0.15, 0.3, 0.5, 0.7, 0.9].map((threshold, index) => <span key={threshold} className={`w-[2px] rounded-full transition ${micLevel >= threshold ? "bg-emerald-400" : "bg-edge-hover"}`} style={{ height: `${4 + index * 2}px` }} />)}</span></div>
-          <button onClick={() => void toggle()} disabled={starting} className={`flex h-11 w-full items-center justify-center gap-2 rounded-full text-[12px] font-medium transition ${isPreview ? "border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300" : "bg-ink text-on-ink hover:bg-ink-hover"}`}>{starting ? <LoaderCircle className="size-4 animate-spin" /> : isPreview ? <CircleStop className="size-4" /> : <Mic className="size-4" />}{isPreview ? t("结束测试") : t("开始测试")}</button>
+        <div className="flex items-center gap-2">
+          {isPreview ? <button onClick={() => void restart()} disabled={starting} title={t("重新开始")} aria-label={t("重新开始")} className="flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg disabled:opacity-40"><RotateCw className={`size-3.5 ${starting ? "animate-spin" : ""}`} /></button> : null}
+          <span className={`size-2 rounded-full ${previewConnected ? "bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.12)]" : isPreview ? "bg-amber-400 shadow-[0_0_0_4px_rgba(251,191,36,0.12)]" : "bg-edge-hover"}`} />
         </div>
+      </header>
+
+      <div className="relative flex min-h-0 flex-1 flex-col bg-surface/45">
+        <div ref={messagesRef} onScroll={onMessagesScroll} role="log" aria-label={t("对话记录")} aria-live="off" className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
+          {turns.length === 0 ? (
+            <div className="flex h-full min-h-[240px] flex-col items-center justify-center text-center"><span className="flex size-12 items-center justify-center rounded-full border border-edge bg-canvas"><Mic className="size-5 text-fg-muted" /></span><p className="mt-4 text-[12px] font-medium">{t("在浏览器中与助手对话")}</p><p className="mt-1 max-w-[250px] text-[10px] leading-5 text-fg-faint">{t("开始后会使用当前草稿 revision，不影响已发布版本。")}</p></div>
+          ) : turns.map(turn => (
+            <div key={turn.id} className="space-y-2.5">
+              {turn.transcript && <div className="ml-auto w-fit max-w-[86%] rounded-2xl rounded-br-md bg-ink px-3.5 py-2 text-[11px] leading-5 text-on-ink">{turn.transcript}</div>}
+              {turn.reply && <div className={`w-fit max-w-[92%] rounded-2xl rounded-bl-md bg-canvas px-3.5 py-2.5 text-[11px] leading-[1.65] text-fg ring-1 ring-edge-faint ${turn.status === "interrupted" ? "opacity-60" : ""}`}>{turn.reply}</div>}
+            </div>
+          ))}
+        </div>
+
+        {hasUnseen ? <button onClick={scrollToLatest} className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-edge bg-canvas px-3 py-1.5 text-[10px] font-medium text-fg-secondary shadow-lg hover:bg-fill-hover">{t("有新消息")} ↓</button> : null}
       </div>
+
+      <span className="sr-only" aria-live="polite" aria-atomic="true">{liveAnnouncement}</span>
+
+      <footer className="shrink-0 border-t border-edge-faint bg-canvas p-4">
+        <div className="mb-3 flex items-center justify-between text-[10px] text-fg-faint">
+          <span className="flex items-center gap-2"><span className={`size-1.5 rounded-full ${previewConnected ? "bg-emerald-400" : isPreview ? "bg-amber-400" : "bg-edge-hover"}`} />{isPreview ? stateLabel : t("麦克风将在开始后启用")}</span>
+          <span className={`flex h-3 items-end gap-[2px] ${muted ? "opacity-35" : ""}`}>{[0.15, 0.3, 0.5, 0.7, 0.9].map((threshold, index) => <span key={threshold} className={`w-[2px] rounded-full transition ${!muted && micLevel >= threshold ? "bg-emerald-400" : "bg-edge-hover"}`} style={{ height: `${4 + index * 2}px` }} />)}</span>
+        </div>
+        {isPreview ? (
+          <div className="grid grid-cols-[auto_auto_minmax(0,1fr)] gap-2">
+            <button onClick={() => conversationControls()?.setMuted(!muted)} disabled={starting} title={muted ? t("已静音") : t("静音")} className={`flex h-10 items-center justify-center gap-2 rounded-full border px-3 text-[11px] font-medium transition disabled:opacity-40 ${muted ? "border-amber-300 bg-amber-50 text-amber-700" : "border-edge bg-canvas text-fg-secondary hover:bg-fill-hover"}`}>{muted ? <MicOff className="size-3.5" /> : <Mic className="size-3.5" />}<span className="hidden sm:inline">{muted ? t("已静音") : t("静音")}</span></button>
+            <button onClick={() => conversationControls()?.interruptPlayback()} disabled={starting || !previewConnected || sessionState !== "speaking"} title={t("停止当前回答（也可以直接开口打断）")} className="flex h-10 items-center justify-center gap-2 rounded-full border border-edge bg-canvas px-3 text-[11px] font-medium text-fg-secondary hover:bg-fill-hover disabled:cursor-not-allowed disabled:opacity-35"><CircleStop className="size-3.5" /><span className="hidden sm:inline">{t("停止回答")}</span></button>
+            <button onClick={() => void end()} disabled={starting} className="flex h-10 min-w-0 items-center justify-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 text-[11px] font-medium text-red-600 hover:bg-red-100 disabled:opacity-40 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300"><CircleStop className="size-3.5" />{t("结束测试")}</button>
+          </div>
+        ) : (
+          <button onClick={() => void start()} disabled={starting} className="flex h-11 w-full items-center justify-center gap-2 rounded-full bg-ink text-[12px] font-medium text-on-ink transition hover:bg-ink-hover disabled:opacity-60">{starting ? <LoaderCircle className="size-4 animate-spin" /> : <Mic className="size-4" />}{dirty ? t("保存并开始测试") : t("开始测试")}</button>
+        )}
+      </footer>
     </aside>
   );
 }

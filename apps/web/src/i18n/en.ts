@@ -38,6 +38,9 @@ export const agentBuilderMessages = {
   "在浏览器中与助手对话": "Talk to the agent in your browser",
   "开始后会使用当前草稿 revision，不影响已发布版本。": "The session pins the current draft revision without affecting the published version.",
   "麦克风将在开始后启用": "The microphone turns on after you start",
+  "有新消息": "New messages",
+  "对话记录": "Conversation transcript",
+  "保存并开始测试": "Save & start",
   "结束测试": "End test",
   "开始测试": "Start test",
 } as const;
