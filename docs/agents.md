@@ -1,6 +1,7 @@
 # Agents: the session options, reified
 
-Status: Accepted; runtime and first Web Builder slice delivered 2026-08-02.
+Status: Accepted; runtime and Configuration/Speech Web Builder slices delivered
+2026-08-02.
 The competitive gap the console walkthroughs made concrete
 ([competitive-voice-agents.md](./competitive-voice-agents.md)): xAI's
 product object is the *agent* — a named, saved, publishable bundle with its own
@@ -18,8 +19,8 @@ the full Agent Builder, preview, and later Portal reuse requirements in
 decisions below remain the prerequisite; the Web UI must edit that object rather
 than introduce a browser-only Agent model.
 
-Implementation update, 2026-08-02: the Phase 1 runtime and first Web Builder
-slice are implemented. The shared
+Implementation update, 2026-08-02: the Phase 1 runtime and the Configuration /
+Speech Web Builder slices are implemented. The shared
 `@voxstudio/agents` package now owns the validated spec/record model, canonical
 behavior hash, owner-scoped YAML drafts, cross-process revision locking, immutable
 published snapshots, resolution, and audit. The gateway exposes owner-scoped CRUD,
@@ -27,8 +28,11 @@ publish/audit/version routes and native `session.start { agent }`; ordinary star
 resolve the latest published snapshot, while an explicit draft revision is available
 for Builder preview. The Web Agents list now reads this registry, and its responsive
 Builder edits, saves, publishes, and runs Try it live against a revision-pinned draft.
-CLI Agent subcommands, advanced MCP/engine controls, version restore, and the complete
-Builder delivery described in [agent-builder-ui.md](./agent-builder-ui.md) remain next.
+Its durable section routes now expose engine routing, MCP allowlists,
+pronunciations, ASR keyterms, and turn-taking controls with runtime-dependency
+validation. CLI Agent subcommands, version restore, duplicate/export actions,
+Deployment, conversation history, statistics, and the complete preview treatment
+described in [agent-builder-ui.md](./agent-builder-ui.md) remain next.
 
 ## The question
 

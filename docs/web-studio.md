@@ -3,9 +3,9 @@
 Status: Accepted, 2026-07-14; living delivery record. The realtime gateway,
 five original functional panels, single-binary packaging, hosted authentication,
 and explicit engine-route selection are delivered. The registry-backed Agents
-list, first Builder slice, publish flow, and revision-pinned Try it live were
-delivered 2026-08-02. The complete Builder sections, real-browser double-talk
-gate, and production hosting operations remain.
+list, Configuration/Speech Builder sections, publish flow, and revision-pinned
+Try it live were delivered 2026-08-02. The remaining Builder sections,
+real-browser double-talk gate, and production hosting operations remain.
 
 ## Scope
 
@@ -38,7 +38,8 @@ below rather than relitigated per feature.
    [duplex-audio-architecture.md](./duplex-audio-architecture.md); this document does not
    redefine that contract.
    The delivered lightweight routes are `/` for the Agents list and
-   `/agents/:agentId` for the first Builder slice. The target durable console
+   `/agents/:agentId/configuration` plus `/agents/:agentId/speech` for the
+   Builder. The target durable console
    route is `/studio/agents`; that coordinated route/Auth migration remains part
    of the future Portal delivery. Later, hosted `/` may become the public Portal
    while Better Auth gates only `/studio/*`; self-hosted operation continues to
@@ -87,10 +88,10 @@ below rather than relitigated per feature.
 1. **Agents** — saved voice-agent list and the configuration, speech,
    deployment, conversations, statistics, draft/publish, and Try-it-live
    workflow specified in [agent-builder-ui.md](./agent-builder-ui.md). The real
-   registry-backed list, template creation, first combined Builder form,
-   draft/publish lifecycle, and revision-pinned preview are delivered. Section
-   routes, advanced configuration, version history UI, Deployment,
-   Conversations, Statistics, and the final preview treatment remain.
+   registry-backed list, template creation, Configuration/Speech section routes,
+   advanced runtime controls and validation, draft/publish lifecycle, and
+   revision-pinned preview are delivered. Version history UI, duplicate/export,
+   Deployment, Conversations, Statistics, and the final preview treatment remain.
 2. **对话 Conversation** — live duplex session: mic capture with negotiated AEC (browser
    constraints verified per the duplex doc), agent audio playback, streaming captions,
    visible turn/barge-in/reopen state, per-turn latency readout (the `turn.timing`

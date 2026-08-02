@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   ArrowLeft,
   Bot,
   BriefcaseBusiness,
@@ -17,11 +18,15 @@ import {
   RotateCw,
   Search,
   Send,
+  ServerCog,
+  ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Trash2,
   TrendingUp,
   UserRoundSearch,
   Volume2,
+  Wrench,
 } from "lucide-react";
 import { PageHeader, pageShellClass, primaryButton, secondaryButton } from "../components/StudioPage";
 import { conversationControls, startConversation, stopConversation } from "../conversation";
@@ -32,12 +37,14 @@ import {
   deleteAgent,
   getAgent,
   listAgents,
+  listRuntimeCatalog,
   listVoices,
   publishAgent,
   updateAgent,
   type AgentAudit,
   type AgentRecord,
   type AgentSpec,
+  type EngineEntry,
   type VoiceEntry,
 } from "../lib/api";
 import type { ConnectionState } from "../lib/client";
@@ -153,15 +160,19 @@ function AgentAvatar({ id, size = "size-7" }: { id: string; size?: string }) {
   return <span aria-hidden className={`${size} shrink-0 rounded-full border border-black/10 shadow-[inset_0_0_8px_rgba(255,255,255,0.22)] dark:border-white/15`} style={avatarStyle(id)} />;
 }
 
+export type AgentSection = "configuration" | "speech";
+
 interface AgentsPanelProps {
   agentId?: string | undefined;
+  agentSection: AgentSection;
   onOpenAgent(id: string): void;
+  onOpenAgentSection(section: AgentSection): void;
   onCloseAgent(): void;
   onDirtyChange(dirty: boolean): void;
 }
 
-export function AgentsPanel({ agentId, onOpenAgent, onCloseAgent, onDirtyChange }: AgentsPanelProps) {
-  if (agentId) return <AgentBuilder agentId={agentId} onClose={onCloseAgent} onDirtyChange={onDirtyChange} />;
+export function AgentsPanel({ agentId, agentSection, onOpenAgent, onOpenAgentSection, onCloseAgent, onDirtyChange }: AgentsPanelProps) {
+  if (agentId) return <AgentBuilder agentId={agentId} section={agentSection} onSectionChange={onOpenAgentSection} onClose={onCloseAgent} onDirtyChange={onDirtyChange} />;
   return <AgentList onOpenAgent={onOpenAgent} />;
 }
 
@@ -346,20 +357,93 @@ function CreateAgentDialog({ template, onClose, onCreated }: { template: Templat
   );
 }
 
-interface AgentDraft {
+export interface AgentDraft {
   name: string;
   description: string;
   instructions: string;
   welcome: string;
   language: string;
   voice: string;
+  asrEngine: string;
+  llmEngine: string;
   ttsEngine: string;
   nudgeAfterSeconds: string;
   maxSessionSeconds: string;
   studioTools: boolean;
+  mcpServers: string[];
+  pronunciationsText: string;
+  keytermsText: string;
+  turnTaking: "" | "conservative" | "speculative";
+  vad: "" | "energy" | "silero";
+  reopenMs: string;
+  threshold: string;
+  silenceMs: string;
+  minSpeechMs: string;
 }
 
-function draftFrom(record: AgentRecord): AgentDraft {
+function textList(values: readonly string[] | undefined): string {
+  return (values ?? []).join("\n");
+}
+
+export function listFromText(value: string): string[] {
+  return [...new Set(value.split(/\r?\n/).map(item => item.trim()).filter(Boolean))];
+}
+
+export function pronunciationsFromText(value: string): {
+  pronunciations?: Record<string, string>;
+  errorLine?: number;
+} {
+  const pronunciations: Record<string, string> = {};
+  const lines = value.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]?.trim() ?? "";
+    if (!line) continue;
+    const separator = line.search(/[=＝]/);
+    const term = separator < 0 ? "" : line.slice(0, separator).trim();
+    const reading = separator < 0 ? "" : line.slice(separator + 1).trim();
+    if (!term || !reading) return { errorLine: index + 1 };
+    pronunciations[term] = reading;
+  }
+  return { pronunciations };
+}
+
+function pronunciationsText(value: Record<string, string> | undefined): string {
+  return Object.entries(value ?? {}).map(([term, reading]) => `${term} = ${reading}`).join("\n");
+}
+
+interface ValidationIssue {
+  key: MessageKey;
+  params?: Record<string, string | number>;
+}
+
+const nonNegativeFields = [
+  ["nudgeAfterSeconds", "静默追问（秒）"],
+  ["reopenMs", "续说窗口（毫秒）"],
+  ["threshold", "能量阈值"],
+  ["silenceMs", "静音断句（毫秒）"],
+  ["minSpeechMs", "最短语音（毫秒）"],
+] as const satisfies readonly [keyof AgentDraft, MessageKey][];
+
+export function validateAgentDraftShape(draft: AgentDraft): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  if (!draft.name.trim()) issues.push({ key: "名称不能为空" });
+  for (const [field, label] of nonNegativeFields) {
+    const raw = draft[field] as string;
+    if (raw && (!Number.isFinite(Number(raw)) || Number(raw) < 0)) {
+      issues.push({ key: "{field}必须是非负数字", params: { field: label } });
+    }
+  }
+  if (draft.maxSessionSeconds && (!Number.isFinite(Number(draft.maxSessionSeconds)) || Number(draft.maxSessionSeconds) <= 0)) {
+    issues.push({ key: "最长会话必须是大于 0 的数字" });
+  }
+  const parsedPronunciations = pronunciationsFromText(draft.pronunciationsText);
+  if (parsedPronunciations.errorLine !== undefined) {
+    issues.push({ key: "发音词典第 {line} 行应使用“词语 = 读音”格式", params: { line: parsedPronunciations.errorLine } });
+  }
+  return issues;
+}
+
+export function draftFrom(record: AgentRecord): AgentDraft {
   return {
     name: record.name,
     description: record.description ?? "",
@@ -367,16 +451,25 @@ function draftFrom(record: AgentRecord): AgentDraft {
     welcome: record.spec.welcome ?? "",
     language: record.spec.language ?? "auto",
     voice: record.spec.voice ?? "",
+    asrEngine: record.spec.asrEngine ?? "",
+    llmEngine: record.spec.llmEngine ?? "",
     ttsEngine: record.spec.ttsEngine ?? "",
     nudgeAfterSeconds: record.spec.nudgeAfterSeconds === undefined ? "" : String(record.spec.nudgeAfterSeconds),
     maxSessionSeconds: record.spec.maxSessionSeconds === undefined ? "" : String(record.spec.maxSessionSeconds),
     studioTools: record.spec.studioTools ?? false,
+    mcpServers: record.spec.mcpServers ?? [],
+    pronunciationsText: pronunciationsText(record.spec.pronunciations),
+    keytermsText: textList(record.spec.keyterms),
+    turnTaking: record.spec.turnTaking ?? "",
+    vad: record.spec.vad ?? "",
+    reopenMs: record.spec.reopenMs === undefined ? "" : String(record.spec.reopenMs),
+    threshold: record.spec.threshold === undefined ? "" : String(record.spec.threshold),
+    silenceMs: record.spec.silenceMs === undefined ? "" : String(record.spec.silenceMs),
+    minSpeechMs: record.spec.minSpeechMs === undefined ? "" : String(record.spec.minSpeechMs),
   };
 }
 
-function specFrom(draft: AgentDraft, prior: AgentSpec): AgentSpec {
-  const nudge = Number(draft.nudgeAfterSeconds);
-  const maxSession = Number(draft.maxSessionSeconds);
+export function specFrom(draft: AgentDraft, prior: AgentSpec): AgentSpec {
   const spec: AgentSpec = {
     ...prior,
     instructions: draft.instructions,
@@ -386,21 +479,51 @@ function specFrom(draft: AgentDraft, prior: AgentSpec): AgentSpec {
   };
   if (draft.voice) spec.voice = draft.voice;
   else delete spec.voice;
+  if (draft.asrEngine) spec.asrEngine = draft.asrEngine;
+  else delete spec.asrEngine;
+  if (draft.llmEngine) spec.llmEngine = draft.llmEngine;
+  else delete spec.llmEngine;
   if (draft.ttsEngine) spec.ttsEngine = draft.ttsEngine;
   else delete spec.ttsEngine;
-  if (draft.nudgeAfterSeconds && Number.isFinite(nudge) && nudge >= 0) spec.nudgeAfterSeconds = nudge;
-  else delete spec.nudgeAfterSeconds;
-  if (draft.maxSessionSeconds && Number.isFinite(maxSession) && maxSession > 0) spec.maxSessionSeconds = maxSession;
+  for (const [field] of nonNegativeFields) {
+    const raw = draft[field] as string;
+    if (raw) (spec as Record<string, unknown>)[field] = Number(raw);
+    else delete (spec as Record<string, unknown>)[field];
+  }
+  if (draft.maxSessionSeconds) spec.maxSessionSeconds = Number(draft.maxSessionSeconds);
   else delete spec.maxSessionSeconds;
+  const pronunciations = pronunciationsFromText(draft.pronunciationsText).pronunciations ?? {};
+  if (Object.keys(pronunciations).length > 0) spec.pronunciations = pronunciations;
+  else delete spec.pronunciations;
+  const keyterms = listFromText(draft.keytermsText);
+  if (keyterms.length > 0) spec.keyterms = keyterms;
+  else delete spec.keyterms;
+  if (draft.mcpServers.length > 0) spec.mcpServers = [...new Set(draft.mcpServers)];
+  else delete spec.mcpServers;
+  if (draft.turnTaking) spec.turnTaking = draft.turnTaking;
+  else delete spec.turnTaking;
+  if (draft.vad) spec.vad = draft.vad;
+  else delete spec.vad;
   return spec;
 }
 
-function AgentBuilder({ agentId, onClose, onDirtyChange }: { agentId: string; onClose(): void; onDirtyChange(dirty: boolean): void }) {
+function AgentBuilder({ agentId, section, onSectionChange, onClose, onDirtyChange }: {
+  agentId: string;
+  section: AgentSection;
+  onSectionChange(section: AgentSection): void;
+  onClose(): void;
+  onDirtyChange(dirty: boolean): void;
+}) {
   const t = useT();
+  const locale = resolveLocale(useI18n(state => state.locale));
   const toast = useStudio(state => state.toast);
   const [record, setRecord] = useState<AgentRecord>();
   const [draft, setDraft] = useState<AgentDraft>();
   const [voices, setVoices] = useState<VoiceEntry[]>([]);
+  const [engines, setEngines] = useState<EngineEntry[]>([]);
+  const [mcpServers, setMcpServers] = useState<string[]>([]);
+  const [runtimeCatalogReady, setRuntimeCatalogReady] = useState(false);
+  const [voiceCatalogReady, setVoiceCatalogReady] = useState(false);
   const [audit, setAudit] = useState<AgentAudit>();
   const [loading, setLoading] = useState(true);
   const [failure, setFailure] = useState("");
@@ -412,10 +535,19 @@ function AgentBuilder({ agentId, onClose, onDirtyChange }: { agentId: string; on
     const generation = ++loadGeneration.current;
     setLoading(true); setFailure("");
     setRecord(undefined); setDraft(undefined); setAudit(undefined);
+    setRuntimeCatalogReady(false); setVoiceCatalogReady(false);
     try {
-      const [next, voiceBank, nextAudit] = await Promise.all([getAgent(agentId), listVoices().catch(() => []), auditAgent(agentId).catch(() => undefined)]);
+      const [next, voiceBank, runtimeCatalog, nextAudit] = await Promise.all([
+        getAgent(agentId),
+        listVoices().catch(() => undefined),
+        listRuntimeCatalog().catch(() => undefined),
+        auditAgent(agentId).catch(() => undefined),
+      ]);
       if (generation !== loadGeneration.current) return;
-      setRecord(next); setDraft(draftFrom(next)); setVoices(voiceBank);
+      setRecord(next); setDraft(draftFrom(next));
+      setVoices(voiceBank ?? []); setVoiceCatalogReady(voiceBank !== undefined);
+      setEngines(runtimeCatalog?.engines ?? []); setMcpServers(runtimeCatalog?.mcpServers ?? []);
+      setRuntimeCatalogReady(runtimeCatalog !== undefined);
       setAudit(nextAudit);
     } catch (error) {
       if (generation !== loadGeneration.current) return;
@@ -433,8 +565,37 @@ function AgentBuilder({ agentId, onClose, onDirtyChange }: { agentId: string; on
     return () => onDirtyChange(false);
   }, [dirty, onDirtyChange]);
 
+  const shapeIssues = useMemo(() => draft ? validateAgentDraftShape(draft) : [], [draft]);
+  const dependencyIssues = useMemo<ValidationIssue[]>(() => {
+    if (!draft) return [];
+    const issues: ValidationIssue[] = [];
+    if (!runtimeCatalogReady || !voiceCatalogReady) {
+      issues.push({ key: "无法验证运行依赖；请检查网关后重试。" });
+      return issues;
+    }
+    for (const [kind, selected] of [["ASR", draft.asrEngine], ["LLM", draft.llmEngine], ["TTS", draft.ttsEngine]] as const) {
+      if (!selected) continue;
+      const entry = engines.find(engine => engine.name === selected && engine.kind === kind.toLowerCase());
+      if (!entry) issues.push({ key: "{kind} 引擎“{name}”不存在", params: { kind, name: selected } });
+      else if (!entry.healthy) issues.push({ key: "{kind} 引擎“{name}”当前离线", params: { kind, name: selected } });
+    }
+    if (draft.voice && !voices.some(voice => voice.id === draft.voice && (!draft.ttsEngine || voice.engine === draft.ttsEngine))) {
+      issues.push({ key: "音色“{voice}”在所选引擎中不可用", params: { voice: draft.voice } });
+    }
+    for (const server of draft.mcpServers) {
+      if (!mcpServers.includes(server)) issues.push({ key: "MCP 服务器“{name}”未在当前部署中配置", params: { name: server } });
+    }
+    return issues;
+  }, [draft, engines, mcpServers, runtimeCatalogReady, voiceCatalogReady, voices]);
+  const validationIssues = [...shapeIssues, ...dependencyIssues];
+  const issueText = (issue: ValidationIssue): string => t(issue.key, issue.params);
+
   const save = async (): Promise<AgentRecord | undefined> => {
     if (!record || !draft) return undefined;
+    if (shapeIssues.length > 0) {
+      toast("error", issueText(shapeIssues[0] as ValidationIssue));
+      return undefined;
+    }
     if (!dirty) return record;
     setSaving(true);
     try {
@@ -454,6 +615,10 @@ function AgentBuilder({ agentId, onClose, onDirtyChange }: { agentId: string; on
   };
 
   const publish = async () => {
+    if (validationIssues.length > 0) {
+      toast("error", issueText(validationIssues[0] as ValidationIssue));
+      return;
+    }
     setPublishing(true);
     try {
       const saved = await save();
@@ -470,39 +635,112 @@ function AgentBuilder({ agentId, onClose, onDirtyChange }: { agentId: string; on
   if (loading) return <div className="flex h-full items-center justify-center"><LoaderCircle className="size-6 animate-spin text-fg-faint" /></div>;
   if (!record || !draft) return <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center text-[13px] text-danger"><span>{failure || t("获取助手")}</span><div className="flex gap-2"><button onClick={onClose} className={secondaryButton}><ArrowLeft className="size-4" />{t("助手")}</button><button onClick={() => void load()} className={secondaryButton}><RotateCw className="size-4" />{t("刷新")}</button></div></div>;
 
+  const status = validationIssues.length > 0
+    ? { label: t("配置无效"), tone: "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300" }
+    : dirty || audit?.status === "drifted"
+      ? { label: t("已漂移"), tone: "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300" }
+      : record.published
+        ? { label: t("已发布"), tone: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300" }
+        : { label: t("未发布"), tone: "bg-fill-active text-fg-muted" };
+  const publishDisabled = saving || publishing || validationIssues.length > 0 || (!dirty && audit?.status === "current");
+  const availableMcpServers = [...new Set([...mcpServers, ...draft.mcpServers])];
+
   return (
     <div className="min-h-full bg-surface/55">
       <div className="sticky top-0 z-20 border-b border-edge-faint bg-canvas/95 backdrop-blur">
         <div className="mx-auto flex min-h-[66px] max-w-[1440px] items-center gap-3 px-4 sm:px-7 lg:px-10">
           <button onClick={onClose} aria-label={t("返回")} className="flex size-9 shrink-0 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg"><ArrowLeft className="size-[18px]" /></button>
           <AgentAvatar id={record.id} size="size-8" />
-          <div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="truncate text-[14px] font-semibold">{draft.name || record.id}</span>{record.published ? <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">v{record.published.version}</span> : <span className="rounded-full bg-fill-active px-2 py-0.5 text-[9px] text-fg-muted">{t("草稿")}</span>}</div><span className="block truncate font-mono text-[9px] text-fg-faint">{record.id}</span></div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2"><span className="truncate text-[14px] font-semibold">{draft.name || record.id}</span><span className={`hidden rounded-full px-2 py-0.5 text-[9px] font-medium sm:inline ${status.tone}`}>{status.label}</span></div>
+            <span className="block truncate text-[9px] text-fg-faint">{record.id}{record.published ? ` · v${record.published.version} · ${t("发布于 {time}", { time: displayTime(record.published.publishedAt, locale) })}` : ""}</span>
+          </div>
           <span className="hidden items-center gap-1.5 text-[10px] text-fg-faint sm:flex">{dirty ? <><span className="size-1.5 rounded-full bg-amber-400" />{t("有未保存的更改")}</> : <><Check className="size-3" />{t("已保存")}</>}</span>
-          <button onClick={() => void save()} disabled={!dirty || saving || publishing} className={secondaryButton}>{saving ? <LoaderCircle className="size-4 animate-spin" /> : null}{t("保存")}</button>
-          <button onClick={() => void publish()} disabled={saving || publishing || !draft.name.trim()} className={primaryButton}>{publishing ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-3.5" />}{t("发布")}</button>
+          <button onClick={() => void save()} disabled={!dirty || saving || publishing || shapeIssues.length > 0} className={secondaryButton}>{saving ? <LoaderCircle className="size-4 animate-spin" /> : null}{t("保存")}</button>
+          <button onClick={() => void publish()} disabled={publishDisabled} className={primaryButton}>{publishing ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-3.5" />}{t("发布")}</button>
         </div>
+        <nav className="mx-auto flex max-w-[1440px] gap-6 overflow-x-auto px-4 sm:px-7 lg:px-10" aria-label={t("助手")}>
+          {(["configuration", "speech"] as const).map(item => (
+            <button key={item} onClick={() => onSectionChange(item)} aria-current={section === item ? "page" : undefined} className={`relative h-10 shrink-0 px-1 text-[11px] font-medium transition ${section === item ? "text-fg" : "text-fg-muted hover:text-fg"}`}>
+              {item === "configuration" ? t("配置") : t("语音设置")}
+              {section === item ? <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-ink" /> : null}
+            </button>
+          ))}
+        </nav>
       </div>
+
+      {validationIssues.length > 0 ? (
+        <div className="mx-auto max-w-[1440px] px-4 pt-5 sm:px-7 lg:px-10">
+          <div role="alert" className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+            <div><p className="text-[11px] font-semibold">{t("修复以下配置问题后才能发布或试用：")}</p><ul className="mt-1.5 space-y-1 text-[10px] leading-5">{validationIssues.map((issue, index) => <li key={`${issue.key}-${index}`}>• {issueText(issue)}</li>)}</ul></div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="mx-auto grid w-full max-w-[1440px] gap-5 px-4 py-6 sm:px-7 lg:px-10 xl:grid-cols-[minmax(0,1fr)_400px] xl:items-start">
         <div className="space-y-5">
-          <BuilderSection icon={Bot} title={t("基本信息")} description={t("定义助手在工作台中的名称与用途。")}>
-            <div className="grid gap-4 sm:grid-cols-2"><Field label={t("名称")}><input value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} className="builder-input" /></Field><Field label="Agent ID" hint={t("创建后不可修改")}><input value={record.id} disabled className="builder-input font-mono opacity-60" /></Field></div>
-            <Field label={t("描述")}><input value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })} placeholder={t("简要说明这个助手负责什么") } className="builder-input" /></Field>
-          </BuilderSection>
+          {section === "configuration" ? (
+            <>
+              <BuilderSection icon={Bot} title={t("基本信息")} description={t("定义助手在工作台中的名称与用途。")}>
+                <div className="grid gap-4 sm:grid-cols-2"><Field label={t("名称")}><input value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} className="builder-input" /></Field><Field label="Agent ID" hint={t("创建后不可修改")}><input value={record.id} disabled className="builder-input font-mono opacity-60" /></Field></div>
+                <Field label={t("描述")}><input value={draft.description} onChange={event => setDraft({ ...draft, description: event.target.value })} placeholder={t("简要说明这个助手负责什么") } className="builder-input" /></Field>
+              </BuilderSection>
 
-          <BuilderSection icon={Sparkles} title={t("行为")} description={t("用自然语言定义角色、目标和回答边界。")}>
-            <Field label={t("系统提示词")} hint={`${draft.instructions.length} / 32768`}><textarea value={draft.instructions} onChange={event => setDraft({ ...draft, instructions: event.target.value })} placeholder={t("告诉助手它是谁、要完成什么，以及需要遵守哪些规则。") } rows={8} className="builder-input min-h-44 resize-y py-3 leading-6" /></Field>
-            <Field label={t("开场白")} hint={t("会话开始时自动说出")}><textarea value={draft.welcome} onChange={event => setDraft({ ...draft, welcome: event.target.value })} placeholder={t("你好，有什么可以帮你？") } rows={3} className="builder-input resize-y py-3 leading-5" /></Field>
-          </BuilderSection>
+              <BuilderSection icon={Sparkles} title={t("行为")} description={t("用自然语言定义角色、目标和回答边界。")}>
+                <Field label={t("系统提示词")} hint={`${draft.instructions.length} / 32768`}><textarea value={draft.instructions} onChange={event => setDraft({ ...draft, instructions: event.target.value })} placeholder={t("告诉助手它是谁、要完成什么，以及需要遵守哪些规则。") } rows={8} className="builder-input min-h-44 resize-y py-3 leading-6" /></Field>
+                <Field label={t("开场白")} hint={t("会话开始时自动说出")}><textarea value={draft.welcome} onChange={event => setDraft({ ...draft, welcome: event.target.value })} placeholder={t("你好，有什么可以帮你？") } rows={3} className="builder-input resize-y py-3 leading-5" /></Field>
+              </BuilderSection>
 
-          <BuilderSection icon={Volume2} title={t("语音与会话")} description={t("选择输出音色并调整实时对话节奏。")}>
-            <div className="grid gap-4 sm:grid-cols-2"><Field label={t("音色")}><VoiceSelect draft={draft} voices={voices} onChange={next => setDraft({ ...draft, ...next })} /></Field><Field label={t("语言")}><select value={draft.language} onChange={event => setDraft({ ...draft, language: event.target.value })} className="builder-input"><option value="auto">{t("自动")}</option><option value="zh">中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option></select></Field></div>
-            <div className="grid gap-4 sm:grid-cols-2"><Field label={t("静默追问（秒）")} hint={t("留空表示关闭")}><input type="number" min="0" value={draft.nudgeAfterSeconds} onChange={event => setDraft({ ...draft, nudgeAfterSeconds: event.target.value })} placeholder="—" className="builder-input" /></Field><Field label={t("最长会话（秒）")} hint={t("部署上限仍然生效")}><input type="number" min="1" value={draft.maxSessionSeconds} onChange={event => setDraft({ ...draft, maxSessionSeconds: event.target.value })} placeholder="—" className="builder-input" /></Field></div>
-            <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-edge bg-surface p-4"><input type="checkbox" checked={draft.studioTools} onChange={event => setDraft({ ...draft, studioTools: event.target.checked })} className="mt-0.5 size-4 accent-black" /><span><span className="block text-[12px] font-medium">{t("工作台语音工具")}</span><span className="mt-1 block text-[11px] leading-5 text-fg-muted">{t("允许助手通过语音保存音色、重念和管理发音。")}</span></span></label>
-          </BuilderSection>
+              <BuilderSection icon={ServerCog} title={t("运行路线与能力")} description={t("为助手固定引擎和可用工具；留空时使用部署默认。")}>
+                <div className="grid gap-4 md:grid-cols-3">
+                  <AgentEngineSelect kind="asr" value={draft.asrEngine} engines={engines} onChange={asrEngine => setDraft({ ...draft, asrEngine })} />
+                  <AgentEngineSelect kind="llm" value={draft.llmEngine} engines={engines} onChange={llmEngine => setDraft({ ...draft, llmEngine })} />
+                  <AgentEngineSelect kind="tts" value={draft.ttsEngine} engines={engines} onChange={ttsEngine => setDraft({ ...draft, ttsEngine, voice: ttsEngine === draft.ttsEngine ? draft.voice : "" })} />
+                </div>
+              </BuilderSection>
+
+              <BuilderSection icon={Wrench} title={t("能力与工具")} description={t("只允许助手使用这里明确启用的能力。")}>
+                <ToggleCard checked={draft.studioTools} onChange={studioTools => setDraft({ ...draft, studioTools })} title={t("工作台语音工具")} description={t("允许助手通过语音保存音色、重念和管理发音。")} />
+                <Field label={t("MCP 服务器")}>
+                  {availableMcpServers.length === 0 ? <div className="rounded-xl border border-dashed border-edge bg-surface px-4 py-4 text-[11px] text-fg-faint">{t("部署未配置 MCP 服务器。")}</div> : <div className="grid gap-2 sm:grid-cols-2">{availableMcpServers.map(server => <ToggleCard key={server} checked={draft.mcpServers.includes(server)} onChange={checked => setDraft({ ...draft, mcpServers: checked ? [...draft.mcpServers, server] : draft.mcpServers.filter(item => item !== server) })} title={server} compact />)}</div>}
+                </Field>
+              </BuilderSection>
+
+              <BuilderSection icon={ShieldCheck} title={t("会话边界")} description={t("助手只能收紧部署限制，不能放宽。")}>
+                <Field label={t("最长会话（秒）")} hint={t("部署上限仍然生效")}><input type="number" min="1" value={draft.maxSessionSeconds} onChange={event => setDraft({ ...draft, maxSessionSeconds: event.target.value })} placeholder="—" className="builder-input" /></Field>
+              </BuilderSection>
+            </>
+          ) : (
+            <>
+              <BuilderSection icon={Volume2} title={t("语音与会话")} description={t("选择输出音色并调整实时对话节奏。")}>
+                <div className="grid gap-4 sm:grid-cols-2"><Field label={t("音色")}><VoiceSelect draft={draft} voices={voices} onChange={next => setDraft({ ...draft, ...next })} /></Field><Field label={t("语言")}><select value={draft.language} onChange={event => setDraft({ ...draft, language: event.target.value })} className="builder-input"><option value="auto">{t("自动")}</option><option value="zh">中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option></select></Field></div>
+                <Field label={t("静默追问（秒）")} hint={t("留空表示关闭")}><input type="number" min="0" value={draft.nudgeAfterSeconds} onChange={event => setDraft({ ...draft, nudgeAfterSeconds: event.target.value })} placeholder="—" className="builder-input" /></Field>
+              </BuilderSection>
+
+              <BuilderSection icon={SlidersHorizontal} title={t("发音与识别")} description={t("调整合成读音和识别提示，不改变对话文字。")}>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field label={t("发音词典")} hint={t("每行格式：词语 = 读音")}><textarea value={draft.pronunciationsText} onChange={event => setDraft({ ...draft, pronunciationsText: event.target.value })} rows={6} placeholder="VoxStudio = 沃克斯" className="builder-input resize-y py-3 font-mono text-[11px] leading-5" /></Field>
+                  <Field label={t("ASR 关键词")} hint={t("每行一个需要优先识别的词语")}><textarea value={draft.keytermsText} onChange={event => setDraft({ ...draft, keytermsText: event.target.value })} rows={6} placeholder={'VoxStudio\nAgent Builder'} className="builder-input resize-y py-3 text-[11px] leading-5" /></Field>
+                </div>
+              </BuilderSection>
+
+              <details className="group rounded-2xl border border-edge bg-canvas shadow-[0_1px_2px_rgba(0,0,0,0.025)]" open={Boolean(draft.turnTaking || draft.vad || draft.reopenMs || draft.threshold || draft.silenceMs || draft.minSpeechMs)}>
+                <summary className="flex cursor-pointer list-none items-center gap-3 px-5 py-4 sm:px-6"><span className="flex size-8 items-center justify-center rounded-lg bg-fill-active text-fg-secondary"><SlidersHorizontal className="size-4" strokeWidth={1.8} /></span><span className="min-w-0 flex-1"><span className="block text-[13px] font-semibold">{t("高级语音控制")}</span><span className="mt-1 block text-[11px] text-fg-muted">{t("只有需要覆盖部署默认值时才调整。")}</span></span><ChevronDown className="size-4 text-fg-muted transition group-open:rotate-180" /></summary>
+                <div className="grid gap-4 border-t border-edge-faint p-5 sm:grid-cols-2 sm:p-6">
+                  <Field label={t("轮次策略")}><select value={draft.turnTaking} onChange={event => setDraft({ ...draft, turnTaking: event.target.value as AgentDraft["turnTaking"] })} className="builder-input"><option value="">{t("自动")}</option><option value="conservative">{t("保守")}</option><option value="speculative">{t("推测")}</option></select></Field>
+                  <Field label={t("语音活动检测")}><select value={draft.vad} onChange={event => setDraft({ ...draft, vad: event.target.value as AgentDraft["vad"] })} className="builder-input"><option value="">{t("自动")}</option><option value="silero">Silero</option><option value="energy">{t("能量检测")}</option></select></Field>
+                  <NumericField label={t("续说窗口（毫秒）")} value={draft.reopenMs} onChange={reopenMs => setDraft({ ...draft, reopenMs })} />
+                  <NumericField label={t("静音断句（毫秒）")} value={draft.silenceMs} onChange={silenceMs => setDraft({ ...draft, silenceMs })} />
+                  <NumericField label={t("最短语音（毫秒）")} value={draft.minSpeechMs} onChange={minSpeechMs => setDraft({ ...draft, minSpeechMs })} />
+                  <NumericField label={t("能量阈值")} value={draft.threshold} step="0.001" onChange={threshold => setDraft({ ...draft, threshold })} />
+                </div>
+              </details>
+            </>
+          )}
         </div>
 
-        <TryItLive record={record} dirty={dirty} onSave={save} audit={audit} />
+        <TryItLive record={record} dirty={dirty} onSave={save} audit={audit} blocked={validationIssues.length > 0} />
       </div>
     </div>
   );
@@ -514,6 +752,57 @@ function BuilderSection({ icon: Icon, title, description, children }: { icon: ty
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return <label className="block"><span className="mb-2 flex items-center justify-between gap-3 text-[11px] font-medium text-fg-secondary"><span>{label}</span>{hint && <span className="font-normal text-fg-faint">{hint}</span>}</span>{children}</label>;
+}
+
+const agentEngineLabels = {
+  asr: "语音识别 ASR",
+  llm: "语言模型 LLM",
+  tts: "语音合成 TTS",
+} as const satisfies Record<"asr" | "llm" | "tts", MessageKey>;
+
+function AgentEngineSelect({ kind, value, engines, onChange }: {
+  kind: "asr" | "llm" | "tts";
+  value: string;
+  engines: EngineEntry[];
+  onChange(value: string): void;
+}) {
+  const t = useT();
+  const candidates = engines.filter(engine => engine.kind === kind);
+  const roleDefault = engines.find(engine => engine.roles.includes(kind));
+  const known = candidates.some(engine => engine.name === value);
+  return (
+    <Field label={t(agentEngineLabels[kind])}>
+      <select value={value} onChange={event => onChange(event.target.value)} className="builder-input">
+        <option value="">{t("自动（{engine}）", { engine: roleDefault?.name ?? t("未配置") })}</option>
+        {value && !known ? <option value={value}>{value}</option> : null}
+        {candidates.map(engine => <option key={engine.name} value={engine.name}>{engine.healthy ? "●" : "○"} {engine.name}{engine.model ? ` · ${engine.model}` : ""}</option>)}
+      </select>
+    </Field>
+  );
+}
+
+function ToggleCard({ checked, onChange, title, description, compact = false }: {
+  checked: boolean;
+  onChange(checked: boolean): void;
+  title: string;
+  description?: string;
+  compact?: boolean;
+}) {
+  return (
+    <label className={`flex cursor-pointer items-start gap-3 rounded-xl border bg-surface transition hover:border-edge-strong ${checked ? "border-edge-strong ring-1 ring-edge-faint" : "border-edge"} ${compact ? "p-3" : "p-4"}`}>
+      <input type="checkbox" checked={checked} onChange={event => onChange(event.target.checked)} className="mt-0.5 size-4 accent-black" />
+      <span><span className="block text-[12px] font-medium">{title}</span>{description ? <span className="mt-1 block text-[11px] leading-5 text-fg-muted">{description}</span> : null}</span>
+    </label>
+  );
+}
+
+function NumericField({ label, value, onChange, step = "1" }: {
+  label: string;
+  value: string;
+  onChange(value: string): void;
+  step?: string;
+}) {
+  return <Field label={label}><input type="number" min="0" step={step} value={value} onChange={event => onChange(event.target.value)} placeholder="—" className="builder-input" /></Field>;
 }
 
 const voiceSeparator = "\u0000";
@@ -557,7 +846,13 @@ export function previewStatusLabel(connection: ConnectionState, sessionState: st
   return previewSessionLabels[sessionState] ?? "聆听中";
 }
 
-function TryItLive({ record, dirty, onSave, audit }: { record: AgentRecord; dirty: boolean; onSave(): Promise<AgentRecord | undefined>; audit: AgentAudit | undefined }) {
+function TryItLive({ record, dirty, onSave, audit, blocked }: {
+  record: AgentRecord;
+  dirty: boolean;
+  onSave(): Promise<AgentRecord | undefined>;
+  audit: AgentAudit | undefined;
+  blocked: boolean;
+}) {
   const t = useT();
   const active = useStudio(state => state.active);
   const connection = useStudio(state => state.connection);
@@ -617,6 +912,7 @@ function TryItLive({ record, dirty, onSave, audit }: { record: AgentRecord; dirt
 
   const start = async () => {
     if (previewStarting.current) return;
+    if (blocked) { toast("error", t("修复以下配置问题后才能发布或试用：")); return; }
     if (active) { toast("error", t("请先结束当前实时对话")); return; }
     const generation = ++operationGeneration.current;
     const current = () => mounted.current && operationGeneration.current === generation;
@@ -650,7 +946,7 @@ function TryItLive({ record, dirty, onSave, audit }: { record: AgentRecord; dirt
   };
 
   const restart = async () => {
-    if (!previewOwned.current || previewStarting.current) return;
+    if (!previewOwned.current || previewStarting.current || blocked) return;
     const generation = ++operationGeneration.current;
     const current = () => mounted.current && operationGeneration.current === generation;
     // Keep the old session alive while a dirty draft saves; only replace it once the
@@ -692,7 +988,7 @@ function TryItLive({ record, dirty, onSave, audit }: { record: AgentRecord; dirt
           <p className="mt-1 text-[11px] text-fg-muted">{t("使用当前草稿进行实时测试。")}</p>
         </div>
         <div className="flex items-center gap-2">
-          {isPreview ? <button onClick={() => void restart()} disabled={starting} title={t("重新开始")} aria-label={t("重新开始")} className="flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg disabled:opacity-40"><RotateCw className={`size-3.5 ${starting ? "animate-spin" : ""}`} /></button> : null}
+          {isPreview ? <button onClick={() => void restart()} disabled={starting || blocked} title={t("重新开始")} aria-label={t("重新开始")} className="flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg disabled:opacity-40"><RotateCw className={`size-3.5 ${starting ? "animate-spin" : ""}`} /></button> : null}
           <span className={`size-2 rounded-full ${previewConnected ? "bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.12)]" : isPreview ? "bg-amber-400 shadow-[0_0_0_4px_rgba(251,191,36,0.12)]" : "bg-edge-hover"}`} />
         </div>
       </header>
@@ -726,7 +1022,7 @@ function TryItLive({ record, dirty, onSave, audit }: { record: AgentRecord; dirt
             <button onClick={() => void end()} disabled={starting} className="flex h-10 min-w-0 items-center justify-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 text-[11px] font-medium text-red-600 hover:bg-red-100 disabled:opacity-40 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300"><CircleStop className="size-3.5" />{t("结束测试")}</button>
           </div>
         ) : (
-          <button onClick={() => void start()} disabled={starting} className="flex h-11 w-full items-center justify-center gap-2 rounded-full bg-ink text-[12px] font-medium text-on-ink transition hover:bg-ink-hover disabled:opacity-60">{starting ? <LoaderCircle className="size-4 animate-spin" /> : <Mic className="size-4" />}{dirty ? t("保存并开始测试") : t("开始测试")}</button>
+          <button onClick={() => void start()} disabled={starting || blocked} className="flex h-11 w-full items-center justify-center gap-2 rounded-full bg-ink text-[12px] font-medium text-on-ink transition hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-40">{starting ? <LoaderCircle className="size-4 animate-spin" /> : <Mic className="size-4" />}{dirty ? t("保存并开始测试") : t("开始测试")}</button>
         )}
       </footer>
     </aside>

@@ -11,7 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { VerifyBanner } from "./AuthGate";
-import { AgentsPanel } from "./panels/AgentsPanel";
+import { AgentsPanel, type AgentSection } from "./panels/AgentsPanel";
 import { ConversationPanel } from "./panels/ConversationPanel";
 import { GeneratePanel } from "./panels/GeneratePanel";
 import { LibraryPanel } from "./panels/LibraryPanel";
@@ -108,16 +108,33 @@ function tabFromPath(pathname: string): Tab {
   return tabIds.find(id => id === name) ?? "agents";
 }
 
-function agentFromPath(pathname: string): string | undefined {
-  const match = /^\/agents\/([^/]+)\/?$/.exec(pathname);
-  if (!match?.[1]) return undefined;
-  try { return decodeURIComponent(match[1]); } catch { return undefined; }
+export interface AgentRoute {
+  id: string;
+  section: AgentSection;
 }
+
+export function agentRouteFromPath(pathname: string): AgentRoute | undefined {
+  const match = /^\/agents\/([^/]+)(?:\/(configuration|speech))?\/?$/.exec(pathname);
+  if (!match?.[1]) return undefined;
+  try {
+    return {
+      id: decodeURIComponent(match[1]),
+      section: (match[2] as AgentSection | undefined) ?? "configuration",
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export const agentPath = (id: string, section: AgentSection): string =>
+  `/agents/${encodeURIComponent(id)}/${section}`;
 
 export function App() {
   const t = useT();
   const [tab, setTabState] = useState<Tab>(() => tabFromPath(window.location.pathname));
-  const [agentId, setAgentId] = useState<string | undefined>(() => agentFromPath(window.location.pathname));
+  const initialAgentRoute = agentRouteFromPath(window.location.pathname);
+  const [agentId, setAgentId] = useState<string | undefined>(() => initialAgentRoute?.id);
+  const [agentSection, setAgentSection] = useState<AgentSection>(() => initialAgentRoute?.section ?? "configuration");
   const [agentDirty, setAgentDirty] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
@@ -140,6 +157,7 @@ export function App() {
     if (window.location.pathname !== path) window.history.pushState(null, "", path);
     setTabState(next);
     setAgentId(undefined);
+    setAgentSection("configuration");
     setAgentDirty(false);
     setMobileNavOpen(false);
   };
@@ -147,9 +165,10 @@ export function App() {
   const openAgent = (id: string): void => {
     if (agentId === id) return;
     if (agentId && !confirmAgentLeave()) return;
-    window.history.pushState(null, "", `/agents/${encodeURIComponent(id)}`);
+    window.history.pushState(null, "", agentPath(id, "configuration"));
     setTabState("agents");
     setAgentId(id);
+    setAgentSection("configuration");
     setAgentDirty(false);
     setMobileNavOpen(false);
   };
@@ -159,25 +178,34 @@ export function App() {
     window.history.pushState(null, "", "/");
     setTabState("agents");
     setAgentId(undefined);
+    setAgentSection("configuration");
     setAgentDirty(false);
+  };
+
+  const openAgentSection = (section: AgentSection): void => {
+    if (!agentId || section === agentSection) return;
+    window.history.pushState(null, "", agentPath(agentId, section));
+    setAgentSection(section);
   };
 
   // Back/forward move between tabs like between pages — that is the point of the URLs.
   useEffect(() => {
     const onPop = (): void => {
       const nextTab = tabFromPath(window.location.pathname);
-      const nextAgentId = agentFromPath(window.location.pathname);
+      const nextAgent = agentRouteFromPath(window.location.pathname);
+      const nextAgentId = nextAgent?.id;
       if (agentDirty && agentId && nextAgentId !== agentId && !window.confirm(t("放弃未保存的更改？"))) {
-        window.history.pushState(null, "", `/agents/${encodeURIComponent(agentId)}`);
+        window.history.pushState(null, "", agentPath(agentId, agentSection));
         return;
       }
       setTabState(nextTab);
       setAgentId(nextAgentId);
-      setAgentDirty(false);
+      setAgentSection(nextAgent?.section ?? "configuration");
+      if (nextAgentId !== agentId) setAgentDirty(false);
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, [agentDirty, agentId, t]);
+  }, [agentDirty, agentId, agentSection, t]);
 
   useEffect(() => {
     if (!mobileNavOpen) return;
@@ -190,7 +218,7 @@ export function App() {
 
   useEffect(() => {
     if (mainRef.current) mainRef.current.scrollTop = 0;
-  }, [tab, agentId]);
+  }, [tab, agentId, agentSection]);
 
   // Generation takes are in-memory object URLs; a reload silently discards them.
   useEffect(() => {
@@ -202,7 +230,7 @@ export function App() {
 
   const panel = (
     <>
-      {tab === "agents" && <AgentsPanel agentId={agentId} onOpenAgent={openAgent} onCloseAgent={closeAgent} onDirtyChange={setAgentDirty} />}
+      {tab === "agents" && <AgentsPanel agentId={agentId} agentSection={agentSection} onOpenAgent={openAgent} onOpenAgentSection={openAgentSection} onCloseAgent={closeAgent} onDirtyChange={setAgentDirty} />}
       {tab === "conversation" && <ConversationPanel />}
       {tab === "generate" && <GeneratePanel />}
       {tab === "voices" && <VoicesPanel />}

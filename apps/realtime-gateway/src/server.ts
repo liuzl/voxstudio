@@ -562,7 +562,13 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     return engines;
   };
 
-  const engineList = async (): Promise<Response> => Response.json({ engines: await collectEngines() });
+  const engineList = async (): Promise<Response> => Response.json({
+    engines: await collectEngines(),
+    // Agent Builder needs an allowlist it can validate without learning how a
+    // server is reached. Names are product configuration; commands, URLs,
+    // credentials, environment, and trust policy remain gateway-only.
+    mcpServers: options.config.mcpServers.map(server => server.name),
+  });
 
   const sinkFor = (ws: ServerWebSocket<SocketData>): EventSink => {
     // One sink object per socket: attach/detach pair on its identity, so a stale socket's

@@ -175,11 +175,21 @@ export interface EngineEntry {
   runtime: { model: string; manifestSha256: string | null } | null;
 }
 
-export async function listEngines(): Promise<EngineEntry[]> {
+export interface RuntimeCatalog {
+  engines: EngineEntry[];
+  /** Sanitized configured names only; transports and credentials stay gateway-side. */
+  mcpServers: string[];
+}
+
+export async function listRuntimeCatalog(): Promise<RuntimeCatalog> {
   const response = await fetch("/v1/engines");
   if (!response.ok) await fail(response, "获取引擎列表");
-  const payload = await response.json() as { engines?: EngineEntry[] };
-  return payload.engines ?? [];
+  const payload = await response.json() as { engines?: EngineEntry[]; mcpServers?: string[] };
+  return { engines: payload.engines ?? [], mcpServers: payload.mcpServers ?? [] };
+}
+
+export async function listEngines(): Promise<EngineEntry[]> {
+  return (await listRuntimeCatalog()).engines;
 }
 
 export async function registerVoice(id: string, text: string, audio: File): Promise<void> {

@@ -444,7 +444,10 @@ describe("realtime gateway", () => {
     expect(hits.at(-1)).toBe("POST voxcpm2.test/v1/design-profiles");
 
     // The sanitized registry: names, kinds, capabilities, roles, health — no addresses.
-    const listed = await (await fetch(new URL("/v1/engines", gateway.url))).json() as { engines: Record<string, unknown>[] };
+    const listed = await (await fetch(new URL("/v1/engines", gateway.url))).json() as {
+      engines: Record<string, unknown>[];
+      mcpServers: string[];
+    };
     const names = listed.engines.map(entry => entry.name);
     expect(names).toContain("kokoro");
     expect(names).toContain("voxcpm2");
@@ -456,6 +459,7 @@ describe("realtime gateway", () => {
       capabilities: ["preset", "fast"],
       runtime: { model: "kokoro@1.0", manifestSha256: "abc123" },
     });
+    expect(listed.mcpServers).toEqual([]);
     expect(JSON.stringify(listed)).not.toContain("kokoro.test");
   });
 

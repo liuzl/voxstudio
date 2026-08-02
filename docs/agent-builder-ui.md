@@ -41,19 +41,23 @@ The placeholder-object gap that motivated this document is closed. As of
 - the gateway exposes owner-scoped CRUD, publish, audit, and version-list routes;
 - templates create distinct persisted Agents rather than renaming a singleton;
 - the Web list searches, opens, and deletes real registry records;
-- `/agents/:agentId` is a durable direct URL for the first Builder slice;
+- `/agents/:agentId/configuration` and `/agents/:agentId/speech` are durable
+  section URLs (with `/agents/:agentId` resolving to Configuration);
 - the Builder edits and revision-safely saves identity, instructions, welcome,
-  voice, language, silence follow-up, maximum duration, and Studio tools;
+  engine routes, MCP allowlists, voice, language, pronunciation overrides, ASR
+  keyterms, turn-taking controls, maximum duration, and Studio tools;
+- structural and live runtime-dependency checks block invalid saves, previews,
+  or publishes as appropriate and identify unavailable engines, voices, and MCP
+  bindings;
 - Publish creates an immutable version, and Try it live starts the saved draft
   at an explicit revision through the ordinary authenticated realtime path.
 
-The Builder is nevertheless only partially delivered. The current page has one
-combined form rather than the target section routes; advanced engine, MCP,
-pronunciation, keyterm, turn-taking, and guardrail controls are not exposed; the
-version-list API has no management UI; and preview is an inline responsive panel
-rather than the specified desktop drawer/mobile full-screen surface. Deployment,
-Agent-scoped conversation history, statistics, `VoiceStage`, and Portal reuse
-have not started.
+The Builder is nevertheless only partially delivered. Configuration and Speech
+now have durable routes and the advanced runtime controls above, but the
+version-list API has no management UI and duplicate/export actions are absent.
+Preview is an inline responsive panel rather than the specified desktop
+drawer/mobile full-screen surface. Deployment, Agent-scoped conversation history,
+statistics, `VoiceStage`, and Portal reuse have not started.
 
 ## References inspected
 
@@ -445,11 +449,10 @@ stage component does not require sharing the entire page theme.
    pending**: `AgentRecord`/`AgentSpec`, owner-scoped YAML registry, immutable
    published snapshots, resolution, CRUD, publish/audit, and native session start
    by Agent id are implemented. CLI Agent commands remain.
-2. **Builder foundation — partially delivered 2026-08-02**: the real list,
-   template creation, durable first detail route, shared header, revision-safe
-   saving, publish, and the first Configuration/Speech fields are implemented.
-   Section routes, full validation/dependency alerts, duplicate/export actions,
-   advanced configuration, and version history remain.
+2. **Builder foundation — Configuration/Speech delivered 2026-08-02**: the real
+   list, template creation, durable section routes, shared header, revision-safe
+   saving, publish, runtime-dependency alerts, and advanced Configuration/Speech
+   controls are implemented. Duplicate/export actions and version history remain.
 3. **Try it live — draft preview slice delivered 2026-08-02**: revision-pinned
    draft start, transcript, connection truth, mute, stop reply, restart, and end
    use existing session events. Published-version selection, desktop drawer,
