@@ -2,9 +2,10 @@
 
 Status: Accepted, 2026-07-14; living delivery record. The realtime gateway,
 five original functional panels, single-binary packaging, hosted authentication,
-and explicit engine-route selection are delivered. A visual Agents list now
-exists, but its registry-backed Builder remains proposed. The real-browser
-double-talk gate and production hosting operations remain.
+and explicit engine-route selection are delivered. The registry-backed Agents
+list, first Builder slice, publish flow, and revision-pinned Try it live were
+delivered 2026-08-02. The complete Builder sections, real-browser double-talk
+gate, and production hosting operations remain.
 
 ## Scope
 
@@ -36,10 +37,12 @@ below rather than relitigated per feature.
    realtime gateway specified in
    [duplex-audio-architecture.md](./duplex-audio-architecture.md); this document does not
    redefine that contract.
-   The durable console route is `/studio/agents`. Until the future public Portal
-   ships, `/` redirects there. Later, hosted `/` may become the public Portal while
-   Better Auth gates only `/studio/*`; self-hosted operation continues to bypass
-   the account card.
+   The delivered lightweight routes are `/` for the Agents list and
+   `/agents/:agentId` for the first Builder slice. The target durable console
+   route is `/studio/agents`; that coordinated route/Auth migration remains part
+   of the future Portal delivery. Later, hosted `/` may become the public Portal
+   while Better Auth gates only `/studio/*`; self-hosted operation continues to
+   bypass the account card.
 2. **Web-first, no desktop shell.** Capabilities that require system integration — global
    hotkey dictation, focus-follows push-to-talk — are physically unavailable to a browser
    and belong to the CLI (which already has them) or a future menubar companion. They are
@@ -83,9 +86,11 @@ below rather than relitigated per feature.
 
 1. **Agents** — saved voice-agent list and the configuration, speech,
    deployment, conversations, statistics, draft/publish, and Try-it-live
-   workflow specified in [agent-builder-ui.md](./agent-builder-ui.md). This
-   panel is proposed; the current visual list is not yet backed by the Agent
-   registry.
+   workflow specified in [agent-builder-ui.md](./agent-builder-ui.md). The real
+   registry-backed list, template creation, first combined Builder form,
+   draft/publish lifecycle, and revision-pinned preview are delivered. Section
+   routes, advanced configuration, version history UI, Deployment,
+   Conversations, Statistics, and the final preview treatment remain.
 2. **对话 Conversation** — live duplex session: mic capture with negotiated AEC (browser
    constraints verified per the duplex doc), agent audio playback, streaming captions,
    visible turn/barge-in/reopen state, per-turn latency readout (the `turn.timing`
@@ -229,6 +234,14 @@ panel through the gateway's existing SPA fallback; and the hosted Auth UI now
 shares the light console system across sign-in, verification, account identity,
 and API-key management, preserving the requested path through social sign-in and
 failing closed when deployment identity cannot be determined.
+
+**Agent surface update, 2026-08-02**: the Agents home now reads the shared,
+owner-scoped YAML registry rather than browser placeholder state. Template
+creation produces independent records; the first responsive Builder slice
+revision-safely edits and publishes them; and Try it live starts an explicitly
+revision-pinned draft through the ordinary authenticated realtime session. The
+remaining Builder sections and target `/studio/*` route split stay tracked in
+[agent-builder-ui.md](./agent-builder-ui.md).
 
 No phase creates empty directories; each is introduced with its first tested module
 (the same rule the duplex phases follow).

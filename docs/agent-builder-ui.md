@@ -1,15 +1,17 @@
 # Agent Builder UI and experiential voice surfaces
 
-Status: Proposed product and UI requirement, 2026-08-01. This document expands
-the Web scope of [agents.md](./agents.md). It records reference behavior and an
-implementation order; it does not make either reference site's information
-architecture part of VoxStudio.
+Status: Accepted living product requirement, 2026-08-01; implementation status
+reconciled 2026-08-02. This document expands the Web scope of
+[agents.md](./agents.md). It records reference behavior, delivered slices, and
+the remaining implementation order; it does not make either reference site's
+information architecture part of VoxStudio.
 
 ## Decision summary
 
-The immediate priority is to turn **Agents** from a visual list mock into a real
-saved-object workflow: create, configure, validate, preview, publish, and later
-inspect the conversations served by one agent.
+The visual-list mock has become a real saved-object workflow. The immediate
+priority is now to complete that workflow: expose the remaining configuration,
+validation, preview, and version lifecycle, then add deployment and inspection
+of conversations served by one Agent.
 
 The animated, experiential voice surface observed on StreamCore is useful, but
 it comes after the Agent object and builder are real. The same Vox-owned voice
@@ -28,23 +30,30 @@ The two reference lineages have different jobs:
 VoxStudio keeps its own navigation, terminology, runtime contracts, privacy
 defaults, engine routing, and self-hosted deployment model.
 
-## Current implementation gap
+## Current implementation state
 
-This is not only a missing page. The current Web Agents surface is presentation
-over a placeholder object:
+The placeholder-object gap that motivated this document is closed. As of
+2026-08-02:
 
-- `AgentsPanel.tsx` exposes one hard-coded agent id;
-- name and deletion state live only in browser `localStorage`;
-- choosing a template renames the same placeholder instead of creating a saved
-  agent;
-- selecting the agent routes directly to the generic Live conversation panel;
-- the Web REST facade has no Agent CRUD or publish API;
-- no production Agent registry implementation is present in the runtime yet.
+- `@voxstudio/agents` owns the validated Agent specification, owner-scoped YAML
+  registry, conditional revisions, immutable published snapshots, hashes,
+  resolution, and audit;
+- the gateway exposes owner-scoped CRUD, publish, audit, and version-list routes;
+- templates create distinct persisted Agents rather than renaming a singleton;
+- the Web list searches, opens, and deletes real registry records;
+- `/agents/:agentId` is a durable direct URL for the first Builder slice;
+- the Builder edits and revision-safely saves identity, instructions, welcome,
+  voice, language, silence follow-up, maximum duration, and Studio tools;
+- Publish creates an immutable version, and Try it live starts the saved draft
+  at an explicit revision through the ordinary authenticated realtime path.
 
-The existing list styling can be retained, but configuration work must begin at
-the domain and API boundary described in [agents.md](./agents.md). Building a
-larger form on top of `localStorage` would create a second, disposable Agent
-model and is not an acceptable intermediate state.
+The Builder is nevertheless only partially delivered. The current page has one
+combined form rather than the target section routes; advanced engine, MCP,
+pronunciation, keyterm, turn-taking, and guardrail controls are not exposed; the
+version-list API has no management UI; and preview is an inline responsive panel
+rather than the specified desktop drawer/mobile full-screen surface. Deployment,
+Agent-scoped conversation history, statistics, `VoiceStage`, and Portal reuse
+have not started.
 
 ## References inspected
 
@@ -126,8 +135,10 @@ shape is:
 The final route names may follow the existing lightweight router, but refreshing,
 back/forward navigation, and direct links must preserve both Agent and section.
 The `/studio/*` prefix is deliberate: it leaves `/` available for the future
-public Portal without putting the Portal behind the Studio's account gate. Until
-the Portal ships, `/` redirects to `/studio/agents` in both deployment modes.
+public Portal without putting the Portal behind the Studio's account gate. After
+that route migration and before the Portal ships, `/` will redirect to
+`/studio/agents` in both deployment modes. The delivered interim routes remain
+`/` and `/agents/:agentId` as recorded above.
 
 ## Agent detail shell
 
@@ -430,20 +441,28 @@ stage component does not require sharing the entire page theme.
 
 ## Delivery order
 
-1. **Agent domain and registry**: `AgentRecord`/`AgentSpec`, owner-scoped YAML
-   registry, immutable published snapshots, resolution, CRUD, publish/audit,
-   CLI, and session start by Agent id.
-2. **Builder foundation**: real Agents list, durable detail routes, shared header,
-   Configuration and Speech, validation, revision-safe draft saving, publish.
-3. **Try it live**: draft/published preview resolution, desktop drawer, mobile
-   full screen, transcript and controls using existing session events.
-4. **VoiceStage**: state-driven visual, reduced-motion/fallback paths, and preview
-   integration. This is the first implementation of the StreamCore-inspired
-   presentation.
-5. **Deployment and history**: integration snippets, Agent-scoped conversation
-   traces, retention truth, and only then measured statistics.
-6. **Portal reuse**: curated public Agent and hardened demo experience after the
-   preview component has passed desktop/mobile and real-browser gates.
+1. **Agent domain and registry — runtime/Web API delivered 2026-08-02; CLI
+   pending**: `AgentRecord`/`AgentSpec`, owner-scoped YAML registry, immutable
+   published snapshots, resolution, CRUD, publish/audit, and native session start
+   by Agent id are implemented. CLI Agent commands remain.
+2. **Builder foundation — partially delivered 2026-08-02**: the real list,
+   template creation, durable first detail route, shared header, revision-safe
+   saving, publish, and the first Configuration/Speech fields are implemented.
+   Section routes, full validation/dependency alerts, duplicate/export actions,
+   advanced configuration, and version history remain.
+3. **Try it live — draft preview slice delivered 2026-08-02**: revision-pinned
+   draft start, transcript, connection truth, mute, stop reply, restart, and end
+   use existing session events. Published-version selection, desktop drawer,
+   mobile full screen, text input, settings, feedback, and the complete failure
+   matrix remain.
+4. **VoiceStage — not started**: state-driven visual, reduced-motion/fallback
+   paths, and preview integration. This is the first implementation of the
+   StreamCore-inspired presentation.
+5. **Deployment and history — not started**: integration snippets, Agent-scoped
+   conversation traces, retention truth, and only then measured statistics.
+6. **Portal reuse — not started**: curated public Agent and hardened demo
+   experience after the preview component has passed desktop/mobile and
+   real-browser gates.
 
 ## Acceptance gates
 

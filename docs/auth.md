@@ -1,6 +1,6 @@
 # Authentication and identity
 
-Status: living. Accepted 2026-07-26; last revised 2026-08-01.
+Status: living. Accepted 2026-07-26; last revised 2026-08-02.
 
 ## Scope
 
@@ -23,9 +23,9 @@ arrive. The hosted product owns its identity; OIDC/SSO demotes to a future plugi
 
 ## Current state
 
-Everything described under "How it works" is implemented and tested except the
-passages explicitly marked as the proposed Agent registry integration. What remains
-before voxstudio.cc can open is mostly configuration — with two exceptions, marked,
+The identity, ownership, quota, browser-Origin, and Agent-registry integration
+described under "How it works" are implemented and tested. What remains before
+voxstudio.cc can open is mostly configuration — with two exceptions, marked,
 that are unbuilt work rather than a value someone has to supply:
 
 | Blocking launch | What it needs |
@@ -167,8 +167,7 @@ moment to design one deliberately rather than accrete it.
 ### Ownership
 
 Ownership landed *before* login, because accounts are meaningless while everyone shares one
-resource pool. The delivered resources use three mechanisms, and the proposed Agent
-registry adds a fourth behind the same identity seam:
+resource pool. The delivered resources use four mechanisms behind the same identity seam:
 
 ```text
 captures     owner_user_id column; every /v1/library route filters by it.
@@ -449,6 +448,10 @@ reversals — the places where a first answer was wrong in a way worth not repea
   trust turned up the larger one: the address-keyed brute-force limiter could be defeated
   by rotating `x-forwarded-for`, so the limits were rekeyed onto the claimed account and
   the trusted-proxy requirement disappeared instead of being configured.
+- **2026-08-02 — Agent ownership integration.** The registry keyed every draft
+  and immutable published snapshot by the resolved `userId`; CRUD, publish,
+  audit, version reads, draft preview, and realtime resolution now share the
+  same cookie/API-key owner and hosted-Origin boundary.
 
 ## References
 

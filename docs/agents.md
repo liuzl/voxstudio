@@ -1,7 +1,8 @@
 # Agents: the session options, reified
 
-Status: Proposed, 2026-07-25. The competitive gap the console walkthroughs made
-concrete ([competitive-voice-agents.md](./competitive-voice-agents.md)): xAI's
+Status: Accepted; runtime and first Web Builder slice delivered 2026-08-02.
+The competitive gap the console walkthroughs made concrete
+([competitive-voice-agents.md](./competitive-voice-agents.md)): xAI's
 product object is the *agent* — a named, saved, publishable bundle with its own
 list, templates, and Try-live lifecycle — while voxstudio has one conversation
 loop and a pile of start options. This design closes that gap the cheap way,
@@ -125,26 +126,28 @@ sharing, and knowledge attachments (RAG hangs off `AgentSpec` later).
 
 ## Phases and gates
 
-1. **The object, the registry, the native wire.** `AgentRecord`/`AgentSpec`
+1. **The object, the registry, the native wire — runtime delivered; CLI
+   pending.** `AgentRecord`/`AgentSpec`
    schema + resolution (with the guardrail tightening rule), the owner-scoped
-   YAML registry with immutable publish snapshots,
-   `vox agents {list,create,show,publish,audit,rm}`,
-   and `session.start { agent }` on the gateway. Unit tests: precedence
+   YAML registry with immutable publish snapshots, and
+   `session.start { agent }` on the gateway are implemented. The remaining
+   surface in this phase is
+   `vox agents {list,create,show,publish,audit,rm}`. Unit tests: precedence
    (config < agent < explicit), guardrails refusing to loosen, hash
    stability across key order, immutable-version resolution, same-id isolation
    across owners, conditional-write conflicts, concurrent publish serialization,
    and unknown/cross-owner rejection. **Gate**: a live session
    started by agent id comes up with the published version's voice, welcome, and
    tool policy — asserted through the existing event stream, no new machinery.
-2. **The dialect and the demo.** `?agent=` on the OpenAI adapter (gate: the
-   official SDK connects to a named agent with only a URL change);
+2. **The dialect and the demo — not started.** `?agent=` on the OpenAI adapter
+   (gate: the official SDK connects to a named agent with only a URL change);
    `--demo-agent` pinning to an immutable published version, folded into
    `measure:guardrails`.
-3. **Surfaces.** Web: the Agent Builder delivery in
-   [agent-builder-ui.md](./agent-builder-ui.md), including real list and detail
-   routes, create-from-template, edit, draft/publish, and Try it live; the
-   conversation trace viewer ties call history to the agent that served it.
-   CLI listen: `--agent ID`.
-4. **Later**: organizations and multi-principal sharing; knowledge attachments
-   per agent; agent switching mid-call as a session tool, if real usage asks for
-   it.
+3. **Surfaces — first Web slice delivered; remainder in progress.** Web: the
+   Agent Builder delivery in [agent-builder-ui.md](./agent-builder-ui.md),
+   including real list and detail routes, create-from-template, edit,
+   draft/publish, and Try it live; the conversation trace viewer ties call
+   history to the agent that served it. CLI listen: `--agent ID`.
+4. **Later — conditional.** Organizations and multi-principal sharing;
+   knowledge attachments per agent; agent switching mid-call as a session tool,
+   if real usage asks for it.

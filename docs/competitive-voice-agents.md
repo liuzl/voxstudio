@@ -215,4 +215,6 @@ are orthogonal to who runs the servers.
 The revised ladder is: zero-auth or optional-token self-hosting → individual
 hosted accounts with product-owned identity and owner-scoped resources (delivered)
 → organizations and roles → enterprise SSO where justified. Agents
-([agents.md](./agents.md)) gain the same owner dimension when their registry lands.
+([agents.md](./agents.md)) gained the same owner dimension with the registry and
+gateway delivery on 2026-08-02; organizations and shared Agent ownership remain
+the later widening.

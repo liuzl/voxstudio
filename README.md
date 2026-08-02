@@ -54,7 +54,7 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | `platforms/macos-audio/` | Native macOS capture/playback helper and the real-device AEC/NS/AGC measurement gate |
 | `apps/cli/` | Compiled TypeScript `vox` CLI |
 | `apps/realtime-gateway/` | Web Studio server: the duplex session protocol over WebSocket plus a credential-hiding REST facade |
-| `apps/web/` | The browser studio (React + Tailwind + Zustand): conversation, generation, voice bank + design profiles, captures library, and engine settings panels |
+| `apps/web/` | The browser studio (React + Tailwind + Zustand): saved Agents + Builder preview, conversation, generation, voice bank + design profiles, captures library, and engine settings panels |
 | `apps/mcp/` | `vox-mcp` — voxstudio's voice and curation surface as an MCP server (speak / transcribe / generate / voice-bank management) for any agent |
 | `skills/` | Agent Skills playbooks — reproducible voice design and discovery-first use of a hosted Vox API |
 | `tools/` | Measurement and calibration scripts (Python) — the constants in `packages/` stay re-derivable |
@@ -238,8 +238,10 @@ tags, per-request pinning). The whole studio also ships inside the compiled `vox
 `vox studio` embeds the built web app and serves it around the guarded API from one file,
 barge-in detection included (the Silero WASM backend rides along — no native ONNX runtime
 needed). Remote TTS engines can stream Ogg/Opus (`stream_format: opus`,
-~12KB/s vs raw PCM's 187.5KB/s) for slow WAN links, decoded gateway-side via ffmpeg. The browser studio (`apps/web`) ships five panels on top of it:
-live conversation (worklet microphone capture, gapless streamed playback, captions with turn
+~12KB/s vs raw PCM's 187.5KB/s) for slow WAN links, decoded gateway-side via ffmpeg. The browser studio (`apps/web`) ships six primary surfaces on top of it:
+a registry-backed Agents list and first Builder slice (owner-scoped CRUD, immutable
+publish snapshots, revision-safe saving, and draft Try it live), live conversation
+(worklet microphone capture, gapless streamed playback, captions with turn
 state and per-turn timing, the negotiated AEC capability snapshot), generation with takes,
 the voice bank (file upload or in-browser recording, plus design-profile create / audit /
 verify against the engine runtime), the captures library (`vox studio --library DIR`, an
@@ -247,7 +249,9 @@ explicit retention opt-in: every finalized utterance archived with its raw trans
 play, re-transcribe, correct inline into a `.ref.txt` the ASR reference workflow scores
 directly, promote to a clone voice sample; `--library-max-bytes 512M` bounds retained
 audio by evicting the oldest uncorrected, unpromoted captures — curated work is never
-auto-deleted), and engine settings with live health. Its real-browser
+auto-deleted), and engine settings with live health. The complete Agent Builder
+sections, VoiceStage, Deployment/history surfaces, and Portal reuse remain planned;
+its real-browser
 double-talk/barge-in gate and route-change handling remain separate measured delivery
 phases.
 
