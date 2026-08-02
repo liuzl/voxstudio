@@ -198,7 +198,11 @@ function yamlLines(value: Record<string, unknown>, depth = 0): string[] {
 
 /** A portable Agent draft export. Quoted JSON scalars keep arbitrary Unicode valid YAML. */
 export function agentExportYaml(record: AgentRecord): string {
-  return `# VoxStudio Agent draft\n${yamlLines(record as unknown as Record<string, unknown>).join("\n")}\n`;
+  const portable: AgentRecord = { ...record };
+  // A published pointer is only valid together with its immutable snapshot file. A
+  // single-file draft export must never carry a pointer it cannot satisfy elsewhere.
+  delete portable.published;
+  return `# VoxStudio Agent draft\n${yamlLines(portable as unknown as Record<string, unknown>).join("\n")}\n`;
 }
 
 function downloadAgentYaml(record: AgentRecord): void {
@@ -612,6 +616,19 @@ export function specFrom(draft: AgentDraft, prior: AgentSpec): AgentSpec {
   return spec;
 }
 
+/** Materialize the editor's current in-memory draft without mutating the registry. */
+export function agentRecordFromDraft(record: AgentRecord, draft: AgentDraft): AgentRecord {
+  const next: AgentRecord = {
+    ...record,
+    name: draft.name.trim(),
+    spec: specFrom(draft, record.spec),
+  };
+  const description = draft.description.trim();
+  if (description) next.description = description;
+  else delete next.description;
+  return next;
+}
+
 function canonicalJson(value: unknown): string {
   const normalize = (item: unknown): unknown => {
     if (Array.isArray(item)) return item.map(normalize);
@@ -697,6 +714,7 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
   const [voiceCatalogReady, setVoiceCatalogReady] = useState(false);
   const [audit, setAudit] = useState<AgentAudit>();
   const [versions, setVersions] = useState<AgentPublishedVersion[]>([]);
+  const [latestPublishedVersion, setLatestPublishedVersion] = useState<number>();
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [versionsFailure, setVersionsFailure] = useState("");
   const [versionsOpen, setVersionsOpen] = useState(false);
@@ -714,7 +732,7 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current;
     setLoading(true); setFailure("");
-    setRecord(undefined); setDraft(undefined); setAudit(undefined); setVersions([]); setVersionsFailure("");
+    setRecord(undefined); setDraft(undefined); setAudit(undefined); setVersions([]); setLatestPublishedVersion(undefined); setVersionsFailure("");
     setVersionsOpen(false); setPreviewOpen(false); setPreviewSource({ type: "draft" });
     setDuplicateSource(undefined); setActionsOpen(false);
     setRuntimeCatalogReady(false); setVoiceCatalogReady(false);
@@ -733,6 +751,7 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
       setRuntimeCatalogReady(runtimeCatalog !== undefined);
       setAudit(nextAudit);
       setVersions(nextVersions ?? []);
+      setLatestPublishedVersion(next.published?.version);
       if (nextVersions === undefined) setVersionsFailure(t("无法加载版本历史"));
     } catch (error) {
       if (generation !== loadGeneration.current) return;
@@ -805,6 +824,7 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
       const result = await publishAgent(saved.id, saved.revision);
       setRecord(result.record); setDraft(draftFrom(result.record));
       setVersions(current => [result.version, ...current.filter(version => version.version !== result.version.version)]);
+      setLatestPublishedVersion(result.version.version);
       setAudit({ status: "current", draftHash: result.version.hash, publishedHash: result.version.hash, version: result.version.version });
       toast("info", `${t("发布")} v${result.version.version}`);
     } catch (error) {
@@ -815,7 +835,20 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
   const refreshVersions = async () => {
     setVersionsLoading(true); setVersionsFailure("");
     try {
-      setVersions(await listAgentVersions(agentId));
+      const [nextVersions, nextRecord, nextAudit] = await Promise.all([
+        listAgentVersions(agentId),
+        getAgent(agentId),
+        auditAgent(agentId),
+      ]);
+      setVersions(nextVersions);
+      setLatestPublishedVersion(nextRecord.published?.version);
+      // When the editor is clean, safely advance its revision and published pointer too.
+      // A dirty editor keeps its original base so a later save still detects conflicts.
+      if (!dirty) {
+        setRecord(nextRecord);
+        setDraft(draftFrom(nextRecord));
+        setAudit(nextAudit);
+      }
     } catch (error) {
       setVersionsFailure(error instanceof Error ? error.message : String(error));
     } finally {
@@ -823,10 +856,16 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
     }
   };
 
+  const openVersions = () => {
+    setVersionsOpen(true);
+    void refreshVersions();
+  };
+
   const restoreVersion = (version: AgentPublishedVersion) => {
     if (!record) return;
     if (dirty && !window.confirm(t("恢复版本会替换当前未保存的更改，继续吗？"))) return;
     setDraft(draftFrom({ ...record, spec: version.spec }));
+    setPreviewSource({ type: "draft" });
     setVersionsOpen(false);
     toast("info", t("已将 v{version} 恢复为草稿；保存后生效。", { version: version.version }));
   };
@@ -844,27 +883,27 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
     }
   };
 
-  const prepareDuplicate = async () => {
-    setActionBusy(true); setActionsOpen(false);
-    try {
-      const saved = await save();
-      if (saved) setDuplicateSource(saved);
-    } finally {
-      setActionBusy(false);
+  const currentDraftRecord = (): AgentRecord | undefined => {
+    if (!record || !draft) return undefined;
+    if (shapeIssues.length > 0) {
+      toast("error", issueText(shapeIssues[0] as ValidationIssue));
+      return undefined;
     }
+    return agentRecordFromDraft(record, draft);
   };
 
-  const exportYaml = async () => {
-    setActionBusy(true); setActionsOpen(false);
-    try {
-      const saved = await save();
-      if (saved) {
-        downloadAgentYaml(saved);
-        toast("info", t("已导出助手 YAML"));
-      }
-    } finally {
-      setActionBusy(false);
-    }
+  const prepareDuplicate = () => {
+    setActionsOpen(false);
+    const source = currentDraftRecord();
+    if (source) setDuplicateSource(source);
+  };
+
+  const exportYaml = () => {
+    setActionsOpen(false);
+    const source = currentDraftRecord();
+    if (!source) return;
+    downloadAgentYaml(source);
+    toast("info", t("已导出助手 YAML"));
   };
 
   const removeBuilderAgent = async () => {
@@ -904,7 +943,7 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
             <span className="block truncate text-[9px] text-fg-faint">{record.id}{record.published ? ` · v${record.published.version} · ${t("发布于 {time}", { time: displayTime(record.published.publishedAt, locale) })}` : ""}</span>
           </div>
           <span className="hidden items-center gap-1.5 text-[10px] text-fg-faint lg:flex">{dirty ? <><span className="size-1.5 rounded-full bg-amber-400" />{t("有未保存的更改")}</> : <><Check className="size-3" />{t("已保存")}</>}</span>
-          <button onClick={() => setVersionsOpen(true)} title={t("版本历史")} aria-label={t("版本历史")} className="hidden size-9 shrink-0 items-center justify-center rounded-full border border-edge bg-canvas text-fg-secondary hover:bg-fill-hover md:flex"><History className="size-3.5" /></button>
+          <button onClick={openVersions} title={t("版本历史")} aria-label={t("版本历史")} className="hidden size-9 shrink-0 items-center justify-center rounded-full border border-edge bg-canvas text-fg-secondary hover:bg-fill-hover md:flex"><History className="size-3.5" /></button>
           <button onClick={() => setPreviewOpen(true)} title={t("实时试用")} className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-full border border-edge bg-canvas px-2.5 text-[11px] font-medium text-fg-secondary hover:bg-fill-hover sm:px-3"><Mic className="size-3.5" /><span className="hidden xl:inline">{t("实时试用")}</span></button>
           <button onClick={() => void save()} disabled={!dirty || saving || publishing || shapeIssues.length > 0} title={t("保存")} className="inline-flex h-9 shrink-0 items-center justify-center rounded-full border border-edge bg-canvas px-2.5 text-[11px] font-medium text-fg-secondary hover:bg-fill-hover disabled:cursor-not-allowed disabled:opacity-40 sm:px-3">{saving ? <LoaderCircle className="size-3.5 animate-spin" /> : <Check className="size-3.5 sm:hidden" />}<span className="hidden sm:inline">{t("保存")}</span></button>
           <button onClick={() => void publish()} disabled={publishDisabled} title={t("发布")} className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-full bg-ink px-2.5 text-[11px] font-medium text-on-ink hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-40 sm:px-4">{publishing ? <LoaderCircle className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}<span className="hidden sm:inline">{t("发布")}</span></button>
@@ -912,10 +951,10 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
             <button onClick={() => setActionsOpen(open => !open)} disabled={actionBusy} aria-label={t("助手操作")} aria-expanded={actionsOpen} className="flex size-9 items-center justify-center rounded-full text-fg-muted hover:bg-fill-hover hover:text-fg disabled:opacity-40">{actionBusy ? <LoaderCircle className="size-4 animate-spin" /> : <MoreHorizontal className="size-4.5" />}</button>
             {actionsOpen ? <div className="absolute right-0 top-11 z-40 w-48 rounded-xl border border-edge bg-canvas p-1.5 shadow-[0_16px_44px_rgba(0,0,0,0.15)]">
               <button onClick={() => { setActionsOpen(false); void navigator.clipboard?.writeText(record.id); toast("info", t("已复制助手 ID")); }} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] hover:bg-fill-hover"><Copy className="size-3.5 text-fg-muted" />{t("复制助手 ID")}</button>
-              <button onClick={() => void prepareDuplicate()} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] hover:bg-fill-hover"><Plus className="size-3.5 text-fg-muted" />{t("复制助手")}</button>
-              <button onClick={() => void exportYaml()} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] hover:bg-fill-hover"><Download className="size-3.5 text-fg-muted" />{t("导出 YAML")}</button>
+              <button onClick={prepareDuplicate} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] hover:bg-fill-hover"><Plus className="size-3.5 text-fg-muted" />{t("复制助手")}</button>
+              <button onClick={exportYaml} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] hover:bg-fill-hover"><Download className="size-3.5 text-fg-muted" />{t("导出 YAML")}</button>
               <button onClick={() => void runAudit()} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] hover:bg-fill-hover"><ShieldCheck className="size-3.5 text-fg-muted" />{t("审计助手")}</button>
-              <button onClick={() => { setActionsOpen(false); setVersionsOpen(true); }} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] hover:bg-fill-hover md:hidden"><History className="size-3.5 text-fg-muted" />{t("版本历史")}</button>
+              <button onClick={() => { setActionsOpen(false); openVersions(); }} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] hover:bg-fill-hover md:hidden"><History className="size-3.5 text-fg-muted" />{t("版本历史")}</button>
               <div className="my-1 border-t border-edge-faint" />
               <button onClick={() => void removeBuilderAgent()} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] text-danger hover:bg-danger-surface"><Trash2 className="size-3.5" />{t("删除助手")}</button>
             </div> : null}
@@ -1010,6 +1049,7 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
         loading={versionsLoading}
         failure={versionsFailure}
         dirty={dirty}
+        currentPublishedVersion={latestPublishedVersion}
         previewSource={previewSource}
         onClose={() => setVersionsOpen(false)}
         onReload={() => void refreshVersions()}
@@ -1017,18 +1057,19 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
         onPreviewDraft={() => { setPreviewSource({ type: "draft" }); setVersionsOpen(false); setPreviewOpen(true); }}
         onPreview={version => { setPreviewSource({ type: "published", version: version.version }); setVersionsOpen(false); setPreviewOpen(true); }}
       /> : null}
-      {previewOpen ? <TryItLive record={record} versions={versions} source={previewSource} onSourceChange={setPreviewSource} dirty={dirty} onSave={save} blocked={validationIssues.length > 0} onClose={() => setPreviewOpen(false)} /> : null}
+      {previewOpen ? <TryItLive record={record} versions={versions} currentPublishedVersion={latestPublishedVersion} source={previewSource} onSourceChange={setPreviewSource} dirty={dirty} onSave={save} blocked={validationIssues.length > 0} onClose={() => setPreviewOpen(false)} /> : null}
       {duplicateSource ? <DuplicateAgentDialog source={duplicateSource} onClose={() => setDuplicateSource(undefined)} onCreated={agent => { setDuplicateSource(undefined); onOpenAgent(agent.id); }} /> : null}
     </div>
   );
 }
 
-function VersionHistoryDrawer({ record, versions, loading, failure, dirty, previewSource, onClose, onReload, onRestore, onPreviewDraft, onPreview }: {
+function VersionHistoryDrawer({ record, versions, loading, failure, dirty, currentPublishedVersion, previewSource, onClose, onReload, onRestore, onPreviewDraft, onPreview }: {
   record: AgentRecord;
   versions: AgentPublishedVersion[];
   loading: boolean;
   failure: string;
   dirty: boolean;
+  currentPublishedVersion: number | undefined;
   previewSource: AgentPreviewSource;
   onClose(): void;
   onReload(): void;
@@ -1060,7 +1101,7 @@ function VersionHistoryDrawer({ record, versions, loading, failure, dirty, previ
 
           <div className="my-5 flex items-center justify-between"><h3 className="text-[11px] font-semibold text-fg-secondary">{t("已发布版本")}</h3><span className="text-[10px] text-fg-faint">{t("共 {n} 个版本", { n: versions.length })}</span></div>
           {loading ? <div className="flex min-h-40 items-center justify-center"><LoaderCircle className="size-5 animate-spin text-fg-faint" /></div> : failure ? <div className="flex min-h-40 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-edge px-5 text-center text-[11px] text-danger"><span>{failure}</span><button onClick={onReload} className={secondaryButton}><RotateCw className="size-3.5" />{t("重试")}</button></div> : versions.length === 0 ? <div className="flex min-h-40 flex-col items-center justify-center rounded-xl border border-dashed border-edge px-5 text-center"><History className="size-5 text-fg-faint" /><p className="mt-3 text-[11px] font-medium">{t("尚未发布任何版本")}</p><p className="mt-1 text-[10px] leading-5 text-fg-faint">{t("发布后，版本快照会不可变地保存在这里。")}</p></div> : <div className="space-y-3">{versions.map(version => {
-            const current = record.published?.version === version.version;
+            const current = currentPublishedVersion === version.version;
             const selected = previewSource.type === "published" && previewSource.version === version.version;
             return <article key={version.version} className={`rounded-2xl border p-4 transition ${selected ? "border-fg bg-fill-faint" : "border-edge bg-canvas hover:border-edge-strong"}`}>
               <div className="flex items-start justify-between gap-3"><div><div className="flex items-center gap-2"><span className="text-[13px] font-semibold">v{version.version}</span>{current ? <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">{t("当前发布")}</span> : null}</div><p className="mt-1 text-[10px] text-fg-faint">{displayTime(version.publishedAt, locale)}</p></div><button onClick={() => { void navigator.clipboard?.writeText(version.hash); }} title={t("复制 Hash")} className="flex h-8 items-center gap-1.5 rounded-lg px-2 font-mono text-[9px] text-fg-muted hover:bg-fill-hover"><span>{version.hash.slice(0, 10)}</span><Copy className="size-3" /></button></div>
@@ -1174,9 +1215,10 @@ export function previewStatusLabel(connection: ConnectionState, sessionState: st
   return previewSessionLabels[sessionState] ?? "聆听中";
 }
 
-function TryItLive({ record, versions, source, onSourceChange, dirty, onSave, blocked, onClose }: {
+function TryItLive({ record, versions, currentPublishedVersion, source, onSourceChange, dirty, onSave, blocked, onClose }: {
   record: AgentRecord;
   versions: AgentPublishedVersion[];
+  currentPublishedVersion: number | undefined;
   source: AgentPreviewSource;
   onSourceChange(source: AgentPreviewSource): void;
   dirty: boolean;
@@ -1215,10 +1257,10 @@ function TryItLive({ record, versions, source, onSourceChange, dirty, onSave, bl
   }, []);
 
   useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape" && !starting) onClose(); };
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose, starting]);
+  }, [onClose]);
 
   useEffect(() => {
     if (!followLatest.current) {
@@ -1322,7 +1364,7 @@ function TryItLive({ record, versions, source, onSourceChange, dirty, onSave, bl
     ? t("使用当前草稿进行实时测试。")
     : t("使用不可变的已发布版本 v{version} 进行测试。", { version: source.version });
   return (
-    <div className="fixed inset-0 z-50 bg-black/20 backdrop-blur-[1px]" onMouseDown={event => { if (event.target === event.currentTarget && !starting) onClose(); }}>
+    <div className="fixed inset-0 z-50 bg-black/20 backdrop-blur-[1px]" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
     <aside role="dialog" aria-modal="true" aria-labelledby="try-live-title" className="absolute inset-0 flex flex-col overflow-hidden bg-canvas shadow-[-18px_0_60px_rgba(0,0,0,0.12)] md:left-auto md:w-[430px] md:border-l md:border-edge">
       <header className="shrink-0 border-b border-edge-faint bg-canvas px-5 py-4">
         <div className="flex items-start justify-between gap-4">
@@ -1333,7 +1375,7 @@ function TryItLive({ record, versions, source, onSourceChange, dirty, onSave, bl
           <div className="flex items-center gap-1.5">
             {isPreview ? <button onClick={() => void restart()} disabled={starting || (blocked && source.type === "draft")} title={t("重新开始")} aria-label={t("重新开始")} className="flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg disabled:opacity-40"><RotateCw className={`size-3.5 ${starting ? "animate-spin" : ""}`} /></button> : null}
             <span className={`mx-1 size-2 rounded-full ${previewConnected ? "bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.12)]" : isPreview ? "bg-amber-400 shadow-[0_0_0_4px_rgba(251,191,36,0.12)]" : "bg-edge-hover"}`} />
-            <button onClick={onClose} disabled={starting} aria-label={t("关闭")} className="flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg disabled:opacity-40"><X className="size-4" /></button>
+            <button onClick={onClose} aria-label={t("关闭")} className="flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg"><X className="size-4" /></button>
           </div>
         </div>
         <div className="mt-4 rounded-xl border border-edge bg-surface p-1">
@@ -1342,7 +1384,7 @@ function TryItLive({ record, versions, source, onSourceChange, dirty, onSave, bl
             onSourceChange(value === "draft" ? { type: "draft" } : { type: "published", version: Number(value.slice("published:".length)) });
           }} className="h-9 w-full rounded-lg bg-canvas px-3 text-[11px] font-medium text-fg outline-none disabled:opacity-60">
             <option value="draft">{t("当前草稿")} · revision {record.revision}</option>
-            {versions.map(version => <option key={version.version} value={`published:${version.version}`}>{t("已发布版本")} v{version.version}{record.published?.version === version.version ? ` · ${t("当前发布")}` : ""}</option>)}
+            {versions.map(version => <option key={version.version} value={`published:${version.version}`}>{t("已发布版本")} v{version.version}{currentPublishedVersion === version.version ? ` · ${t("当前发布")}` : ""}</option>)}
           </select>
         </div>
         <p className="mt-2 text-[10px] leading-5 text-fg-faint">{sourceDescription}</p>

@@ -3,6 +3,7 @@ import {
   agentBehaviorChanged,
   agentExportYaml,
   agentPreviewOptions,
+  agentRecordFromDraft,
   displayTime,
   draftFrom,
   listFromText,
@@ -135,6 +136,30 @@ describe("Agent Builder advanced configuration", () => {
     expect(agentBehaviorChanged({ ...current, instructions: "Changed behavior" }, record.spec)).toBe(true);
   });
 
+  test("materializes unsaved editor values without changing the persisted record", () => {
+    const draft = {
+      ...draftFrom(record),
+      name: "  Renamed support  ",
+      description: "  Current unsaved description  ",
+      instructions: "Current unsaved behavior",
+    };
+    const snapshot = agentRecordFromDraft(record, draft);
+    expect(snapshot).toMatchObject({
+      name: "Renamed support",
+      description: "Current unsaved description",
+      revision: 1,
+      spec: { instructions: "Current unsaved behavior" },
+    });
+    expect(record).toEqual({
+      id: "support",
+      name: "Support",
+      spec: {},
+      revision: 1,
+      createdAt: "2026-08-02T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+    });
+  });
+
   test("validates the effective default routes and the voice on the effective TTS engine", () => {
     const draft = { ...draftFrom(record), voice: "calm" };
     const engines = [
@@ -157,19 +182,26 @@ describe("Agent Builder advanced configuration", () => {
   });
 
   test("exports a complete portable YAML draft without losing Unicode or nested specs", () => {
-    const exported = agentExportYaml({
+    const source = {
       ...record,
       name: "客服：主助手",
       description: "Handles \"priority\" cases",
+      published: {
+        version: 2,
+        hash: "a".repeat(64),
+        publishedAt: "2026-08-02T01:00:00.000Z",
+      },
       spec: {
         instructions: "先确认问题，再回答。",
         pronunciations: { VoxStudio: "沃克斯", "A:B": "诶比" },
         keyterms: ["VoxStudio", "Agent Builder"],
         studioTools: true,
       },
-    });
+    };
+    const exported = agentExportYaml(source);
     expect(exported.startsWith("# VoxStudio Agent draft\n")).toBe(true);
-    expect(Bun.YAML.parse(exported)).toMatchObject({
+    const parsed = Bun.YAML.parse(exported) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
       id: "support",
       name: "客服：主助手",
       description: "Handles \"priority\" cases",
@@ -179,5 +211,7 @@ describe("Agent Builder advanced configuration", () => {
         studioTools: true,
       },
     });
+    expect(parsed.published).toBeUndefined();
+    expect(source.published.version).toBe(2);
   });
 });
