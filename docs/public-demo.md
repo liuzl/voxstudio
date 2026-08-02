@@ -39,9 +39,12 @@ useful independently of identity.
    an `end_call` reaches, minus the farewell.
 3. **Demo mode** (`--demo`, `VOX_GATEWAY_DEMO=1`) — the deployment is
    read-only where it must be:
-   - registry writes refuse: `POST /v1/voices`, `DELETE /v1/voices/{id}`,
-     `POST /v1/design-profiles` answer 403 `demo_mode`; the voice bank stays
-     readable — picking voices *is* the demo;
+   - registry writes refuse with 403 `demo_mode`: `POST /v1/voices`,
+     `DELETE /v1/voices/{id}`, `POST /v1/design-profiles`, and Agent creation,
+     update, deletion, and publish (`POST /v1/agents`, `PATCH|DELETE /v1/agents/{id}`,
+     `POST /v1/agents/{id}/publish`). Voice and Agent registries stay readable so
+     visitors can select existing configurations; Agent audit remains a read-only
+     validation operation;
    - MCP servers are not connected regardless of config: external tools have no
      business in an anonymous-ish demo, and `trust` least of all;
    - the capture library stays off regardless of `--library` (docs/web-studio.md

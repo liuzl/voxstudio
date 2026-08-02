@@ -1,10 +1,10 @@
 # Research registry
 
-Status: initial historical backfill, 2026-07-30. This registry is incomplete by
-design: it records only investigations for which the repository contains
-substantive evidence or for which a new measured summary was produced during
-the current research session. A project being mentioned elsewhere does not
-qualify it for this list.
+Status: initial historical backfill, 2026-07-30; last updated 2026-08-02. This
+registry is incomplete by design: it records only investigations for which the
+repository contains substantive evidence or for which a new measured summary
+was produced during the current research session. A project being mentioned
+elsewhere does not qualify it for this list.
 
 The registry answers:
 
@@ -70,6 +70,8 @@ judgment about a project.
 | Voxtral through audio.cpp | E3 | not-promoted | Mandarin experiment substituted terms, truncated content, and omitted punctuation. It did not clear the realtime promotion bar. | [`voice-agent-roadmap.md`](../../docs/voice-agent-roadmap.md) |
 | Moonshine | E3 | watch | Mandarin CER was measured at 25.76%, and no usable Mandarin streaming path was found. Revisit only after material Mandarin model or streaming changes. | [`voice-agent-roadmap.md`](../../docs/voice-agent-roadmap.md) |
 | Microsoft VibeASR.cpp / VibeVoice-ASR-BitNet | E3 | candidate | Official CPU C++ runtime with 1.70 GB I8/I2 GGUF weights. It built unchanged on Apple Silicon. On an M3 Max, one 5.02 s sample reached RTF 0.277 at 12 threads; 16 threads regressed to 0.559. An eight-utterance internal zh/en set produced preliminary normalized character error of 11.2% versus 1.9% for the current SenseVoice service. Context corrected the failed “鱼尾狮” entity exactly. Its “stream server” consumes complete WAV paths and streams output tokens only after full-audio encode/prefill; it is not streaming audio input. The released 1.5B model did not produce the source tree's JSON timestamp/speaker format. | [upstream](https://github.com/microsoft/VibeASR.cpp), [technical report](https://arxiv.org/abs/2607.21075), this registry entry; full protocol and artifacts not yet backfilled |
+| Speaker embeddings for personalization | E1 | candidate | Current models are promising for soft speaker-aware routing, but domain/language shift, short utterances, realtime constraints, and spoofing require a measured VoxStudio evaluation before integration. Prefer swappable CPU/ONNX deployment paths and graceful degradation. | [`speaker-recognition-landscape.md`](../../docs/speaker-recognition-landscape.md) |
+| Voiceprint-only authentication | E1 | not-promoted | Commercial API retirements and deepfake/spoofing evidence make voice identity unsuitable as a sole authentication factor. Any future speaker signal must remain advisory and compose with stronger identity controls. | [`speaker-recognition-landscape.md`](../../docs/speaker-recognition-landscape.md) |
 
 ### Speech and audio generation
 

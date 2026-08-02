@@ -38,7 +38,8 @@ Control is JSON text frames; media is binary frames, never base64 JSON.
   duplex kernel's events (`session.state`, `turn.*`, `vad.end`, `turn.timing`,
   `audio.*`) plus `transcript.final`, `response.text.delta|final`, `playback.format`,
   `playback.ended|interrupted`, `session.snapshot`, `session.notice`,
-  `command.accepted|duplicate|rejected`, and `error`.
+  `tool.call|result|pending`, `studio.take`, `command.accepted|duplicate|rejected`,
+  and `error`.
 
 Reconnect: the session outlives its socket by a grace period (default 30s). A client
 reattaches with `session.attach` and resynchronizes from the pushed `session.snapshot` —
@@ -46,8 +47,11 @@ events during the gap are not replayed. Replayed commands are acknowledged
 (`command.duplicate`) but never re-executed, and a `turn.interrupt` naming a superseded
 turn is rejected as `stale_turn`, so a stale stop can never kill the reply now playing.
 
-`session.start` options mirror `vox listen`: `language`, `system`, `maxTokens`,
-`voice`, named-instance overrides (`asrEngine`, `llmEngine`, `ttsEngine`),
+`session.start` can select a saved Agent with `agent`; ordinary callers get its latest
+published version, while Builder preview can select an exact `agentVersion` or a
+revision-checked draft with `agentSource=draft` and `agentRevision`. The remaining options
+mirror `vox listen`: `language`, `system`, `maxTokens`, `voice`, named-instance overrides
+(`asrEngine`, `llmEngine`, `ttsEngine`),
 `studioTools`, `welcome`, `nudgeAfterSeconds`, `bargeIn` (default false —
 protected mode until the endpoint has negotiated AEC), `turnTaking` (default
 speculative), `reopenMs`, `vad` (Silero where available, loud degrade to
@@ -60,9 +64,10 @@ barges in instead of opening a turn beside the playing reply.
 ## REST facade
 
 The facade covers speech, transcription, chat, the sanitized engine registry,
-voice registration and mutation, design profiles, and the optional capture
-library under `/v1/*`; `?engine=` explicitly selects a kind-checked named
-instance where supported. Hosted deployments additionally expose discovery at
+voice registration and mutation, design profiles, the optional capture library, and the
+Agent registry under `/v1/*`. Agent routes provide owner-scoped list/create/get/update/delete,
+publish, audit, and immutable version history. `?engine=` explicitly selects a kind-checked
+named instance where supported. Hosted deployments additionally expose discovery at
 `/agent`, `/llms.txt`, and `/openapi.json`, while Better Auth owns
 `/v1/auth/*`. The route catalog in `src/routes.ts` is the authoritative method,
 parameter, quota, and demo-policy list and generates the OpenAPI surface.

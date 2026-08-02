@@ -30,8 +30,9 @@ curl -s "$VOX_URL/healthz"        # liveness; `auth` is "accounts" or "self"
 - `"auth": "accounts"` — a hosted deployment. It has the discovery surface above and
   requires an API key. Continue.
 - `"auth": "self"` — somebody's own machine, no accounts. There is no key to get and no
-  `/agent` page; those paths return the web app. Ask the human how they want you to
-  reach it (usually: they run commands themselves, or hand you a gateway token).
+  `/agent` discovery page; `/agent`, `/llms.txt`, and `/openapi.json` return a structured
+  404 with code `discovery_disabled`. Ask the human how they want you to reach the service
+  (usually: they run commands themselves, or hand you a gateway token).
 
 The OpenAPI document is the authority on what exists. If a route is not in it, it is not
 implemented — do not probe for it.

@@ -77,8 +77,9 @@ sharing, and knowledge attachments (RAG hangs off `AgentSpec` later).
    updates the draft's published version/hash/time pointer only after that write
    succeeds. Editing the draft cannot rewrite the version currently serving
    callers. `vox agents audit` compares canonical draft and snapshot hashes;
-   a hash is evidence, not a substitute for the published payload. Templates are
-   seed files shipped in the repo (`agents/templates/`).
+   a hash is evidence, not a substitute for the published payload. The Builder's starter
+   templates are UI presets in `apps/web/src/panels/AgentsPanel.tsx`; selecting one creates
+   an ordinary registry draft, after which the same revision and publish rules apply.
 
    Under hosted accounts, the registry is keyed by `(userId, id)` and owner
    directories use the full hexadecimal SHA-256 digest of Better Auth's `userId`;

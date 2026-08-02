@@ -29,7 +29,7 @@ SSE legacy transport.
    mcp_servers:
      memo:
        command: bun               # stdio: command + args + env
-       args: [tools/memo-server.ts]
+       args: [packages/mcp/tools/memo-server.ts]
      weather:
        url: https://example.com/mcp   # streamable HTTP
        token_env: WEATHER_TOKEN       # Authorization: Bearer from the environment

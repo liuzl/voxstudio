@@ -7,7 +7,7 @@ FastAPI HTTP wrapper over **OpenBMB VoxCPM2** (48kHz high-fidelity Chinese TTS).
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/health` | service status, sample rate, and active continuation-session count |
-| POST | `/v1/audio/speech` | OpenAI-compatible: `{input, voice, response_format, seed?}` — `voice=clone` (default ref) / `design` (zero-shot, prefix `input` with `(English description)`) |
+| POST | `/v1/audio/speech` | OpenAI-compatible batch WAV or continuation streaming: `{input, voice, response_format, seed?, prosody_prompt?, continuation_id?, continuation_end?, stream?}` — `voice=clone` (default ref) / `design` (zero-shot, prefix `input` with `(English description)`) / a registered id |
 | POST | `/tts` | JSON `{text, voice, ref_path?, cfg_value?, timesteps?}` |
 | POST | `/tts_form` | multipart, upload `ref_file` to clone from an arbitrary reference voice |
 | GET | `/` | minimal Web UI |
@@ -31,6 +31,12 @@ Long-text callers can send one `continuation_id` for every segment and set
 that session, removes it on the final segment, expires idle sessions after 15 minutes, and
 caps concurrent sessions at eight.
 
+Set `stream=true` together with a `continuation_id` to receive audio while generation is
+still running. `response_format=opus` returns Ogg/Opus; every other streaming format returns
+raw mono float32 PCM with `X-Sample-Rate` and `X-Sample-Format` headers. A non-streaming
+request returns a complete WAV. `prosody_prompt=true` also conditions generation on the
+registered voice's reference transcript.
+
 ```bash
 curl -F id=alice -F 'text=参考音的逐字稿' -F audio=@sample.wav http://<host>:8880/v1/voices
 curl http://<host>:8880/v1/audio/speech -H 'Content-Type: application/json' \
@@ -44,7 +50,10 @@ curl http://<host>:8880/v1/audio/speech -H 'Content-Type: application/json' \
 | `VOXCPM2_BASE` | `~/tts-eval-voxcpm2` |
 | `VOXCPM2_MODEL` | `$VOXCPM2_BASE/pretrained_models/VoxCPM2` |
 | `VOXCPM2_REF` | `$VOXCPM2_BASE/voice.wav` (default clone voice) |
+| `VOXCPM2_VOICES` | `$VOXCPM2_BASE/voices` |
 | `VOXCPM2_MODEL_MANIFEST_SHA256` | unset; deployment-pinned SHA-256 of the full model directory manifest |
+| `VOXCPM2_LOCK_TIMEOUT` | `120` seconds before a busy generation pipeline returns 503 |
+| `VOXCPM2_OPUS_BITRATE` | `96k` |
 
 ## Run
 
@@ -76,7 +85,8 @@ journalctl --user -u voxcpm2-tts -n 50 --no-pager
 Notes:
 
 - Binds `0.0.0.0:8880`.
-- Single GPU model; a `threading.Lock` serializes generation.
+- Single GPU model; a `threading.Lock` serializes generation and times out with a structured
+  503 instead of queueing forever. Streaming disconnect cleanup releases the same lock.
 - ~7G VRAM resident, so it can comfortably share a typical 24GB GPU with another model. It
   **stays** that way: `_generate` returns the allocator's cache after each generation, and
   the unit sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` so a long generation does
@@ -87,6 +97,6 @@ Notes:
   request — and is deterministic per reference, so it is built once per voice and shared
   across sessions. Content-addressed keys mean re-registered voices and identical uploads
   behave correctly. Restart the service after deploying to pick this up.
-- Upstream exposes `generate_with_prompt_cache_streaming`; serving chunked audio from it is
-  the next latency step after the prompt cache (streamed first audio instead of a full WAV
-  per chunk).
+- Streaming uses upstream `generate_with_prompt_cache_streaming`, so first audio leaves
+  before the reply is complete. The server can send raw float32 PCM or encode Ogg/Opus for
+  lower-bandwidth links; continuation caches preserve the acoustic context across chunks.

@@ -7,11 +7,13 @@ inference port of OpenMOSS
 
 ## Role in voxstudio
 
-MOSS complements rather than replaces the existing Parakeet ASR engine:
+MOSS complements rather than replaces the realtime SenseVoice/FunASR slot. Parakeet with
+Nemotron remains a CPU-compatible alternative rather than the default realtime engine:
 
 | Profile | Engine | Intended workload |
 |---|---|---|
-| Real-time ASR | parakeet.cpp | Voice input, interactive conversation, low-latency streaming |
+| Realtime ASR | SenseVoice-Small via FunASR | Voice input, interactive conversation, Mandarin/English code-switching |
+| CPU realtime alternative | parakeet.cpp with Nemotron | Dependency-light or CPU-only deployments |
 | Long-form ASR | moss-transcribe.cpp | Meetings, interviews, calls, podcasts, and subtitle generation |
 
 MOSS emits transcription, timestamps, and anonymous per-recording speaker labels in one
@@ -19,8 +21,10 @@ autoregressive stream. Its parsed JSON contains `{start, end, speaker, text}` se
 is therefore useful when the structure of a multi-speaker recording matters more than
 streaming latency.
 
-The engine is still young. Keep it behind a separate `asr_longform` profile until its
-quality and operational behavior have been evaluated on representative recordings.
+MOSS owns the adopted `asr_longform` role and stays separate from realtime ASR because its
+autoregressive, structure-first workload has different latency and resource behavior.
+Representative long-recording benchmarks remain an operational gate for each deployment;
+they are not a reason to route interactive turns through MOSS.
 
 ## Validated configuration
 
@@ -247,19 +251,19 @@ queue prevents it from accumulating unlimited waiting requests, but it does not 
 work. Put authentication, rate limits, and tenant-specific policy at the gateway before
 exposing the endpoint beyond a trusted network.
 
-## Integration plan
+## Integration status
 
 Completed in the initial integration:
 
 - shared transcription segments with `start`, `end`, `speaker`, and `text`;
 - optional `asr_longform` profile without changing the default real-time ASR;
 - OpenAI-compatible resident C-API adapter;
-- `vox transcribe --mode longform --json` in both CLI implementations.
+- `vox transcribe --mode longform --json` in the compiled TypeScript CLI.
 
-Remaining work is streaming progress, production gateway policy, and promotion after the
-benchmark below passes agreed quality thresholds.
+Remaining work is streaming progress and deployment-specific production gateway policy.
+The benchmark below remains the acceptance gate for representative long-form workloads.
 
-## Benchmark before promotion
+## Deployment benchmark
 
 Use consented, non-sensitive fixtures and retain a human-reviewed reference transcript.
 Cover:

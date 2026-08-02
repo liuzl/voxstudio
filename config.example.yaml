@@ -23,8 +23,8 @@ engines:
     health_path: /health          # the C++ voxcpm-server serves /healthz instead
 
   asr:
-    base_url: http://127.0.0.1:18086
-    model: nemotron-asr           # required for Mandarin; parakeet-tdt has no Chinese
+    base_url: http://127.0.0.1:18098
+    model: sensevoice-small       # realtime Mandarin/English slot; Nemotron is the CPU alternative
     api_key: ${VOXSTUDIO_ASR_API_KEY}
 
   # Optional long-form profile: timestamps + anonymous per-recording speakers.

@@ -6,6 +6,10 @@
 |---|---|---|---|
 | 1.2 | 2026-07-22 | `voxstudio@main` as of `bd48313` | 2026-07-11 – 2026-07-22 |
 
+> Historical snapshot: measurements, test counts, shipped capabilities, and open-work
+> statements below describe commit `bd48313` on the report date. Later repository changes
+> belong in a new report version rather than being silently folded into these results.
+>
 > This file is the report's single source of truth (Markdown). The distributable HTML is not committed; build it on demand: `bun run build:report` → `docs/technical-report.html` (inlined styles and pre-rendered figures, offline self-contained). See Appendix B for version history.
 
 ## Abstract
@@ -256,7 +260,7 @@ Speaker mode (`--speaker-duplex`, the macOS AVAudioEngine Voice Processing helpe
 - TypeScript workspace: **325 tests / 34 files** (all green on the report date; 236/26 at v1.1), covering the turn kernel, VAD assembly, the conversation loop (simulated end-to-end, tools and etiquette included), the gateway protocol (simulated duplex over a real WebSocket; reconnect/idempotency/expiry grace; facade routing and credential injection; multi-engine registry routing; the OpenAI dialect; guardrails), the capture library (atomicity, mutation races, quota eviction with the promote/evict race), the Silero shared backend (cross-stream state isolation; churn cost), and the web client (a mock-socket reconnect state machine, plus mathematical invariants of the streaming resampler and playback timeline).
 - Live measurement gates as named programs: **nine** `measure:*` scripts (aec, tools, openai, mcp, agent-voice, etiquette, guardrails, library, vad) — each feature's acceptance run is re-executable against the live stack, not a one-off. The vad gate quantifies the default detector's advantage through the product segmentation path: identical sensitivity and confirm latency to the energy fallback, but zero false confirms over deterministic non-speech negatives where energy confirms "speech" at 3–4/min.
 - Engine side: the Kokoro service has 8 pytest cases (including two deadlock regressions, §9.1); VoxCPM2's helper modules (continuation store, fingerprints, prompt-cache keys) are unit-tested; its lockfile resolves only on x86_64-linux, so store assertions execute in the GPU host's real environment.
-- Debug infrastructure: `tools/live-replay.ts` (headless end-to-end replay against real engines — the localization tool of §9.1) and the gateway's operational session-event log (milestones and errors only; never transcript text).
+- Debug infrastructure: `apps/realtime-gateway/tools/live-replay.ts` (headless end-to-end replay against real engines — the localization tool of §9.1) and the gateway's operational session-event log (milestones and errors only; never transcript text).
 
 ## 9 Failure Case Studies
 

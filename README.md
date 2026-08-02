@@ -17,7 +17,7 @@ flowchart LR
   end
   GW["realtime-gateway<br/>WS /v1/realtime (native + OpenAI dialect)<br/>REST facade · credential hiding · engine routing"]
   CORE["core orchestration (packages/)<br/>conversation loop · duplex session<br/>chunking · voice profiles"]
-  AGENT["agent executor<br/>lifecycle + sandbox policy contracts landed<br/>isolated runner + gateway integration planned"]
+  AGENT["autonomous agent executor<br/>lifecycle + sandbox policy contracts landed<br/>isolated runner + gateway integration planned"]
   subgraph engines["engines"]
     ASR["ASR<br/>SenseVoice/FunASR — realtime slot<br/>parakeet.cpp · moss-transcribe (longform)"]
     TTS["TTS<br/>VoxCPM2 — quality: clone + design<br/>kokoro — fast lane · VoxCPM.cpp — fallback"]
@@ -46,7 +46,7 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | `engines/funasr/` | Realtime-slot ASR server (SenseVoice-Small / Paraformer, OpenAI-compatible) |
 | `engines/kokoro/` | Local CPU TTS server — the conversation fast lane (fixed voice bank, ~0.2s first audio) |
 | `packages/` | Shared TypeScript contracts, clients, configuration, text, audio, and orchestration |
-| `packages/agent-executor/` | Vox-owned agent boundary, fake executor, tool runner, and invocation ledger; gateway integration is still planned |
+| `packages/agent-executor/` | Vox-owned autonomous-executor boundary, fake executor, tool runner, and invocation ledger; isolated production execution and gateway integration are still planned |
 | `packages/duplex-session/` | Platform-neutral realtime turn state, cancellation, and events |
 | `packages/conversation/` | The shared conversation loop (VAD turns, barge-in policy, speculative turn-taking, streaming replies, typed tools with a spoken confirmation flow) behind `vox listen` and the gateway |
 | `packages/mcp/` | The MCP client bridge: configured servers' tools join the conversation with annotation-derived effects |
@@ -74,7 +74,7 @@ cp config.example.yaml voxstudio.yaml    # point it at your engines
 bun ci
 bun run build:cli
 
-./apps/cli/dist/vox health               # probe all three engines
+./apps/cli/dist/vox health               # probe every configured engine instance
 
 ./apps/cli/dist/vox say -f article.txt --voice alice -o out.wav
 ./apps/cli/dist/vox transcribe recording.wav
@@ -181,11 +181,14 @@ engines. Long-text synthesis streams, and named voices support file input, micro
 recording, automatic ASR, and transcript editing. Native CI builds and executes the CLI on
 macOS arm64, Linux x64, and Windows x64.
 
-The agent executor boundary, lifecycle state model, invocation ledger, and
-sandbox/tool-broker policy contracts and validator have landed. A real isolated
-runner, the production pi dependency, and realtime gateway/session integration
-have not; the dashed agent node in the architecture diagram is planned work,
-not a shipped execution path. See
+There are two distinct Agent layers. The saved voice-Agent configuration runtime is
+shipped: the registry stores drafts and immutable published versions, and realtime
+sessions resolve them into the existing conversation loop. The separate autonomous
+executor boundary, lifecycle state model, invocation ledger, and sandbox/tool-broker
+policy contracts and validator have also landed, but a real isolated runner, the
+production pi dependency, and autonomous-executor gateway/session integration have
+not. The dashed agent node in the architecture diagram represents that planned
+autonomous execution path, not the shipped saved-Agent runtime. See
 [the voice-agent roadmap](./docs/voice-agent-roadmap.md),
 [agent lifecycle](./docs/agent-lifecycle.md), and
 [sandbox boundary](./docs/agent-execution-sandbox.md).
