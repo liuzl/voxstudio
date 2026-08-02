@@ -91,8 +91,10 @@ below rather than relitigated per feature.
    registry-backed list, template creation, Configuration/Speech section routes,
    advanced runtime controls and validation, draft/publish/version lifecycle,
    duplicate/export/audit actions, and exact draft/published preview are
-   delivered. Deployment, Conversations, Statistics, and the remaining preview
-   controls remain.
+   delivered. Deployment now exposes the immutable published version, runtime
+   and authentication status, demo pin, and native/OpenAI-compatible connection
+   examples. Conversations, Statistics, telephony attachment, and the remaining
+   preview controls remain.
 2. **对话 Conversation** — live duplex session: mic capture with negotiated AEC (browser
    constraints verified per the duplex doc), agent audio playback, streaming captions,
    visible turn/barge-in/reopen state, per-turn latency readout (the `turn.timing`

@@ -1,17 +1,20 @@
 import { auditDesignProfile, probeEngine, AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
-import { engine } from "@voxstudio/config";
+import { AgentRegistry, type AgentSpec } from "@voxstudio/agents";
+import { engine, enginesOfKind } from "@voxstudio/config";
 import { createBuiltinTools, createKeytermProvider, createSessionVad, createStudioReferents, createStudioTools, runConversation, type ConversationControls, type ConversationPlayer, type ConversationTool } from "@voxstudio/conversation";
-import type { VoxConfig } from "@voxstudio/contracts";
+import type { EngineKind, ResolvedEngineConfig, VoxConfig } from "@voxstudio/contracts";
 import { connectMcpServers, type McpToolSource } from "@voxstudio/mcp";
 import {
   DuplexSession,
   type SpeechProbabilityModel,
 } from "@voxstudio/duplex-session";
 import { ffmpegPcmDecoder, capturePcm, FfplaySink, loadSileroVadModel, persistPronunciationsFile, resolveConfigPath, startMacosAudioHost, writeBytes, type MacosAudioHost, type PcmCapture, type PcmSink } from "@voxstudio/platform-bun";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CliIo } from "../io";
 
 export const listenUsage = `usage: vox listen [--device NAME] [--language LANG] [--system TEXT] [--max-tokens N]
+                 [--agent ID] [--agents DIR]
                  [--voice VOICE] [--barge-in | --speaker-duplex] [--vad energy|silero]
                  [--turn-taking conservative|speculative] [--reopen-ms N]
                  [--threshold N] [--silence-ms N] [--min-speech-ms N] [--timing]
@@ -40,6 +43,8 @@ interruptible like any reply; --nudge-after speaks one short follow-up when the 
 silent that many seconds after an exchange (docs/conversation-etiquette.md).`;
 
 interface ListenOptions {
+  agent?: string;
+  agentsDir: string;
   device?: string;
   language: string;
   system?: string;
@@ -59,6 +64,7 @@ interface ListenOptions {
   timing: boolean;
   saveUtterances?: string;
   studioTools: boolean;
+  explicit: Set<string>;
 }
 
 export interface ListenPlayer extends PcmSink {
@@ -99,11 +105,15 @@ function parse(args: string[]): ListenOptions {
     language: "auto", bargeIn: false, speakerDuplex: false, vad: "silero", vadExplicit: false,
     silenceMs: 650, minSpeechMs: 250,
     turnTaking: "speculative", reopenMs: 7_000, timing: false, studioTools: false,
+    agentsDir: process.env.VOX_GATEWAY_AGENTS ?? join(homedir(), ".config", "voxstudio", "agents"),
+    explicit: new Set<string>(),
   };
   let silenceSet = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] as string;
-    if (arg === "--device") options.device = required(args, ++index, arg);
+    if (arg === "--agent") options.agent = required(args, ++index, arg);
+    else if (arg === "--agents") options.agentsDir = required(args, ++index, arg);
+    else if (arg === "--device") options.device = required(args, ++index, arg);
     else if (arg === "--language") options.language = required(args, ++index, arg);
     else if (arg === "--system") options.system = required(args, ++index, arg);
     else if (arg === "--voice") options.voice = required(args, ++index, arg);
@@ -134,6 +144,7 @@ function parse(args: string[]): ListenOptions {
     else if (arg === "--silence-ms") { options.silenceMs = numberOption(args, ++index, arg); silenceSet = true; }
     else if (arg === "--min-speech-ms") options.minSpeechMs = numberOption(args, ++index, arg);
     else throw new TypeError(`listen: unknown option ${arg}`);
+    options.explicit.add(arg);
   }
   // The speculative policy exists to stop paying the long silence up front; left at the
   // conservative 650ms it would speculate about nothing.
@@ -151,6 +162,41 @@ export async function runListen(
   explicitConfigPath?: string,
 ): Promise<number> {
   const options = parse(args);
+  let agentSpec: AgentSpec | undefined;
+  if (options.agent !== undefined) {
+    if (!options.agentsDir) throw new TypeError("listen: --agent requires an Agent registry");
+    const resolved = await new AgentRegistry(options.agentsDir).resolve("owner", options.agent, { type: "published" });
+    agentSpec = resolved.spec;
+    if (!options.explicit.has("--language") && agentSpec.language !== undefined) options.language = agentSpec.language;
+    if (!options.explicit.has("--system") && agentSpec.instructions !== undefined) options.system = agentSpec.instructions;
+    if (!options.explicit.has("--voice") && agentSpec.voice !== undefined) options.voice = agentSpec.voice;
+    if (!options.explicit.has("--welcome") && agentSpec.welcome !== undefined) options.welcome = agentSpec.welcome;
+    if (!options.explicit.has("--nudge-after") && agentSpec.nudgeAfterSeconds !== undefined) options.nudgeAfterSeconds = agentSpec.nudgeAfterSeconds;
+    if (!options.explicit.has("--turn-taking") && agentSpec.turnTaking !== undefined) {
+      options.turnTaking = agentSpec.turnTaking;
+      if (!options.explicit.has("--silence-ms") && agentSpec.silenceMs === undefined) {
+        options.silenceMs = agentSpec.turnTaking === "speculative" ? 150 : 650;
+      }
+    }
+    if (!options.explicit.has("--reopen-ms") && agentSpec.reopenMs !== undefined) options.reopenMs = agentSpec.reopenMs;
+    if (!options.explicit.has("--vad") && agentSpec.vad !== undefined) {
+      options.vad = agentSpec.vad;
+      options.vadExplicit = true;
+    }
+    if (!options.explicit.has("--threshold") && agentSpec.threshold !== undefined) options.threshold = agentSpec.threshold;
+    if (!options.explicit.has("--silence-ms") && agentSpec.silenceMs !== undefined) options.silenceMs = agentSpec.silenceMs;
+    if (!options.explicit.has("--min-speech-ms") && agentSpec.minSpeechMs !== undefined) options.minSpeechMs = agentSpec.minSpeechMs;
+    if (options.explicit.has("--studio-tools") && agentSpec.studioTools !== true) {
+      throw new TypeError(`listen: agent ${options.agent} does not allow Studio tools`);
+    }
+    options.studioTools = agentSpec.studioTools === true;
+  }
+  const selectedEngine = (kind: EngineKind, requested: string | undefined): ResolvedEngineConfig => {
+    if (requested === undefined) return engine(config, kind);
+    const found = enginesOfKind(config, kind).find(([name]) => name === requested);
+    if (!found) throw new TypeError(`listen: no ${kind} engine named ${requested}`);
+    return found[1];
+  };
   let endAfterTurn = false;
   let controls: ConversationControls | undefined;
   const session = new DuplexSession({
@@ -205,9 +251,15 @@ export async function runListen(
 
   process.once("SIGINT", stop);
   session.start();
+  const lifetimeTimer = agentSpec?.maxSessionSeconds === undefined
+    ? undefined
+    : setTimeout(() => {
+      io.err(`listen: agent session reached its ${agentSpec.maxSessionSeconds}s ceiling`);
+      stop();
+    }, agentSpec.maxSessionSeconds * 1_000);
   io.err(options.speakerDuplex ? "listening with macOS speaker duplex; press Ctrl-C to stop" : "listening with protected speaker mode; press Ctrl-C to stop");
   try {
-    const tts = new TtsClient(engine(config, "tts"), fetch, ffmpegPcmDecoder());
+    const tts = new TtsClient(selectedEngine("tts", agentSpec?.ttsEngine), fetch, ffmpegPcmDecoder());
     const conversationOptions = {
       language: options.language,
       ...(options.system === undefined ? {} : { system: options.system }),
@@ -224,7 +276,8 @@ export async function runListen(
       // A run-local copy: remember_pronunciation mutates it, config stays shared. The map
       // must exist whenever the studio tools do.
       ...(options.studioTools || Object.keys(config.pronunciations).length > 0
-        ? { pronunciations: { ...config.pronunciations } } : {}),
+          || Object.keys(agentSpec?.pronunciations ?? {}).length > 0
+        ? { pronunciations: { ...config.pronunciations, ...agentSpec?.pronunciations } } : {}),
     } as Parameters<typeof runConversation>[1];
     conversationOptions.onControls = handle => { controls = handle; };
     // Conversation-referent bookkeeping for the studio tools; in-memory only.
@@ -282,15 +335,22 @@ export async function runListen(
     }
     // MCP tools join through the same registration (docs/mcp-tools.md); a dead server
     // is logged and skipped, and the built-in names stay reserved.
-    mcpSource = config.mcpServers.length > 0
-      ? await connectMcpServers(config.mcpServers, {
+    const mcpServers = agentSpec === undefined
+      ? config.mcpServers
+      : (agentSpec.mcpServers ?? []).map(name => {
+        const found = config.mcpServers.find(server => server.name === name);
+        if (!found) throw new TypeError(`listen: agent ${options.agent} names unknown MCP server ${name}`);
+        return found;
+      });
+    mcpSource = mcpServers.length > 0
+      ? await connectMcpServers(mcpServers, {
         log: line => io.err(`listen: ${line}`),
         reservedNames: tools.map(tool => tool.name),
       })
       : undefined;
     conversationOptions.tools = [...tools, ...(mcpSource?.tools() ?? [])];
     conversationOptions.keyterms = createKeytermProvider({
-      configTerms: config.keyterms,
+      configTerms: [...config.keyterms, ...(agentSpec?.keyterms ?? [])],
       listVoices: () => tts.listVoices(),
     });
     await runConversation({
@@ -298,8 +358,8 @@ export async function runListen(
       vad,
       frames: capture.frames,
       createPlayer: (): ConversationPlayer => speakerHost?.player ?? platform.createPlayer(),
-      asr: new AsrClient(engine(config, "asr"), fetch),
-      llm: new LlmClient(engine(config, "llm"), fetch),
+      asr: new AsrClient(selectedEngine("asr", agentSpec?.asrEngine), fetch),
+      llm: new LlmClient(selectedEngine("llm", agentSpec?.llmEngine), fetch),
       tts,
     }, conversationOptions, {
       onTranscript: text => io.out(`transcript: ${text}`),
@@ -335,6 +395,7 @@ export async function runListen(
     });
     return 0;
   } finally {
+    if (lifetimeTimer !== undefined) clearTimeout(lifetimeTimer);
     process.removeListener("SIGINT", stop);
     stop();
     await mcpSource?.close();

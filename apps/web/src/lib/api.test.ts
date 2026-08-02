@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createAgent, deleteAgent, listAgents, publishAgent, transcribe, updateAgent } from "./api";
+import { createAgent, deleteAgent, getDeploymentInfo, listAgents, publishAgent, transcribe, updateAgent } from "./api";
 
 const realFetch = globalThis.fetch;
 
@@ -38,6 +38,23 @@ describe("api transcribe", () => {
 });
 
 describe("Agent API", () => {
+  test("reads the public deployment mode and immutable demo pin", async () => {
+    stubFetch(input => {
+      expect(String(input)).toBe("/healthz");
+      return Response.json({
+        auth: "self",
+        deployment: { demo: true, demoAgent: { id: "support", version: 3 }, maxSessions: 4, maxSessionSeconds: 600 },
+      });
+    });
+    await expect(getDeploymentInfo()).resolves.toEqual({
+      auth: "self",
+      demo: true,
+      demoAgent: { id: "support", version: 3 },
+      maxSessions: 4,
+      maxSessionSeconds: 600,
+    });
+  });
+
   test("carries revisions through create, update, publish, and delete", async () => {
     const calls: Array<{ path: string; method: string; body?: unknown }> = [];
     stubFetch((input, init) => {

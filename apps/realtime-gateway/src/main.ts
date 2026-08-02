@@ -1,4 +1,5 @@
 import { ffmpegPcmDecoder, loadConfig, loadSileroVadModel, persistPronunciationsFile, resolveConfigPath } from "@voxstudio/platform-bun";
+import { AgentRegistry } from "@voxstudio/agents";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseByteSize } from "./library";
@@ -11,8 +12,9 @@ Realtime gateway for the Web Studio: the duplex session protocol over WebSocket 
 reaching it from a browser is a deployment decision (a tunnel in front, Access at the
 door). TOKEN, when set, is required as a Bearer header or ?token= query parameter.
 Environment: VOX_GATEWAY_HOST, VOX_GATEWAY_PORT, VOX_GATEWAY_TOKEN. Demo guardrails
-(docs/public-demo.md): --max-sessions N, --max-session-seconds N, --demo (or
-VOX_GATEWAY_MAX_SESSIONS, VOX_GATEWAY_MAX_SESSION_SECONDS, VOX_GATEWAY_DEMO=1).
+(docs/public-demo.md): --max-sessions N, --max-session-seconds N, --demo, and
+--demo-agent ID (or VOX_GATEWAY_MAX_SESSIONS, VOX_GATEWAY_MAX_SESSION_SECONDS,
+VOX_GATEWAY_DEMO=1, VOX_GATEWAY_DEMO_AGENT).
 --library DIR (or VOX_GATEWAY_LIBRARY) retains every finalized utterance — WAV +
 transcript in DIR, served at /v1/library for the Web Studio 素材库 panel. Off by
 default; demo mode keeps it off regardless. --library-max-bytes SIZE (or
@@ -72,6 +74,7 @@ async function main(args: string[]): Promise<number> {
   let maxSessions = process.env.VOX_GATEWAY_MAX_SESSIONS;
   let maxSessionSeconds = process.env.VOX_GATEWAY_MAX_SESSION_SECONDS;
   let demoMode = process.env.VOX_GATEWAY_DEMO === "1";
+  let demoAgentId = process.env.VOX_GATEWAY_DEMO_AGENT;
   let libraryDir = process.env.VOX_GATEWAY_LIBRARY;
   let libraryMaxBytes = process.env.VOX_GATEWAY_LIBRARY_MAX_BYTES;
   let accountsDir = process.env.VOX_GATEWAY_ACCOUNTS;
@@ -98,6 +101,7 @@ async function main(args: string[]): Promise<number> {
     else if (arg === "--max-sessions") maxSessions = value();
     else if (arg === "--max-session-seconds") maxSessionSeconds = value();
     else if (arg === "--demo") demoMode = true;
+    else if (arg === "--demo-agent") demoAgentId = value();
     else if (arg === "--library") libraryDir = value();
     else if (arg === "--library-max-bytes") libraryMaxBytes = value();
     else if (arg === "--accounts") accountsDir = value();
@@ -157,6 +161,21 @@ async function main(args: string[]): Promise<number> {
   if (quotaCount !== undefined && !hasAccounts) {
     throw new TypeError("vox-gateway: --quota requires --accounts");
   }
+  if (demoAgentId !== undefined && demoAgentId !== "" && !demoMode) {
+    throw new TypeError("vox-gateway: --demo-agent requires --demo");
+  }
+  if (demoAgentId !== undefined && demoAgentId !== "" && agentsDir === "") {
+    throw new TypeError("vox-gateway: --demo-agent requires an Agent registry");
+  }
+  if (demoAgentId !== undefined && demoAgentId !== "" && hasAccounts) {
+    throw new TypeError("vox-gateway: --demo-agent cannot be combined with --accounts");
+  }
+  let demoAgent: { id: string; version: number } | undefined;
+  if (demoAgentId !== undefined && demoAgentId !== "") {
+    const resolved = await new AgentRegistry(agentsDir).resolve("owner", demoAgentId, { type: "published" });
+    if (!("version" in resolved)) throw new TypeError(`vox-gateway: agent ${demoAgentId} is not published`);
+    demoAgent = { id: demoAgentId, version: resolved.version };
+  }
   const decoder = ffmpegPcmDecoder();
   const gateway = startGateway({
     config,
@@ -167,6 +186,7 @@ async function main(args: string[]): Promise<number> {
     ...(cappedSessions === undefined ? {} : { maxSessions: cappedSessions }),
     ...(cappedSeconds === undefined ? {} : { maxSessionSeconds: cappedSeconds }),
     ...(demoMode ? { demoMode } : {}),
+    ...(demoAgent === undefined ? {} : { demoAgent }),
     ...(hasLibrary ? { libraryDir: libraryDir as string } : {}),
     ...(quotaBytes === undefined ? {} : { libraryMaxBytes: quotaBytes }),
     ...(hasAccounts ? {

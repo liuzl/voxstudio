@@ -13,6 +13,10 @@ describe("Agent Builder routes", () => {
     const path = agentPath("support.zh", "speech");
     expect(path).toBe("/agents/support.zh/speech");
     expect(agentRouteFromPath(path)).toEqual({ id: "support.zh", section: "speech" });
+    expect(agentRouteFromPath(agentPath("support.zh", "deployment"))).toEqual({
+      id: "support.zh",
+      section: "deployment",
+    });
   });
 
   test("refuses unknown sections and malformed ids", () => {

@@ -10,6 +10,7 @@
     "build": "bun build --compile ./src/main.ts --outfile ./dist/vox"
   },
   "dependencies": {
+    "@voxstudio/agents": "workspace:*",
     "@voxstudio/audio": "workspace:*",
     "@voxstudio/clients": "workspace:*",
     "@voxstudio/config": "workspace:*",

@@ -114,7 +114,7 @@ export interface AgentRoute {
 }
 
 export function agentRouteFromPath(pathname: string): AgentRoute | undefined {
-  const match = /^\/agents\/([^/]+)(?:\/(configuration|speech))?\/?$/.exec(pathname);
+  const match = /^\/agents\/([^/]+)(?:\/(configuration|speech|deployment))?\/?$/.exec(pathname);
   if (!match?.[1]) return undefined;
   try {
     return {

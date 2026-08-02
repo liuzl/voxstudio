@@ -1,7 +1,7 @@
 # Agents: the session options, reified
 
-Status: Accepted; runtime and Configuration/Speech Web Builder slices delivered
-2026-08-02.
+Status: Accepted; runtime, CLI, dialect/demo, and Configuration/Speech/Deployment Web Builder slices delivered
+2026-08-03.
 The competitive gap the console walkthroughs made concrete
 ([competitive-voice-agents.md](./competitive-voice-agents.md)): xAI's
 product object is the *agent* — a named, saved, publishable bundle with its own
@@ -32,7 +32,9 @@ Its durable section routes now expose engine routing, MCP allowlists,
 pronunciations, ASR keyterms, and turn-taking controls with runtime-dependency
 validation. The Web lifecycle now includes immutable version history,
 restore-as-draft, duplicate/export/audit/delete actions, and exact
-published-version preview. CLI Agent subcommands, Deployment, conversation
+published-version preview. The CLI manages and runs published Agents, the OpenAI
+dialect accepts `?agent=`, demo deployments pin an immutable version, and the
+Deployment section provides native/compatible integration examples. Conversation
 history, statistics, and the remaining preview controls described in
 [agent-builder-ui.md](./agent-builder-ui.md) remain next.
 
@@ -133,28 +135,28 @@ sharing, and knowledge attachments (RAG hangs off `AgentSpec` later).
 
 ## Phases and gates
 
-1. **The object, the registry, the native wire — runtime delivered; CLI
-   pending.** `AgentRecord`/`AgentSpec`
+1. **The object, the registry, the native wire, and CLI — delivered.** `AgentRecord`/`AgentSpec`
    schema + resolution (with the guardrail tightening rule), the owner-scoped
    YAML registry with immutable publish snapshots, and
-   `session.start { agent }` on the gateway are implemented. The remaining
-   surface in this phase is
-   `vox agents {list,create,show,publish,audit,rm}`. Unit tests: precedence
+   `session.start { agent }` on the gateway are implemented. The CLI surface is
+   `vox agents {list,create,show,publish,audit,rm}`, together with
+   `vox listen --agent ID`. Unit tests: precedence
    (config < agent < explicit), guardrails refusing to loosen, hash
    stability across key order, immutable-version resolution, same-id isolation
    across owners, conditional-write conflicts, concurrent publish serialization,
    and unknown/cross-owner rejection. **Gate**: a live session
    started by agent id comes up with the published version's voice, welcome, and
    tool policy — asserted through the existing event stream, no new machinery.
-2. **The dialect and the demo — not started.** `?agent=` on the OpenAI adapter
+2. **The dialect and the demo — delivered 2026-08-03.** `?agent=` on the OpenAI adapter
    (gate: the official SDK connects to a named agent with only a URL change);
-   `--demo-agent` pinning to an immutable published version, folded into
-   `measure:guardrails`.
-3. **Surfaces — first Web slice delivered; remainder in progress.** Web: the
+   `--demo-agent` resolves once at startup and pins an immutable published version;
+   it requires demo mode and is deliberately self-hosted until the Portal owns an
+   operator Agent namespace.
+3. **Surfaces — Builder and Deployment delivered; remainder in progress.** Web: the
    Agent Builder delivery in [agent-builder-ui.md](./agent-builder-ui.md),
    including real list and detail routes, create-from-template, edit,
    draft/publish, and Try it live; the conversation trace viewer ties call
-   history to the agent that served it. CLI listen: `--agent ID`.
+   history to the agent that served it. Conversation history remains pending.
 4. **Later — conditional.** Organizations and multi-principal sharing;
    knowledge attachments per agent; agent switching mid-call as a session tool,
    if real usage asks for it.

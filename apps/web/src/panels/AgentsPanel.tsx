@@ -18,6 +18,7 @@ import {
   MoreHorizontal,
   Plus,
   RotateCw,
+  Rocket,
   Search,
   Send,
   ServerCog,
@@ -39,6 +40,7 @@ import {
   createAgent,
   deleteAgent,
   getAgent,
+  getDeploymentInfo,
   listAgents,
   listAgentVersions,
   listRuntimeCatalog,
@@ -50,6 +52,7 @@ import {
   type AgentRecord,
   type AgentSpec,
   type EngineEntry,
+  type DeploymentInfo,
   type VoiceEntry,
 } from "../lib/api";
 import type { ConnectionState } from "../lib/client";
@@ -218,7 +221,7 @@ function AgentAvatar({ id, size = "size-7" }: { id: string; size?: string }) {
   return <span aria-hidden className={`${size} shrink-0 rounded-full border border-black/10 shadow-[inset_0_0_8px_rgba(255,255,255,0.22)] dark:border-white/15`} style={avatarStyle(id)} />;
 }
 
-export type AgentSection = "configuration" | "speech";
+export type AgentSection = "configuration" | "speech" | "deployment";
 
 interface AgentsPanelProps {
   agentId?: string | undefined;
@@ -694,6 +697,94 @@ export function agentPreviewOptions(record: AgentRecord, source: AgentPreviewSou
     : { agent: record.id, agentSource: "published" as const, agentVersion: source.version };
 }
 
+export interface AgentDeploymentSnippets {
+  cli: string;
+  native: string;
+  openai: string;
+  python: string;
+}
+
+export function agentDeploymentSnippets(agentId: string, origin: string): AgentDeploymentSnippets {
+  const base = origin.replace(/\/$/, "");
+  const websocket = base.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
+  const encoded = encodeURIComponent(agentId);
+  return {
+    cli: `vox listen --agent ${agentId}`,
+    native: `const ws = new WebSocket(${JSON.stringify(`${websocket}/v1/realtime`)});\n\nws.addEventListener("open", () => {\n  ws.send(JSON.stringify({\n    v: 1,\n    type: "session.start",\n    idempotencyKey: crypto.randomUUID(),\n    options: { agent: ${JSON.stringify(agentId)} },\n  }));\n});`,
+    openai: `import OpenAI from "openai";\nimport { OpenAIRealtimeWebSocket } from "openai/realtime/websocket";\n\nconst api = new OpenAI({\n  apiKey: process.env.VOX_API_KEY ?? "local",\n  baseURL: ${JSON.stringify(`${base}/v1`)},\n});\n\nconst realtime = new OpenAIRealtimeWebSocket({\n  model: "voxstudio-realtime",\n  onURL(url) {\n    url.searchParams.set("agent", ${JSON.stringify(agentId)});\n    if (url.hostname === "127.0.0.1" || url.hostname === "localhost") url.protocol = "ws:";\n  },\n}, api);`,
+    python: `import asyncio, json, websockets\n\nasync def main():\n    uri = ${JSON.stringify(`${websocket}/v1/realtime?model=voxstudio-realtime&agent=${encoded}`)}\n    headers = {"Authorization": "Bearer YOUR_API_KEY"}\n    async with websockets.connect(uri, additional_headers=headers) as ws:\n        print(json.loads(await ws.recv()))  # session.created\n\nasyncio.run(main())`,
+  };
+}
+
+function DeploymentCode({ title, code, onCopy }: { title: string; code: string; onCopy(): void }) {
+  const t = useT();
+  return (
+    <div className="overflow-hidden rounded-xl border border-edge bg-surface">
+      <div className="flex items-center justify-between border-b border-edge-faint px-4 py-2.5">
+        <span className="text-[10px] font-semibold text-fg-secondary">{title}</span>
+        <button onClick={onCopy} className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-[9px] text-fg-muted hover:bg-fill-hover hover:text-fg"><Copy className="size-3" />{t("复制代码")}</button>
+      </div>
+      <pre className="overflow-x-auto p-4 text-[10px] leading-5 text-fg-secondary"><code>{code}</code></pre>
+    </div>
+  );
+}
+
+function AgentDeployment({ record }: { record: AgentRecord }) {
+  const t = useT();
+  const toast = useStudio(state => state.toast);
+  const [info, setInfo] = useState<DeploymentInfo>();
+  const [failure, setFailure] = useState("");
+  useEffect(() => {
+    let active = true;
+    void getDeploymentInfo().then(value => { if (active) setInfo(value); }).catch(error => {
+      if (active) setFailure(error instanceof Error ? error.message : String(error));
+    });
+    return () => { active = false; };
+  }, []);
+  const snippets = useMemo(() => agentDeploymentSnippets(record.id, window.location.origin), [record.id]);
+  const copy = (code: string) => {
+    void navigator.clipboard?.writeText(code);
+    toast("info", t("已复制代码"));
+  };
+  const demoLabel = info === undefined
+    ? "—"
+    : !info.demo
+      ? t("未启用演示模式")
+    : info.demoAgent?.id === record.id && info.demoAgent.version === record.published?.version
+      ? t("已固定到此版本")
+      : info.demoAgent
+        ? t("演示模式固定到 {id} v{version}", { id: info.demoAgent.id, version: info.demoAgent.version })
+        : t("未启用演示模式");
+
+  if (!record.published) {
+    return <div className="rounded-2xl border border-dashed border-edge bg-canvas px-6 py-12 text-center"><Rocket className="mx-auto size-6 text-fg-faint" /><h2 className="mt-4 text-[13px] font-semibold">{t("请先发布助手")}</h2><p className="mt-2 text-[11px] text-fg-muted">{t("部署接口只解析不可变的已发布版本。")}</p></div>;
+  }
+
+  return (
+    <div className="space-y-5">
+      <BuilderSection icon={Rocket} title={t("连接已发布的助手")} description={t("复制可直接运行的连接示例；草稿不会通过部署接口提供。") }>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            [t("发布版本"), `v${record.published.version} · ${record.published.hash.slice(0, 10)}`],
+            [t("公开地址"), window.location.origin],
+            [t("认证模式"), info === undefined ? "—" : info.auth === "accounts" ? t("账户与 API 密钥") : t("自托管")],
+            [t("演示固定"), failure || demoLabel],
+          ].map(([label, value]) => <div key={label} className="rounded-xl border border-edge-faint bg-surface px-4 py-3"><div className="text-[9px] font-medium text-fg-faint">{label}</div><div className="mt-1.5 break-all font-mono text-[10px] text-fg-secondary">{value}</div></div>)}
+        </div>
+        <p className="text-[10px] leading-5 text-fg-muted">{t("机器客户端在账户模式下需要 Bearer API 密钥；浏览器还必须满足同源策略。")}</p>
+      </BuilderSection>
+      <BuilderSection icon={ServerCog} title={t("原生 CLI")} description="VoxStudio CLI">
+        <DeploymentCode title={t("原生 CLI")} code={snippets.cli} onCopy={() => copy(snippets.cli)} />
+        <DeploymentCode title={t("原生 WebSocket")} code={snippets.native} onCopy={() => copy(snippets.native)} />
+      </BuilderSection>
+      <BuilderSection icon={Bot} title={t("OpenAI Realtime SDK")} description="OpenAI-compatible WebSocket">
+        <DeploymentCode title="TypeScript" code={snippets.openai} onCopy={() => copy(snippets.openai)} />
+        <DeploymentCode title={t("Python WebSocket")} code={snippets.python} onCopy={() => copy(snippets.python)} />
+      </BuilderSection>
+    </div>
+  );
+}
+
 function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose, onDirtyChange }: {
   agentId: string;
   section: AgentSection;
@@ -961,9 +1052,9 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
           </div>
         </div>
         <nav className="mx-auto flex max-w-[1440px] gap-6 overflow-x-auto px-4 sm:px-7 lg:px-10" aria-label={t("助手")}>
-          {(["configuration", "speech"] as const).map(item => (
+          {(["configuration", "speech", "deployment"] as const).map(item => (
             <button key={item} onClick={() => onSectionChange(item)} aria-current={section === item ? "page" : undefined} className={`relative h-10 shrink-0 px-1 text-[11px] font-medium transition ${section === item ? "text-fg" : "text-fg-muted hover:text-fg"}`}>
-              {item === "configuration" ? t("配置") : t("语音设置")}
+              {item === "configuration" ? t("配置") : item === "speech" ? t("语音设置") : t("部署")}
               {section === item ? <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-ink" /> : null}
             </button>
           ))}
@@ -1012,7 +1103,7 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
                 <Field label={t("最长会话（秒）")} hint={t("部署上限仍然生效")}><input type="number" min="1" value={draft.maxSessionSeconds} onChange={event => setDraft({ ...draft, maxSessionSeconds: event.target.value })} placeholder="—" className="builder-input" /></Field>
               </BuilderSection>
             </>
-          ) : (
+          ) : section === "speech" ? (
             <>
               <BuilderSection icon={Volume2} title={t("语音与会话")} description={t("选择输出音色并调整实时对话节奏。")}>
                 <div className="grid gap-4 sm:grid-cols-2"><Field label={t("音色")}><VoiceSelect draft={draft} voices={voices} onChange={next => setDraft({ ...draft, ...next })} /></Field><Field label={t("语言")}><select value={draft.language} onChange={event => setDraft({ ...draft, language: event.target.value })} className="builder-input"><option value="auto">{t("自动")}</option><option value="zh">中文</option><option value="en">English</option><option value="ja">日本語</option><option value="ko">한국어</option></select></Field></div>
@@ -1038,7 +1129,7 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
                 </div>
               </details>
             </>
-          )}
+          ) : <AgentDeployment record={record} />}
         </div>
 
       </div>

@@ -102,6 +102,8 @@ export interface GatewayServerOptions {
   maxSessionSeconds?: number;
   /** Registry writes 403 and MCP servers stay unconnected, regardless of config. */
   demoMode?: boolean;
+  /** Published Agent version fixed by the operator for this demo deployment. */
+  demoAgent?: { id: string; version: number };
   /**
    * Writes session-added pronunciations to the host's config file. Injected by the
    * entrypoint (which knows the resolved path and owns filesystem concerns); absent,
@@ -160,6 +162,9 @@ interface SocketData {
   openai?: OpenAiRealtimeConnection | undefined;
   /** The ?model= the OpenAI-dialect client asked for, captured at upgrade. */
   openaiModel?: string;
+  /** Published Agent defaults resolved before the OpenAI socket is accepted. */
+  openaiStart?: SessionStartOptions;
+  openaiAgentSpec?: AgentSpec;
 }
 
 /** Engine endpoints the facade forwards, keyed by public path. The browser sees only these. */
@@ -234,6 +239,15 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   // 2026-07-26). Fail closed at startup rather than resolve one of them at runtime.
   if (options.accounts !== undefined && options.authResolver !== undefined) {
     throw new TypeError("accounts and authResolver are mutually exclusive: a custom resolver would bypass hosted authentication");
+  }
+  if (options.demoAgent !== undefined && options.demoMode !== true) {
+    throw new TypeError("demoAgent requires demoMode");
+  }
+  if (options.demoAgent !== undefined && options.agentsDir === undefined) {
+    throw new TypeError("demoAgent requires an Agent registry");
+  }
+  if (options.demoAgent !== undefined && options.accounts !== undefined) {
+    throw new TypeError("demoAgent and accounts cannot be combined until the Portal has an operator-owned Agent namespace");
   }
   // Fail at startup, not on the first request: a hosted deployment with a weak or
   // missing secret must never come up. 32 is Better Auth's own floor.
@@ -766,6 +780,28 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     return { start: merged, spec };
   };
 
+  const resolveDeploymentStart = async (
+    owner: string,
+    requested: SessionStartOptions,
+  ): Promise<{ start: SessionStartOptions; spec?: AgentSpec }> => {
+    let start = requested;
+    if (options.demoAgent !== undefined) {
+      if (start.agent !== undefined && start.agent !== options.demoAgent.id) {
+        throw new AgentRegistryError("invalid", `demo deployment is pinned to agent ${options.demoAgent.id}`);
+      }
+      if (start.agentVersion !== undefined && start.agentVersion !== options.demoAgent.version) {
+        throw new AgentRegistryError("invalid", `demo deployment is pinned to agent ${options.demoAgent.id} version ${options.demoAgent.version}`);
+      }
+      start = {
+        ...start,
+        agent: options.demoAgent.id,
+        agentSource: "published",
+        agentVersion: options.demoAgent.version,
+      };
+    }
+    return resolveAgentStart(owner, start);
+  };
+
   const handleFirstCommand = (ws: ServerWebSocket<SocketData>, command: GatewayCommand): void => {
     const sink = sinkFor(ws);
     if (command.type === "session.start") {
@@ -782,7 +818,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         try {
           // Resolution precedes charging and engine admission: an unknown, unpublished,
           // cross-owner, or stale draft Agent costs no quota and starts no session.
-          resolved = await resolveAgentStart(ws.data.ctx.userId, command.options ?? {});
+          resolved = await resolveDeploymentStart(ws.data.ctx.userId, command.options ?? {});
           if (ws.data.closed === true || ws.data.pendingStart !== pendingKey) return;
           session = createSession([], ws.data.ctx.userId, resolved.spec);
         } catch (error) {
@@ -867,11 +903,18 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         return problem(405, "method_not_allowed", `${request.method} is not allowed on ${known.path}`);
       }
       if (url.pathname === "/healthz") {
+        const deployment = {
+          demo: options.demoMode === true,
+          ...(options.demoAgent === undefined ? {} : { demoAgent: options.demoAgent }),
+          ...(options.maxSessions === undefined ? {} : { maxSessions: options.maxSessions }),
+          ...(options.maxSessionSeconds === undefined ? {} : { maxSessionSeconds: options.maxSessionSeconds }),
+        };
         if (options.accounts !== undefined) {
           return (async (): Promise<Response> => Response.json({
             ok: true,
             protocol: protocolVersion,
             auth: "accounts",
+            deployment,
             // Which sign-in doors to render. Not a secret: the login card shows them.
             login: (await accountsFor()).doors,
           }))();
@@ -886,6 +929,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           // does not disclose its traffic (adversarial review 2026-07-26, L-3).
           ...(options.accounts === undefined ? { sessions: sessions.size } : {}),
           auth: options.accounts === undefined ? "self" : "accounts",
+          deployment,
         });
       }
       // The discovery surface (docs/auth.md): unauthenticated by necessity — an agent
@@ -1030,15 +1074,48 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         const subprotocols = (request.headers.get("sec-websocket-protocol") ?? "")
           .split(",").map(entry => entry.trim());
         const openai = url.searchParams.has("model")
+          || url.searchParams.has("agent")
           || url.searchParams.get("protocol") === "openai"
           || request.headers.has("openai-beta")
           || subprotocols.includes("realtime");
+        let openaiStart: SessionStartOptions | undefined;
+        let openaiAgentSpec: AgentSpec | undefined;
+        if (openai) {
+          const selectedAgent = url.searchParams.get("agent") ?? undefined;
+          const rawVersion = url.searchParams.get("agent_version") ?? undefined;
+          let agentVersion: number | undefined;
+          if (rawVersion !== undefined) {
+            if (selectedAgent === undefined) {
+              return problem(400, "invalid_agent_version", "agent_version requires agent");
+            }
+            agentVersion = Number(rawVersion);
+            if (!Number.isInteger(agentVersion) || agentVersion < 1) {
+              return problem(400, "invalid_agent_version", "agent_version must be a positive integer");
+            }
+          }
+          try {
+            const resolved = await resolveDeploymentStart(ctx.userId, {
+              ...(selectedAgent === undefined ? {} : { agent: selectedAgent }),
+              ...(agentVersion === undefined ? {} : { agentVersion }),
+            });
+            openaiStart = resolved.start;
+            openaiAgentSpec = resolved.spec;
+          } catch (error) {
+            if (!(error instanceof AgentRegistryError)) throw error;
+            const status = error.code === "invalid" ? 400
+              : error.code === "not_found" ? 404
+                : 409;
+            return problem(status, `agent_${error.code}`, error.message);
+          }
+        }
         const data: SocketData = {
           session: undefined,
           sink: undefined,
           ctx,
           closed: false,
           ...(openai ? { openaiModel: url.searchParams.get("model") ?? "voxstudio-realtime" } : {}),
+          ...(openaiStart === undefined ? {} : { openaiStart }),
+          ...(openaiAgentSpec === undefined ? {} : { openaiAgentSpec }),
         };
         // Clients that offer subprotocols (the OpenAI SDKs offer `realtime`) get their
         // first choice echoed back by Bun's upgrade; adding it manually here duplicates
@@ -1288,9 +1365,10 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         ws.data.openai = new OpenAiRealtimeConnection({
           send: text => { ws.send(text); },
           close: () => { ws.close(); },
-          createSession: extraTools => createSession(extraTools, ws.data.ctx.userId),
+          createSession: extraTools => createSession(extraTools, ws.data.ctx.userId, ws.data.openaiAgentSpec),
           reservedToolNames: builtinToolNames,
           model: ws.data.openaiModel,
+          ...(ws.data.openaiStart === undefined ? {} : { startOptions: ws.data.openaiStart }),
           ...(options.openAiFunctionCallTimeoutMs === undefined ? {} : { functionCallTimeoutMs: options.openAiFunctionCallTimeoutMs }),
           ...(options.log === undefined ? {} : { log: options.log }),
         });

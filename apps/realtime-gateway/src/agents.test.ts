@@ -293,4 +293,70 @@ describe("Agent REST registry", () => {
     expect(chats[0]?.tools?.some(tool => tool.function.name === "save_last_utterance_as_voice")).toBe(false);
     client.close();
   });
+
+  test("a demo deployment stays pinned to the operator-selected immutable version", async () => {
+    const agentsDir = await root();
+    gateway = startGateway({ config, port: 0, agentsDir });
+    const created = await fetch(new URL("/v1/agents", gateway.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        id: "demo",
+        name: "Demo",
+        spec: { instructions: "Version one", vad: "energy", threshold: 0.1, minSpeechMs: 40, silenceMs: 20 },
+      }),
+    }).then(response => response.json()) as { revision: number };
+    const first = await fetch(new URL("/v1/agents/demo/publish", gateway.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ revision: created.revision }),
+    }).then(response => response.json()) as { record: { revision: number }; version: { version: number } };
+    const updated = await fetch(new URL("/v1/agents/demo", gateway.url), {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        revision: first.record.revision,
+        spec: { instructions: "Version two", vad: "energy", threshold: 0.1, minSpeechMs: 40, silenceMs: 20 },
+      }),
+    }).then(response => response.json()) as { revision: number };
+    await fetch(new URL("/v1/agents/demo/publish", gateway.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ revision: updated.revision }),
+    });
+    await gateway.stop();
+
+    const chats: Array<{ messages: Array<{ role: string; content: string }> }> = [];
+    const engineFetch: Fetch = async (input, init) => {
+      const request = new Request(input instanceof Request ? input : String(input), init);
+      const path = new URL(request.url).pathname;
+      if (path === "/v1/audio/transcriptions") return Response.json({ text: "hello" });
+      if (path === "/v1/chat/completions") {
+        chats.push(await request.json() as typeof chats[number]);
+        return Response.json({ choices: [{ message: { content: "reply" } }] });
+      }
+      if (path === "/v1/audio/speech") return new Response(new Uint8Array(writeWav(new Float32Array(1_200), 24_000)));
+      if (path === "/v1/voices") return Response.json({ voices: [] });
+      throw new Error(`unexpected engine path ${path}`);
+    };
+    gateway = startGateway({
+      config,
+      port: 0,
+      agentsDir,
+      demoMode: true,
+      demoAgent: { id: "demo", version: first.version.version },
+      fetch: engineFetch,
+    });
+    const conflictingVersion = await fetch(new URL("/v1/realtime?agent=demo&agent_version=2", gateway.url));
+    expect(conflictingVersion.status).toBe(400);
+    expect((await conflictingVersion.json() as { error: { code: string } }).error.code).toBe("agent_invalid");
+    const client = new RealtimeClient(gateway.url);
+    await client.ready();
+    client.command({ bargeIn: true });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "snapshot");
+    client.sendTurn();
+    await client.until(events => events.some(event => event.type === "turn.completed"), "turn completion");
+    expect(chats[0]?.messages[0]?.content).toStartWith("Version one");
+    client.close();
+  });
 });

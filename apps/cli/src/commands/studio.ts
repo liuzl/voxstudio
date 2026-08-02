@@ -1,4 +1,5 @@
 import type { VoxConfig } from "@voxstudio/contracts";
+import { AgentRegistry } from "@voxstudio/agents";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ffmpegPcmDecoder, loadSileroVadModel, persistPronunciationsFile, resolveConfigPath } from "@voxstudio/platform-bun";
@@ -10,7 +11,7 @@ export const studioUsage = `usage: vox studio [--host HOST] [--port PORT] [--tok
                  [--agents DIR] [--library DIR] [--library-max-bytes SIZE] [--accounts DIR]
                  [--quota N] [--quota-window SECONDS] [--max-synthesis-seconds N]
                  [--max-concurrent-synthesis N] [--max-queued-synthesis Q]
-                 [--max-sessions N] [--max-session-seconds N] [--demo]
+                 [--max-sessions N] [--max-session-seconds N] [--demo] [--demo-agent ID]
 
 Serve the Web Studio: the browser app, the realtime WebSocket (/v1/realtime), and the
 credential-hiding REST facade in one process. Binds loopback by default; reaching it
@@ -70,7 +71,9 @@ Demo guardrails (docs/public-demo.md), all off by default; environment fallbacks
 VOX_GATEWAY_MAX_SESSIONS, VOX_GATEWAY_MAX_SESSION_SECONDS, VOX_GATEWAY_DEMO=1:
   --max-sessions N          refuse new conversations at N live sessions
   --max-session-seconds N   every session notices and stops at this ceiling
-  --demo                    registry writes 403; MCP servers stay unconnected`;
+  --demo                    registry writes 403; MCP servers stay unconnected
+  --demo-agent ID           pin every conversation to the Agent's current published
+                            version at startup (VOX_GATEWAY_DEMO_AGENT; requires --demo)`;
 
 function positiveNumber(raw: string, option: string, integer = false): number {
   const value = Number(raw);
@@ -126,6 +129,7 @@ export async function runStudio(
   let maxSessions = positiveEnv("VOX_GATEWAY_MAX_SESSIONS", true);
   let maxSessionSeconds = positiveEnv("VOX_GATEWAY_MAX_SESSION_SECONDS");
   let demoMode = process.env.VOX_GATEWAY_DEMO === "1";
+  let demoAgentId = process.env.VOX_GATEWAY_DEMO_AGENT;
   let libraryDir = process.env.VOX_GATEWAY_LIBRARY;
   let agentsDir = process.env.VOX_GATEWAY_AGENTS ?? join(homedir(), ".config", "voxstudio", "agents");
   let accountsDir = process.env.VOX_GATEWAY_ACCOUNTS;
@@ -159,6 +163,7 @@ export async function runStudio(
     else if (arg === "--max-sessions") maxSessions = positiveNumber(value(), arg, true);
     else if (arg === "--max-session-seconds") maxSessionSeconds = positiveNumber(value(), arg);
     else if (arg === "--demo") demoMode = true;
+    else if (arg === "--demo-agent") demoAgentId = value();
     else if (arg === "--library") libraryDir = value();
     else if (arg === "--library-max-bytes") libraryMaxBytes = parseByteSize(value(), `studio: ${arg}`);
     else if (arg === "--accounts") accountsDir = value();
@@ -188,6 +193,21 @@ export async function runStudio(
   if (quotaOperations !== undefined && !hasAccounts) {
     throw new TypeError("studio: --quota requires --accounts");
   }
+  if (demoAgentId !== undefined && demoAgentId !== "" && !demoMode) {
+    throw new TypeError("studio: --demo-agent requires --demo");
+  }
+  if (demoAgentId !== undefined && demoAgentId !== "" && agentsDir === "") {
+    throw new TypeError("studio: --demo-agent requires an Agent registry");
+  }
+  if (demoAgentId !== undefined && demoAgentId !== "" && hasAccounts) {
+    throw new TypeError("studio: --demo-agent cannot be combined with --accounts");
+  }
+  let demoAgent: { id: string; version: number } | undefined;
+  if (demoAgentId !== undefined && demoAgentId !== "") {
+    const resolved = await new AgentRegistry(agentsDir).resolve("owner", demoAgentId, { type: "published" });
+    if (!("version" in resolved)) throw new TypeError(`studio: agent ${demoAgentId} is not published`);
+    demoAgent = { id: demoAgentId, version: resolved.version };
+  }
   // The manifest is baked at build time; an API-only binary is a build outcome worth
   // saying out loud, not a runtime surprise.
   if (Object.keys(webAssets).length === 0) {
@@ -206,6 +226,7 @@ export async function runStudio(
     ...(maxSessions === undefined ? {} : { maxSessions }),
     ...(maxSessionSeconds === undefined ? {} : { maxSessionSeconds }),
     ...(demoMode ? { demoMode } : {}),
+    ...(demoAgent === undefined ? {} : { demoAgent }),
     ...(agentsDir === "" ? {} : { agentsDir }),
     ...(libraryDir === undefined || libraryDir === "" ? {} : { libraryDir }),
     ...(libraryMaxBytes === undefined ? {} : { libraryMaxBytes }),

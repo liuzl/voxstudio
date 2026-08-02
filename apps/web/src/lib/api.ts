@@ -95,6 +95,30 @@ export async function listAgentVersions(id: string): Promise<AgentPublishedVersi
   return payload.versions ?? [];
 }
 
+export interface DeploymentInfo {
+  auth: "self" | "accounts";
+  demo: boolean;
+  demoAgent?: { id: string; version: number };
+  maxSessions?: number;
+  maxSessionSeconds?: number;
+}
+
+export async function getDeploymentInfo(): Promise<DeploymentInfo> {
+  const response = await fetch("/healthz");
+  if (!response.ok) await fail(response, "获取部署信息");
+  const body = await response.json() as {
+    auth?: "self" | "accounts";
+    deployment?: Omit<DeploymentInfo, "auth">;
+  };
+  return {
+    auth: body.auth ?? "self",
+    demo: body.deployment?.demo ?? false,
+    ...(body.deployment?.demoAgent === undefined ? {} : { demoAgent: body.deployment.demoAgent }),
+    ...(body.deployment?.maxSessions === undefined ? {} : { maxSessions: body.deployment.maxSessions }),
+    ...(body.deployment?.maxSessionSeconds === undefined ? {} : { maxSessionSeconds: body.deployment.maxSessionSeconds }),
+  };
+}
+
 export interface DesignProfileMeta {
   description: string;
   seed: number;

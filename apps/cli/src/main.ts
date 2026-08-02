@@ -4,6 +4,7 @@ import { probeEngine, type Fetch } from "@voxstudio/clients";
 import type { HealthResult, VoxConfig } from "@voxstudio/contracts";
 import { loadConfig } from "@voxstudio/platform-bun";
 import { chatUsage, runChat } from "./commands/chat";
+import { agentsUsage, runAgents } from "./commands/agents";
 import { configUsage, runConfig } from "./commands/config";
 import { devicesUsage, runDevices } from "./commands/devices";
 import { listenUsage, runListen } from "./commands/listen";
@@ -15,7 +16,7 @@ import { runTranscribe, transcribeUsage } from "./commands/transcribe";
 import { runVoices, voicesUsage } from "./commands/voices";
 import { consoleIo, type CliIo } from "./io";
 
-const usage = `usage: vox [-h] [--config CONFIG] {health,say,transcribe,chat,reply,listen,studio,devices,voices,profiles,config} ...
+const usage = `usage: vox [-h] [--config CONFIG] {health,say,transcribe,chat,reply,listen,studio,devices,voices,profiles,agents,config} ...
 
 voxstudio: self-hosted voice I/O
 
@@ -30,6 +31,7 @@ commands:
   devices          list microphone input devices
   voices           manage named voices
   profiles         create reusable design profiles
+  agents           manage saved and published Agents
   config           validate resolved configuration
 
 options:
@@ -80,7 +82,7 @@ export async function run(
     args.splice(0, 2);
   }
   const command = args.shift();
-  if (!command || !["health", "say", "transcribe", "chat", "reply", "listen", "studio", "devices", "voices", "profiles", "config"].includes(command)) {
+  if (!command || !["health", "say", "transcribe", "chat", "reply", "listen", "studio", "devices", "voices", "profiles", "agents", "config"].includes(command)) {
     io.err(usage);
     return 2;
   }
@@ -96,12 +98,21 @@ export async function run(
       devices: devicesUsage,
       voices: voicesUsage,
       profiles: profilesUsage,
+      agents: agentsUsage,
       config: configUsage,
     };
     io.out(commandUsage[command] ?? usage);
     return 0;
   }
   if (command === "devices") return runDevices(args, io);
+  if (command === "agents") {
+    try {
+      return await runAgents(args, io);
+    } catch (error) {
+      io.err(error instanceof Error ? error.message : String(error));
+      return 1;
+    }
+  }
   try {
     const config = explicit === undefined ? await configLoader() : await configLoader({ explicit });
     if (command === "health") {

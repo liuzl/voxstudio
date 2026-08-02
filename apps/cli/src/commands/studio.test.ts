@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { AgentRegistry } from "@voxstudio/agents";
 import { parseConfig } from "@voxstudio/config";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { GatewayServer, GatewayServerOptions } from "@voxstudio/realtime-gateway";
 import type { CliIo } from "../io";
 import { runStudio } from "./studio";
@@ -154,5 +158,39 @@ describe("vox studio", () => {
       .rejects.toThrow("positive byte size");
     await expect(runStudio(["--library-max-bytes", "512M"], config, io, () => fakeGateway(), false))
       .rejects.toThrow("requires --library");
+  });
+
+  test("--demo-agent resolves and pins the current immutable published version", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vox-studio-demo-agent-"));
+    try {
+      const registry = new AgentRegistry(root);
+      const created = await registry.create("owner", { id: "demo", name: "Demo", spec: { instructions: "Published" } });
+      await registry.publish("owner", "demo", created.revision);
+      let seen: GatewayServerOptions | undefined;
+      expect(await runStudio(
+        ["--agents", root, "--demo", "--demo-agent", "demo"],
+        config,
+        collectingIo(),
+        options => { seen = options; return fakeGateway(); },
+        false,
+      )).toBe(0);
+      expect(seen?.demoMode).toBe(true);
+      expect(seen?.demoAgent).toEqual({ id: "demo", version: 1 });
+
+      await expect(runStudio(["--agents", root, "--demo-agent", "demo"], config, collectingIo(), () => fakeGateway(), false))
+        .rejects.toThrow("requires --demo");
+      const before = process.env.VOX_AUTH_SECRET;
+      process.env.VOX_AUTH_SECRET = "an-adequately-long-test-secret-0123456789";
+      try {
+        await expect(runStudio([
+          "--agents", root, "--demo", "--demo-agent", "demo", "--accounts", join(root, "accounts"),
+        ], config, collectingIo(), () => fakeGateway(), false)).rejects.toThrow("cannot be combined with --accounts");
+      } finally {
+        if (before === undefined) delete process.env.VOX_AUTH_SECRET;
+        else process.env.VOX_AUTH_SECRET = before;
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

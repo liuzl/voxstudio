@@ -49,6 +49,12 @@ useful independently of identity.
      business in an anonymous-ish demo, and `trust` least of all;
    - the capture library stays off regardless of `--library` (docs/web-studio.md
      Phase 4): a demo must not retain visitor audio.
+4. **Demo Agent pin** (`--demo-agent ID`, `VOX_GATEWAY_DEMO_AGENT`) — resolved at
+   startup to the Agent's current immutable published version and applied to native
+   and OpenAI-dialect conversations. It requires `--demo` and the local Agent registry.
+   It cannot be combined with hosted accounts until the Portal has an explicit
+   operator-owned Agent namespace; failing closed avoids accidentally resolving each
+   visitor's same-named private Agent.
 
 Defaults: all three off. Hardening is a deployment decision, exactly like
 binding beyond loopback.
@@ -59,7 +65,8 @@ binding beyond loopback.
 cloudflared tunnel:  <tunnel-name> → http://127.0.0.1:<gateway-port>
 Access application:  https://demo.<domain>  policy: allow-list emails, OTP login
 gateway service:     vox studio --config <config> --token $VOX_GATEWAY_TOKEN \
-                       --max-sessions 3 --max-session-seconds 600 --demo
+                       --max-sessions 3 --max-session-seconds 600 --demo \
+                       --demo-agent public-demo
 ```
 
 The gateway keeps binding loopback; the tunnel is the only ingress. Engine

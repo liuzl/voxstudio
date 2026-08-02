@@ -37,6 +37,11 @@ Subset boundaries, unchanged from the evaluation:
    adapter; everything else is native. Native clients never send `?model=`, and the
    native server never speaks first while the OpenAI server always opens with
    `session.created` — so the choice must be (and is) made before the first frame.
+   **Agent selection update, 2026-08-03:** `?agent=ID` also selects this dialect and
+   resolves the caller's latest immutable published Agent before the upgrade. An
+   optional `agent_version=N` pins an exact published snapshot and is invalid without
+   an Agent. Agent defaults appear in `session.created`; a later `session.update`
+   remains the explicit session layer and may override ordinary Agent defaults.
 2. **The adapter is an `EventSink`.** It wraps a `GatewaySession` exactly where a
    WebSocket normally sits: native JSON events arrive as strings and are translated
    to OpenAI events; binary reply frames are resampled to PCM16@24kHz and emitted as

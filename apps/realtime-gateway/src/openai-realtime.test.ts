@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { AgentRegistry } from "@voxstudio/agents";
 import { decodePcm16, encodePcm16, writeWav } from "@voxstudio/audio";
 import { parseConfig } from "@voxstudio/config";
 import type { Fetch } from "@voxstudio/clients";
 import { startGateway, type GatewayServer } from "./server";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const config = parseConfig({
   engines: {
@@ -107,13 +111,53 @@ async function runTurn(client: OaiClient, session: Record<string, unknown> = {})
 }
 
 let gateway: GatewayServer | undefined;
+const roots: string[] = [];
 
 afterEach(async () => {
   await gateway?.stop();
   gateway = undefined;
+  await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
 describe("openai realtime adapter", () => {
+  test("?agent= selects a published Agent before the OpenAI handshake", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vox-openai-agent-"));
+    roots.push(root);
+    const registry = new AgentRegistry(root);
+    const created = await registry.create("owner", {
+      id: "support",
+      name: "Support",
+      spec: { instructions: "Published support persona", voice: "support-voice", vad: "energy", threshold: 0.1, minSpeechMs: 40, silenceMs: 20 },
+    });
+    await registry.publish("owner", "support", created.revision);
+    const chats: Array<{ messages: Array<{ role: string; content: string }> }> = [];
+    gateway = startGateway({
+      config,
+      port: 0,
+      agentsDir: root,
+      fetch: engineFetch({
+        "/v1/chat/completions": async request => {
+          chats.push(await request.json() as typeof chats[number]);
+          return Response.json({ choices: [{ message: { content: "Agent reply." } }] });
+        },
+      }),
+    });
+
+    const client = new OaiClient(gateway.url, "?agent=support");
+    await runTurn(client);
+    const createdEvent = client.ofType("session.created")[0] as { session?: { instructions?: string; voice?: string } };
+    expect(createdEvent.session?.instructions).toBe("Published support persona");
+    expect(createdEvent.session?.voice).toBe("support-voice");
+    expect(chats[0]?.messages[0]).toEqual({ role: "system", content: expect.stringContaining("Published support persona") });
+    client.close();
+
+    const missing = await fetch(new URL("/v1/realtime?agent=missing", gateway.url));
+    expect(missing.status).toBe(404);
+    expect((await missing.json() as { error: { code: string } }).error.code).toBe("agent_not_found");
+    const versionWithoutAgent = await fetch(new URL("/v1/realtime?model=voxstudio-realtime&agent_version=1", gateway.url));
+    expect(versionWithoutAgent.status).toBe(400);
+  });
+
   test("an audio turn speaks the GA wire shape end to end", async () => {
     gateway = startGateway({ config, fetch: engineFetch(), port: 0 });
     const client = new OaiClient(gateway.url);

@@ -17,6 +17,7 @@
         "vox-ts": "./src/main.ts",
       },
       "dependencies": {
+        "@voxstudio/agents": "workspace:*",
         "@voxstudio/audio": "workspace:*",
         "@voxstudio/clients": "workspace:*",
         "@voxstudio/config": "workspace:*",

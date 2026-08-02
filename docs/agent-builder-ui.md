@@ -57,10 +57,12 @@ The placeholder-object gap that motivated this document is closed. As of
   version through the ordinary authenticated realtime path.
 
 The Builder is nevertheless only partially delivered. Configuration, Speech,
-version lifecycle, and the core preview shell are implemented, but preview text
-input, settings, feedback, and the complete failure matrix remain. Deployment,
+Deployment, version lifecycle, and the core preview shell are implemented, but
+preview text input, settings, feedback, and the complete failure matrix remain.
 Agent-scoped conversation history, statistics, `VoiceStage`, and Portal reuse
-have not started.
+have not started. Deployment currently covers immutable published identity,
+runtime/auth status, and native plus OpenAI-compatible connection examples;
+telephony attachment remains future work.
 
 ## References inspected
 
@@ -448,10 +450,9 @@ stage component does not require sharing the entire page theme.
 
 ## Delivery order
 
-1. **Agent domain and registry — runtime/Web API delivered 2026-08-02; CLI
-   pending**: `AgentRecord`/`AgentSpec`, owner-scoped YAML registry, immutable
+1. **Agent domain and registry — delivered 2026-08-03**: `AgentRecord`/`AgentSpec`, owner-scoped YAML registry, immutable
    published snapshots, resolution, CRUD, publish/audit, and native session start
-   by Agent id are implemented. CLI Agent commands remain.
+   by Agent id, CLI Agent commands, and `vox listen --agent` are implemented.
 2. **Builder foundation — delivered 2026-08-02**: the real
    list, template creation, durable section routes, shared header, revision-safe
    saving, publish, runtime-dependency alerts, and advanced Configuration/Speech
@@ -465,8 +466,10 @@ stage component does not require sharing the entire page theme.
 4. **VoiceStage — not started**: state-driven visual, reduced-motion/fallback
    paths, and preview integration. This is the first implementation of the
    StreamCore-inspired presentation.
-5. **Deployment and history — not started**: integration snippets, Agent-scoped
-   conversation traces, retention truth, and only then measured statistics.
+5. **Deployment delivered; history not started**: the durable Deployment route shows
+   the published version/hash, public origin, authentication/demo truth, native CLI
+   and WebSocket examples, and OpenAI-compatible TypeScript/Python examples. Agent-scoped
+   conversation traces, retention truth, and only then measured statistics remain.
 6. **Portal reuse — not started**: curated public Agent and hardened demo
    experience after the preview component has passed desktop/mobile and
    real-browser gates.

@@ -51,6 +51,8 @@ export interface OpenAiRealtimeOptions {
   reservedToolNames: readonly string[];
   /** The `?model=` the client asked for, echoed in session payloads. */
   model: string;
+  /** Defaults resolved from a published Agent selected during the WebSocket handshake. */
+  startOptions?: SessionStartOptions;
   /** Override for the function-call round-trip timeout (default 15s). */
   functionCallTimeoutMs?: number;
   log?: (line: string) => void;
@@ -134,9 +136,10 @@ export class OpenAiRealtimeConnection {
 
   /** Both the GA nested shape and the flat beta fields: harmless to over-describe, fatal to under-describe. */
   private sessionPayload(): Record<string, unknown> {
+    const voice = this.voice ?? this.options.startOptions?.voice;
     const turnDetection = {
       type: "server_vad",
-      silence_duration_ms: this.silenceMs ?? 150,
+      silence_duration_ms: this.silenceMs ?? this.options.startOptions?.silenceMs ?? 150,
       interrupt_response: this.bargeIn,
     };
     const format = { type: "audio/pcm", rate: wireRate };
@@ -145,17 +148,17 @@ export class OpenAiRealtimeConnection {
       object: "realtime.session",
       model: this.options.model,
       output_modalities: ["audio"],
-      instructions: this.instructions ?? "",
+      instructions: this.instructions ?? this.options.startOptions?.system ?? "",
       tools: this.clientTools.map(tool => ({ type: "function", ...tool })),
       tool_choice: "auto",
       audio: {
         input: { format, turn_detection: turnDetection },
-        output: { format, ...(this.voice === undefined ? {} : { voice: this.voice }) },
+        output: { format, ...(voice === undefined ? {} : { voice }) },
       },
       input_audio_format: "pcm16",
       output_audio_format: "pcm16",
       turn_detection: turnDetection,
-      ...(this.voice === undefined ? {} : { voice: this.voice }),
+      ...(voice === undefined ? {} : { voice }),
     };
   }
 
@@ -333,8 +336,9 @@ export class OpenAiRealtimeConnection {
     const start: SessionStartOptions = {
       language: "auto",
       turnTaking: "speculative",
-      bargeIn: this.bargeIn,
       playbackAck: false,
+      ...this.options.startOptions,
+      bargeIn: this.bargeIn,
       ...(this.instructions === undefined ? {} : { system: this.instructions }),
       ...(this.voice === undefined ? {} : { voice: this.voice }),
       ...(this.silenceMs === undefined ? {} : { silenceMs: this.silenceMs }),

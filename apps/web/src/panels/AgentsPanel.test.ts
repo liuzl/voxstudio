@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   agentBehaviorChanged,
+  agentDeploymentSnippets,
   agentExportYaml,
   agentPreviewOptions,
   agentRecordFromDraft,
@@ -37,6 +38,18 @@ describe("Agent list timestamps", () => {
     const timestamp = "2026-08-02T01:05:00.000Z";
     expect(displayTime(timestamp, "en")).not.toContain("月");
     expect(displayTime(timestamp, "zh")).toContain("月");
+  });
+});
+
+describe("Agent deployment snippets", () => {
+  test("binds every supported client example to the published Agent id and public origin", () => {
+    const snippets = agentDeploymentSnippets("support.zh", "https://voice.example/");
+    expect(snippets.cli).toBe("vox listen --agent support.zh");
+    expect(snippets.native).toContain('new WebSocket("wss://voice.example/v1/realtime")');
+    expect(snippets.native).toContain('agent: "support.zh"');
+    expect(snippets.openai).toContain('baseURL: "https://voice.example/v1"');
+    expect(snippets.openai).toContain('url.searchParams.set("agent", "support.zh")');
+    expect(snippets.python).toContain("wss://voice.example/v1/realtime?model=voxstudio-realtime&agent=support.zh");
   });
 });
 

@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { AgentRegistry } from "@voxstudio/agents";
 import { writeWav } from "@voxstudio/audio";
 import { parseConfig } from "@voxstudio/config";
 import type { Fetch } from "@voxstudio/clients";
 import type { PcmCapture } from "@voxstudio/platform-bun";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runListen, type ListenPlatform } from "./listen";
 
 function frames(): AsyncIterable<{ samples: Float32Array; sampleRate: number; timestampMs: number }> {
@@ -17,6 +21,71 @@ function response(): Uint8Array {
 }
 
 describe("listen command", () => {
+  test("--agent resolves published behavior, named engines, and voice", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vox-listen-agent-"));
+    try {
+      const registry = new AgentRegistry(root);
+      const created = await registry.create("owner", {
+        id: "support",
+        name: "Support",
+        spec: {
+          instructions: "Agent instructions",
+          voice: "agentvoice",
+          asrEngine: "agent_asr",
+          llmEngine: "agent_llm",
+          ttsEngine: "agent_tts",
+          vad: "energy",
+          threshold: 0.1,
+          minSpeechMs: 20,
+          silenceMs: 20,
+        },
+      });
+      await registry.publish("owner", "support", created.revision);
+      const capture: PcmCapture = { frames: frames(), close: async () => {} };
+      const platform: ListenPlatform = {
+        capture: async () => capture,
+        createPlayer: () => ({ write: async () => {}, close: async () => {} }),
+      };
+      const hosts: string[] = [];
+      let chat: { messages: Array<{ role: string; content: string }> } | undefined;
+      let speech: { voice?: string } | undefined;
+      const fetch: Fetch = async (input, init) => {
+        const url = new URL(String(input));
+        hosts.push(url.host);
+        if (url.pathname === "/v1/audio/transcriptions") return Response.json({ text: "hello" });
+        if (url.pathname === "/v1/chat/completions") {
+          chat = JSON.parse(String(init?.body)) as typeof chat;
+          return Response.json({ choices: [{ message: { content: "reply" } }] });
+        }
+        if (url.pathname === "/v1/audio/speech") {
+          speech = JSON.parse(String(init?.body)) as typeof speech;
+          return new Response(new Uint8Array(response()));
+        }
+        throw new Error(`unexpected path ${url.pathname}`);
+      };
+      const config = parseConfig({
+        engines: {
+          asr: { base_url: "http://default-asr.test" },
+          llm: { base_url: "http://default-llm.test" },
+          tts: { base_url: "http://default-tts.test" },
+          agent_asr: { kind: "asr", base_url: "http://agent-asr.test" },
+          agent_llm: { kind: "llm", base_url: "http://agent-llm.test" },
+          agent_tts: { kind: "tts", base_url: "http://agent-tts.test" },
+        },
+      });
+
+      await expect(runListen(["--agents", root, "--agent", "support"], config, { out: () => {}, err: () => {} }, fetch, platform))
+        .resolves.toBe(0);
+      expect(hosts).toContain("agent-asr.test");
+      expect(hosts).toContain("agent-llm.test");
+      expect(hosts).toContain("agent-tts.test");
+      expect(chat?.messages[0]?.content).toStartWith("Agent instructions");
+      expect(speech?.voice).toBe("agentvoice");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("runs one VAD-delimited headset turn through ASR, LLM, and streaming playback", async () => {
     const output: string[] = [];
     const errors: string[] = [];

@@ -92,6 +92,8 @@ bun run build:cli
 ./apps/cli/dist/vox listen --speaker-duplex --language zh --voice design-calm-clear
 ./apps/cli/dist/vox listen --welcome "你好，我在，请讲。" --nudge-after 20   # conversation etiquette
 ./apps/cli/dist/vox listen --studio-tools   # voice runs the studio: save that voice, re-speak, fix a pronunciation
+./apps/cli/dist/vox agents list          # manage local Agent drafts and immutable published versions
+./apps/cli/dist/vox listen --agent support # run the published Agent from the local registry
 ./apps/cli/dist/vox studio               # Web Studio: browser app + gateway from the same binary
 bun apps/mcp/src/main.ts                 # vox-mcp: this machine's voice as an MCP server
 # claude mcp add voxstudio -- bun /path/to/voxstudio/apps/mcp/src/main.ts
@@ -246,10 +248,11 @@ tags, per-request pinning). The whole studio also ships inside the compiled `vox
 barge-in detection included (the Silero WASM backend rides along — no native ONNX runtime
 needed). Remote TTS engines can stream Ogg/Opus (`stream_format: opus`,
 ~12KB/s vs raw PCM's 187.5KB/s) for slow WAN links, decoded gateway-side via ffmpeg. The browser studio (`apps/web`) ships six primary surfaces on top of it:
-a registry-backed Agents list and Configuration/Speech Builder (owner-scoped CRUD,
+a registry-backed Agents list and Configuration/Speech/Deployment Builder (owner-scoped CRUD,
 immutable publish snapshots with restore-as-draft, revision-safe saving,
 duplicate/export/audit actions, runtime-dependency validation, advanced
-route/tool/speech controls, and exact draft/published Try it live), live conversation
+route/tool/speech controls, exact draft/published Try it live, and copyable native/OpenAI
+integration examples), live conversation
 (worklet microphone capture, gapless streamed playback, captions with turn
 state and per-turn timing, the negotiated AEC capability snapshot), generation with takes,
 the voice bank (file upload or in-browser recording, plus design-profile create / audit /
@@ -259,7 +262,7 @@ play, re-transcribe, correct inline into a `.ref.txt` the ASR reference workflow
 directly, promote to a clone voice sample; `--library-max-bytes 512M` bounds retained
 audio by evicting the oldest uncorrected, unpromoted captures — curated work is never
 auto-deleted), and engine settings with live health. The complete Agent Builder
-sections, VoiceStage, Deployment/history surfaces, and Portal reuse remain planned;
+sections, VoiceStage, conversation/history surfaces, and Portal reuse remain planned;
 its real-browser
 double-talk/barge-in gate and route-change handling remain separate measured delivery
 phases.
