@@ -42,6 +42,100 @@ interface Check {
   expectOutput: string;
 }
 
+const delay = (milliseconds: number): Promise<void> => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+async function until<T>(read: () => T | undefined, what: string, timeoutMs = 8_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = read();
+    if (value !== undefined) return value;
+    await delay(20);
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+/**
+ * Start the actual compiled server and force the certified VAD path to initialize.
+ * Help output alone cannot catch missing compiled WASM assets or a runtime that silently
+ * picked native, so this is deliberately a real WebSocket session rather than an import
+ * check. Explicit `vad: silero` also prevents the ordinary energy-VAD fallback from
+ * turning a broken release artifact green.
+ */
+async function checkCompiledSilero(binary: string): Promise<void> {
+  const child = Bun.spawn([binary, "studio", "--host", "127.0.0.1", "--port", "0"], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, VOXSTUDIO_ONNX_BACKEND: "wasm" },
+  });
+  let output = "";
+  const capture = async (stream: ReadableStream<Uint8Array>): Promise<void> => {
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      output += decoder.decode(value, { stream: true });
+    }
+    output += decoder.decode();
+  };
+  const stdout = capture(child.stdout);
+  const stderr = capture(child.stderr);
+  let socket: WebSocket | undefined;
+  try {
+    const base = await until(() => {
+      const match = output.match(/Web Studio at (http:\/\/127\.0\.0\.1:\d+\/)/);
+      return match?.[1];
+    }, "the compiled Studio URL");
+    socket = new WebSocket(new URL("/v1/realtime", base).toString().replace(/^http/, "ws"));
+    const events: Array<Record<string, unknown>> = [];
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`timed out waiting for a Silero session; saw ${events.map(event => event.type).join(", ") || "no events"}`));
+      }, 8_000);
+      const finish = (error?: Error): void => {
+        clearTimeout(timer);
+        if (error === undefined) resolve();
+        else reject(error);
+      };
+      socket?.addEventListener("open", () => {
+        socket?.send(JSON.stringify({
+          v: 1,
+          type: "session.start",
+          idempotencyKey: "compiled-silero-smoke",
+          options: { vad: "silero" },
+        }));
+      });
+      socket?.addEventListener("message", event => {
+        if (typeof event.data !== "string") return;
+        const payload = JSON.parse(event.data) as Record<string, unknown>;
+        events.push(payload);
+        if (payload.type === "command.rejected" || payload.type === "error") {
+          finish(new Error(`compiled Silero session failed: ${JSON.stringify(payload)}`));
+        } else if (payload.type === "session.state" && payload.state === "listening") {
+          finish();
+        }
+      });
+      socket?.addEventListener("error", () => finish(new Error("compiled Studio WebSocket failed")));
+      socket?.addEventListener("close", () => finish(new Error("compiled Studio WebSocket closed before the session started")));
+    });
+    await until(
+      () => output.includes("silero VAD: using WASM SIMD backend") ? true : undefined,
+      "the compiled Silero WASM initialization log",
+    );
+    if (output.includes("native ONNX Runtime")) {
+      throw new Error("compiled Studio probed the native ONNX Runtime despite an explicit WASM backend");
+    }
+  } catch (error) {
+    const detail = output.trim().split("\n").slice(-12).join("\n");
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${detail ? `\n${detail}` : ""}`);
+  } finally {
+    socket?.close();
+    child.kill();
+    await child.exited;
+    await Promise.all([stdout, stderr]);
+  }
+}
+
 const checks: Check[] = [
   // Reaching the banner means every top-level import evaluated.
   { what: "vox --help", args: ["--help"], expectExit: 0, expectOutput: "voxstudio: self-hosted voice i/o" },
@@ -82,12 +176,20 @@ async function main(): Promise<number> {
     }
     console.error(`smoke-cli: ${check.what} ok`);
   }
+  try {
+    await checkCompiledSilero(binary);
+    console.error("smoke-cli: compiled Silero WASM session ok");
+  } catch (error) {
+    console.error(`smoke-cli: compiled Silero WASM session failed:\n${error instanceof Error ? error.message : String(error)}`);
+    failed += 1;
+  }
   const seconds = ((Date.now() - started) / 1_000).toFixed(1);
+  const total = checks.length + 1;
   if (failed > 0) {
-    console.error(`smoke-cli: ${failed} of ${checks.length} checks failed in ${seconds}s — the compiled binary is broken even if the tests pass`);
+    console.error(`smoke-cli: ${failed} of ${total} checks failed in ${seconds}s — the compiled binary is broken even if the tests pass`);
     return 1;
   }
-  console.error(`smoke-cli: the compiled binary starts (${checks.length} checks, ${seconds}s)`);
+  console.error(`smoke-cli: the compiled binary starts (${total} checks, ${seconds}s)`);
   return 0;
 }
 

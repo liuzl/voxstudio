@@ -23,8 +23,10 @@ Without --barge-in, microphone input is suppressed while the agent speaks so ext
 cannot interrupt playback. Use --barge-in only with headphones or a headset. --speaker-duplex uses
 the macOS Voice Processing helper for external-speaker AEC. --vad silero uses the Silero ONNX
 model (fetched into a verified local cache on first use) and is the default everywhere: the
-native ONNX runtime in the workspace, an embedded WASM backend (same model, same numbers) in
-the compiled binary. If neither loads, listen says so and uses the energy detector. --threshold is the
+WASM SIMD backend is used in source and compiled builds (same model, same numbers); set
+VOXSTUDIO_ONNX_BACKEND=native to opt into the optional native runtime. If the selected backend
+fails, the default VAD selection says so and uses the energy detector; an explicit --vad silero
+fails instead. A native request never silently substitutes WASM. --threshold is the
 energy VAD's RMS threshold; under silero it sets the level pre-gate that keeps residual echo
 below notice (both default 0.01). --timing
 prints each turn's latency profile (VAD end, ASR, reply, first audio) to stderr. Turn-taking is
@@ -74,7 +76,10 @@ const defaultPlatform: ListenPlatform = {
   capture: device => capturePcm(device),
   createPlayer: () => new FfplaySink(),
   startSpeakerDuplex: startMacosAudioHost,
-  loadSileroVad: () => loadSileroVadModel(line => console.error(line)),
+  loadSileroVad: () => loadSileroVadModel((line, level) => {
+    if (level === "info") console.log(line);
+    else console.error(line);
+  }),
 };
 
 function required(args: string[], index: number, option: string): string {
@@ -168,8 +173,9 @@ export async function runListen(
       }
     },
   });
-  // Silero is the certified default and carries its own WASM fallback for the compiled
-  // binary, so a fallback here means both runtimes failed (or the model fetch did).
+  // Silero is the certified default. The backend is one deliberate selection: WASM by
+  // default, or native by explicit environment override. Only the non-explicit VAD policy
+  // may fall back to energy when that selected backend (or the model fetch) fails.
   const vad = await createSessionVad({
     choice: options.vad,
     explicit: options.vadExplicit,

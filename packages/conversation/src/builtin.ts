@@ -373,7 +373,7 @@ export interface CreateVadOptions {
 
 /**
  * The certified VAD selection shared by `vox listen` and the gateway: silero by default,
- * energy on request or as the loud fallback when both silero runtimes fail.
+ * energy on request or as the loud fallback when the selected Silero backend fails.
  */
 export async function createSessionVad(options: CreateVadOptions): Promise<VadSegmenter> {
   const energy = (): VadSegmenter => new EnergyVadSegmenter({

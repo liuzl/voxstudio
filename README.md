@@ -225,12 +225,16 @@ gate passed on built-in MacBook speakers with real speech: zero confirmed self-i
 and 12/12 operator barge-ins heard. The Silero ONNX VAD (v5.1.2, pinned by SHA-256, fetched
 into a verified local cache on first use; release builds embed the same verified bytes, so
 the compiled binary needs no network) passed the same gate with faster detection and is
-the default everywhere — the native ONNX runtime in the workspace, an embedded
-onnxruntime-web WASM backend (same model, outputs identical to 2.4e-7, 0.2ms/frame,
-WebAssembly SIMD required) inside the compiled binary. One process-shared inference
+the default everywhere through the onnxruntime-web WASM SIMD backend in both source and
+compiled builds (same model, outputs identical to native within 2.4e-7, 0.2ms/frame in
+the adoption probe). Native ONNX is an optional, explicit high-concurrency measurement
+backend (`VOXSTUDIO_ONNX_BACKEND=native`), not a deployment requirement. One process-shared inference
 session serves every stream (per-stream state is 320 floats — session churn allocates
-nothing on the ONNX side); `listen` falls back loudly to the certified energy detector
-only if both runtimes fail. The conversation loop is shared: `packages/conversation` drives
+nothing on the ONNX side). Install `onnxruntime-node` separately in the deployment
+workspace before selecting native; an explicit native request fails closed and never
+silently substitutes WASM. The default VAD policy falls back loudly to the certified
+energy detector if its selected Silero backend fails, while an explicit `--vad silero`
+request fails. The conversation loop is shared: `packages/conversation` drives
 both `vox listen` and the realtime gateway, so the certified turn-taking and barge-in
 lifecycle has one implementation. The gateway (`apps/realtime-gateway`, Web Studio Phase 1)
 speaks the versioned session protocol over WebSocket — binary PCM media, snapshot reconnect,

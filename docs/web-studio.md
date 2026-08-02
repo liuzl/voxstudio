@@ -203,16 +203,19 @@ below rather than relitigated per feature.
    `index.html`. **WASM Silero delivered 2026-07-22**, closing the known limit: the
    compiled binary embeds onnxruntime-web's WASM backend (the `.wasm` and its loader
    as file assets, the same mechanism as the web shell), so barge-in detection runs
-   the certified Silero model everywhere — native ONNX runtime in the workspace,
-   WASM in the binary, chosen at load with a logged fallback. Probe-measured before
-   adoption: outputs identical to the native runtime within 2.4e-7 on shared frames,
-   0.2ms per 32ms window. The energy detector remains only as the both-runtimes-failed
-   loud fallback. A same-day adversarial review (codex) reshaped the loader: one
+   the certified Silero model everywhere. WASM SIMD is now the default in source and
+   compiled builds; native ONNX remains an optional explicit measurement backend through
+   `VOXSTUDIO_ONNX_BACKEND=native`. It must be installed separately and fails closed:
+   an explicit native request never silently substitutes WASM. Probe-measured before adoption: outputs identical
+   to the native runtime within 2.4e-7 on shared frames, 0.2ms per 32ms window. The
+   non-explicit VAD policy retains the energy detector as a loud fallback when the selected
+   Silero backend fails; an explicit Silero request fails. A same-day
+   adversarial review (codex) reshaped the loader: one
    process-shared inference session (Silero's recurrence rides in caller-owned
    tensors, so per-stream cost is 320 floats — measured: RSS flat across 4000
    session churns after heap warmup, where the per-session-session design leaked);
-   each backend is attempted whole, so a native binding that imports but cannot
-   create a session hands over to WASM instead of failing outright; release builds
+   the selected backend is attempted whole (runtime import plus session creation),
+   failed initialization clears its singleflight for a later retry, and release builds
    embed the SHA-verified model via `tools/ensure-silero-model.ts` (gate re-run
    with an empty cache: full turn, no network, cache untouched — the model never
    enters the repo, matching the public-repo rules); and WebAssembly SIMD is the

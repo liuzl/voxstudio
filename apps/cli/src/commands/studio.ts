@@ -17,8 +17,10 @@ credential-hiding REST facade in one process. Binds loopback by default; reachin
 from another machine is a deployment decision (a tunnel, Access at the door). TOKEN,
 when set, guards every /v1 request and the WebSocket upgrade; the app shell itself is
 served without it. Barge-in detection runs the certified Silero VAD everywhere: the
-native ONNX runtime in the workspace, an embedded WASM backend (same model, same
-numbers) inside the compiled binary.
+WASM SIMD backend is the cross-platform default in source and compiled builds (same
+model, same numbers); set VOXSTUDIO_ONNX_BACKEND=native to opt into the optional
+native runtime for high-concurrency measurement. Install onnxruntime-node separately
+before opting in; a native request never silently substitutes WASM.
 
 options:
   --host HOST    bind address (default 127.0.0.1)
@@ -223,7 +225,10 @@ export async function runStudio(
     ...(maxConcurrentSynthesis === undefined
       ? {}
       : { synthesisConcurrency: { maxInFlight: maxConcurrentSynthesis, maxQueued: maxQueuedSynthesis ?? maxConcurrentSynthesis } }),
-    loadSileroVad: () => loadSileroVadModel(line => io.err(line)),
+    loadSileroVad: () => loadSileroVadModel((line, level) => {
+      if (level === "info") io.out(line);
+      else io.err(line);
+    }),
     ...(configPath === undefined ? {} : {
       persistPronunciations: (entries: Record<string, string>) => persistPronunciationsFile(configPath, entries),
     }),

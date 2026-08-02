@@ -92,7 +92,12 @@ clips.push({ name: "steady noise rms 0.02", samples: steadyNoise(negativeSeconds
 clips.push({ name: "hum 120Hz rms 0.05", samples: hum(negativeSeconds, 0.05), tier: "negative" });
 
 const energy = new EnergyVadSegmenter({ sampleRate });
-const silero = new SileroVadSegmenter({ model: await loadSileroVadModel(line => console.error(line)) });
+const silero = new SileroVadSegmenter({
+  model: await loadSileroVadModel((line, level) => {
+    if (level === "info") console.log(line);
+    else console.error(line);
+  }),
+});
 
 const failures: string[] = [];
 const latencies = { energy: [] as number[], silero: [] as number[] };

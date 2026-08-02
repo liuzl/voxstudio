@@ -181,7 +181,10 @@ async function main(args: string[]): Promise<number> {
     ...(quotaCount === undefined ? {} : { quota: { operations: quotaCount, windowSeconds: quotaSeconds } }),
     ...(synthesisCeiling === undefined ? {} : { maxSynthesisSeconds: synthesisCeiling }),
     ...(inFlight === undefined ? {} : { synthesisConcurrency: { maxInFlight: inFlight, maxQueued: queued ?? inFlight } }),
-    loadSileroVad: () => loadSileroVadModel(line => console.error(line)),
+    loadSileroVad: () => loadSileroVadModel((line, level) => {
+      if (level === "info") console.log(line);
+      else console.error(line);
+    }),
     ...(decoder === undefined ? {} : { pcmDecoder: decoder }),
     ...(configPath === undefined ? {} : {
       persistPronunciations: (entries: Record<string, string>) => persistPronunciationsFile(configPath, entries),

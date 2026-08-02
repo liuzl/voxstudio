@@ -6,11 +6,12 @@ import { pathToFileURL } from "node:url";
 import type { SpeechProbabilityModel } from "@voxstudio/duplex-session";
 // The WASM backend's two artifacts, embedded as file assets: `bun build --compile`
 // packs them into the binary (the same `with { type: "file" }` mechanism as the web
-// shell), and under plain `bun` they resolve to the real files in node_modules. This
-// is what lets the compiled `vox` run the certified Silero model without the native
-// ONNX runtime it cannot carry. Hard prerequisite: onnxruntime-web ships only the
-// WebAssembly-SIMD build, so the WASM path needs a SIMD-capable engine — every Bun
-// target qualifies; if SIMD init ever fails it fails loudly into the energy fallback.
+// shell), and under plain `bun` they resolve to the real files in node_modules. WASM
+// SIMD is the production default in both forms: one backend is easier to certify and
+// deploy consistently across macOS, Linux, and Windows. Native ONNX remains an explicit
+// opt-in for high-concurrency measurement. Hard prerequisite: onnxruntime-web ships only
+// the WebAssembly-SIMD build, and every supported Bun target qualifies; if SIMD init ever
+// fails it propagates loudly to the calling VAD policy.
 import ortWasmAsset from "onnxruntime-web/ort-wasm-simd-threaded.wasm" with { type: "file" };
 import ortWasmLoaderAsset from "onnxruntime-web/ort-wasm-simd-threaded.mjs" with { type: "file" };
 
@@ -90,6 +91,19 @@ async function modelBytes(): Promise<Uint8Array> {
  * tier.
  */
 type OrtRuntime = typeof import("onnxruntime-web");
+export type SileroBackendPreference = "wasm" | "native";
+export type SileroLogLevel = "info" | "warn";
+
+/** Parse the one deliberate backend override without silently accepting a typo. */
+export function sileroBackendPreference(
+  environment: Record<string, string | undefined> = process.env,
+): SileroBackendPreference {
+  const configured = environment.VOXSTUDIO_ONNX_BACKEND?.trim().toLowerCase() || "wasm";
+  if (configured !== "wasm" && configured !== "native") {
+    throw new TypeError(`VOXSTUDIO_ONNX_BACKEND must be "wasm" or "native", not ${JSON.stringify(configured)}`);
+  }
+  return configured;
+}
 
 interface SharedBackend {
   ort: OrtRuntime;
@@ -110,41 +124,54 @@ interface SharedBackend {
  * repeat — allocates nothing on the ONNX side, which is what makes an undisposable
  * per-session InferenceSession leak impossible rather than merely handled.
  *
- * Each backend is attempted WHOLE (runtime import + session creation): a native
- * binding that imports but cannot create a session hands over to WASM instead of
- * surfacing a spurious total failure. Only a both-backends failure escapes, and a
- * failed attempt resets the singleflight so a later session may retry (e.g. the
- * network came back for the model fetch).
+ * A backend attempt includes both runtime import and session creation. WASM is the
+ * normal path. Native is selected only for deliberate measurement and therefore fails
+ * closed rather than silently measuring WASM. A failed attempt resets that backend's
+ * singleflight so a later session may retry (e.g. after installing the optional peer).
  */
-let sharedBackend: Promise<SharedBackend> | undefined;
+const sharedBackends = new Map<SileroBackendPreference, Promise<SharedBackend>>();
 
-async function createBackend(log: (line: string) => void): Promise<SharedBackend> {
+async function createBackend(
+  preference: SileroBackendPreference,
+  log: (line: string, level: SileroLogLevel) => void,
+): Promise<SharedBackend> {
   const bytes = await modelBytes();
-  let ort: OrtRuntime;
-  let session: SharedBackend["session"];
-  try {
-    // The specifier is deliberately non-analyzable: compiling the CLI embeds the
-    // .node binding but cannot embed libonnxruntime.dylib next to it, so a bundled
-    // import dlopens a broken library at runtime — inside the compiled binary this
-    // whole attempt fails cleanly and the WASM backend takes over.
-    const specifier = "onnxruntime-node";
-    ort = (await import(specifier)) as OrtRuntime;
-    session = await ort.InferenceSession.create(bytes);
-  } catch (nativeFailure) {
-    try {
-      ort = await import("onnxruntime-web");
-      ort.env.wasm.numThreads = 1;
-      ort.env.wasm.wasmPaths = {
-        wasm: pathToFileURL(ortWasmAsset).href,
-        mjs: pathToFileURL(ortWasmLoaderAsset).href,
-      };
-      session = await ort.InferenceSession.create(bytes);
-      log("silero VAD: native ONNX runtime unavailable; using the embedded WASM backend (same model, same numbers)");
-    } catch (wasmFailure) {
-      const reason = (failure: unknown): string => failure instanceof Error ? failure.message : String(failure);
-      throw new TypeError(`the silero VAD failed on both runtimes — native: ${reason(nativeFailure)}; wasm: ${reason(wasmFailure)}`);
+  type BackendParts = Pick<SharedBackend, "ort" | "session">;
+  const reason = (failure: unknown): string => failure instanceof Error ? failure.message : String(failure);
+  const wasm = async (): Promise<BackendParts> => {
+    const ort = await import("onnxruntime-web");
+    ort.env.wasm.numThreads = 1;
+    ort.env.wasm.wasmPaths = {
+      wasm: pathToFileURL(ortWasmAsset).href,
+      mjs: pathToFileURL(ortWasmLoaderAsset).href,
+    };
+    const session = await ort.InferenceSession.create(bytes);
+    return { ort, session };
+  };
+
+  const selected = await (async (): Promise<BackendParts> => {
+    if (preference === "native") {
+      try {
+        // Deliberately non-analyzable: native is an optional dependency and must not become
+        // a required asset of the compiled single-file CLI.
+        const specifier = "onnxruntime-node";
+        const ort = (await import(specifier)) as OrtRuntime;
+        const session = await ort.InferenceSession.create(bytes);
+        log("silero VAD: using explicitly requested native ONNX Runtime backend", "info");
+        return { ort, session };
+      } catch (nativeFailure) {
+        throw new TypeError(`the explicitly requested native ONNX Runtime failed: ${reason(nativeFailure)}`);
+      }
     }
-  }
+    try {
+      const selected = await wasm();
+      log("silero VAD: using WASM SIMD backend", "info");
+      return selected;
+    } catch (wasmFailure) {
+      throw new TypeError(`the silero VAD WASM runtime failed: ${reason(wasmFailure)}`);
+    }
+  })();
+  const { ort, session } = selected;
   for (const name of ["input", "state", "sr"]) {
     if (!session.inputNames.includes(name)) {
       throw new TypeError(`Silero VAD model is missing input "${name}"; got ${session.inputNames.join(", ")}`);
@@ -159,15 +186,20 @@ async function createBackend(log: (line: string) => void): Promise<SharedBackend
   return { ort, session, enqueue };
 }
 
-function backend(log: (line: string) => void): Promise<SharedBackend> {
-  if (!sharedBackend) {
-    const attempt = createBackend(log);
-    sharedBackend = attempt;
+function backend(
+  preference: SileroBackendPreference,
+  log: (line: string, level: SileroLogLevel) => void,
+): Promise<SharedBackend> {
+  let shared = sharedBackends.get(preference);
+  if (!shared) {
+    const attempt = createBackend(preference, log);
+    shared = attempt;
+    sharedBackends.set(preference, attempt);
     attempt.catch(() => {
-      if (sharedBackend === attempt) sharedBackend = undefined;
+      if (sharedBackends.get(preference) === attempt) sharedBackends.delete(preference);
     });
   }
-  return sharedBackend;
+  return shared;
 }
 
 /**
@@ -175,8 +207,13 @@ function backend(log: (line: string) => void): Promise<SharedBackend> {
  * ONNX runtime, inference session) are process-shared and loaded lazily on first
  * use; what this returns is a per-stream view carrying only the recurrent state.
  */
-export async function loadSileroVadModel(log: (line: string) => void = () => {}): Promise<SpeechProbabilityModel> {
-  const { ort, session, enqueue } = await backend(log);
+export async function loadSileroVadModel(
+  log: (line: string, level: SileroLogLevel) => void = () => {},
+  options: { backend?: SileroBackendPreference } = {},
+): Promise<SpeechProbabilityModel> {
+  // Validate configuration before modelBytes can fetch or write anything.
+  const preference = options.backend ?? sileroBackendPreference();
+  const { ort, session, enqueue } = await backend(preference, log);
   const context = new Float32Array(contextSamples);
   let state = new ort.Tensor("float32", new Float32Array(stateSize), [...stateShape]);
   const sr = new ort.Tensor("int64", BigInt64Array.from([16_000n]), []);

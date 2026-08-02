@@ -373,14 +373,18 @@ run on 2026-07-14 (same route, real TTS far-end, 12 operator cues) certified
 the gated detector: 0 confirmed self-interruptions (5.6/min raw model starts
 absorbed), 12/12 barge-ins heard with none missed or false, and detection
 latency p50 574 ms — 69 ms faster than the energy detector's certified run.
-Silero is therefore the default everywhere (2026-07-22): the native ONNX
-runtime in the workspace, an embedded onnxruntime-web WASM backend inside the
-compiled binary (same model, outputs identical to 2.4e-7, 0.2 ms per window;
-one process-shared inference session serves every stream), with release
-builds embedding the SHA-verified model itself so the standalone binary needs
-no first-use network. `listen` degrades loudly to the equally-certified
-energy detector only if both runtimes fail, and `--vad` selects one
-explicitly. The model is pinned by version and SHA-256 (Silero VAD v5.1.2,
+Silero is therefore the default everywhere (2026-07-22). The onnxruntime-web
+WASM SIMD backend is now the default in source and compiled builds (same model,
+outputs identical to native within 2.4e-7, 0.2 ms per window in the adoption
+probe; one process-shared inference session serves every stream). Native ONNX
+remains an optional explicit high-concurrency measurement path selected with
+`VOXSTUDIO_ONNX_BACKEND=native`; it is an optional peer that must be installed
+separately, and a failed native request fails closed rather than substituting WASM.
+Release builds embed the SHA-verified model itself so the standalone binary needs
+no first-use network. The non-explicit VAD policy degrades loudly to the
+equally-certified energy detector if its selected Silero backend fails; an explicit
+`--vad silero` fails instead.
+The model is pinned by version and SHA-256 (Silero VAD v5.1.2,
 MIT) and fetched into `~/.cache/voxstudio/` on first use where not embedded;
 a hash mismatch refuses to load.
 
