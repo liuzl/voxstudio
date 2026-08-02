@@ -30,9 +30,11 @@ for Builder preview. The Web Agents list now reads this registry, and its respon
 Builder edits, saves, publishes, and runs Try it live against a revision-pinned draft.
 Its durable section routes now expose engine routing, MCP allowlists,
 pronunciations, ASR keyterms, and turn-taking controls with runtime-dependency
-validation. CLI Agent subcommands, version restore, duplicate/export actions,
-Deployment, conversation history, statistics, and the complete preview treatment
-described in [agent-builder-ui.md](./agent-builder-ui.md) remain next.
+validation. The Web lifecycle now includes immutable version history,
+restore-as-draft, duplicate/export/audit/delete actions, and exact
+published-version preview. CLI Agent subcommands, Deployment, conversation
+history, statistics, and the remaining preview controls described in
+[agent-builder-ui.md](./agent-builder-ui.md) remain next.
 
 ## The question
 

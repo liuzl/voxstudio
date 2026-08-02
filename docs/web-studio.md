@@ -3,8 +3,8 @@
 Status: Accepted, 2026-07-14; living delivery record. The realtime gateway,
 five original functional panels, single-binary packaging, hosted authentication,
 and explicit engine-route selection are delivered. The registry-backed Agents
-list, Configuration/Speech Builder sections, publish flow, and revision-pinned
-Try it live were delivered 2026-08-02. The remaining Builder sections,
+list, Configuration/Speech Builder sections, immutable version lifecycle, and
+draft/published Try it live were delivered 2026-08-02. The remaining Builder sections,
 real-browser double-talk gate, and production hosting operations remain.
 
 ## Scope
@@ -89,9 +89,10 @@ below rather than relitigated per feature.
    deployment, conversations, statistics, draft/publish, and Try-it-live
    workflow specified in [agent-builder-ui.md](./agent-builder-ui.md). The real
    registry-backed list, template creation, Configuration/Speech section routes,
-   advanced runtime controls and validation, draft/publish lifecycle, and
-   revision-pinned preview are delivered. Version history UI, duplicate/export,
-   Deployment, Conversations, Statistics, and the final preview treatment remain.
+   advanced runtime controls and validation, draft/publish/version lifecycle,
+   duplicate/export/audit actions, and exact draft/published preview are
+   delivered. Deployment, Conversations, Statistics, and the remaining preview
+   controls remain.
 2. **对话 Conversation** — live duplex session: mic capture with negotiated AEC (browser
    constraints verified per the duplex doc), agent audio playback, streaming captions,
    visible turn/barge-in/reopen state, per-turn latency readout (the `turn.timing`

@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   agentBehaviorChanged,
+  agentExportYaml,
+  agentPreviewOptions,
   displayTime,
   draftFrom,
   listFromText,
@@ -46,6 +48,27 @@ describe("Agent preview connection status", () => {
   test("uses the live session state only after the socket is connected", () => {
     expect(previewStatusLabel("connected", "speaking")).toBe("回答中");
     expect(previewStatusLabel("connected", "listening")).toBe("聆听中");
+  });
+
+  test("pins either the draft revision or an exact immutable version", () => {
+    const record = {
+      id: "support",
+      name: "Support",
+      spec: {},
+      revision: 7,
+      createdAt: "2026-08-02T00:00:00.000Z",
+      updatedAt: "2026-08-02T00:00:00.000Z",
+    };
+    expect(agentPreviewOptions(record, { type: "draft" })).toEqual({
+      agent: "support",
+      agentSource: "draft",
+      agentRevision: 7,
+    });
+    expect(agentPreviewOptions(record, { type: "published", version: 3 })).toEqual({
+      agent: "support",
+      agentSource: "published",
+      agentVersion: 3,
+    });
   });
 });
 
@@ -131,5 +154,30 @@ describe("Agent Builder advanced configuration", () => {
       { key: "{kind} 引擎“{name}”当前离线", params: { kind: "LLM", name: "gemma" } },
       { key: "音色“{voice}”在所选引擎中不可用", params: { voice: "calm" } },
     ]);
+  });
+
+  test("exports a complete portable YAML draft without losing Unicode or nested specs", () => {
+    const exported = agentExportYaml({
+      ...record,
+      name: "客服：主助手",
+      description: "Handles \"priority\" cases",
+      spec: {
+        instructions: "先确认问题，再回答。",
+        pronunciations: { VoxStudio: "沃克斯", "A:B": "诶比" },
+        keyterms: ["VoxStudio", "Agent Builder"],
+        studioTools: true,
+      },
+    });
+    expect(exported.startsWith("# VoxStudio Agent draft\n")).toBe(true);
+    expect(Bun.YAML.parse(exported)).toMatchObject({
+      id: "support",
+      name: "客服：主助手",
+      description: "Handles \"priority\" cases",
+      spec: {
+        pronunciations: { VoxStudio: "沃克斯", "A:B": "诶比" },
+        keyterms: ["VoxStudio", "Agent Builder"],
+        studioTools: true,
+      },
+    });
   });
 });

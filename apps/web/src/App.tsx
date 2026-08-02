@@ -173,8 +173,8 @@ export function App() {
     setMobileNavOpen(false);
   };
 
-  const closeAgent = (): void => {
-    if (!confirmAgentLeave()) return;
+  const closeAgent = (force = false): void => {
+    if (!force && !confirmAgentLeave()) return;
     window.history.pushState(null, "", "/");
     setTabState("agents");
     setAgentId(undefined);

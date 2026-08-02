@@ -49,15 +49,18 @@ The placeholder-object gap that motivated this document is closed. As of
 - structural and live runtime-dependency checks block invalid saves, previews,
   or publishes as appropriate and identify unavailable engines, voices, and MCP
   bindings;
-- Publish creates an immutable version, and Try it live starts the saved draft
-  at an explicit revision through the ordinary authenticated realtime path.
+- Publish creates an immutable version; the Builder lists every snapshot, can
+  restore one into a new mutable draft, and exposes duplicate, YAML export,
+  audit, and delete actions;
+- Try it live is a desktop drawer/mobile full-screen surface that explicitly
+  selects either the revision-pinned draft or an exact immutable published
+  version through the ordinary authenticated realtime path.
 
-The Builder is nevertheless only partially delivered. Configuration and Speech
-now have durable routes and the advanced runtime controls above, but the
-version-list API has no management UI and duplicate/export actions are absent.
-Preview is an inline responsive panel rather than the specified desktop
-drawer/mobile full-screen surface. Deployment, Agent-scoped conversation history,
-statistics, `VoiceStage`, and Portal reuse have not started.
+The Builder is nevertheless only partially delivered. Configuration, Speech,
+version lifecycle, and the core preview shell are implemented, but preview text
+input, settings, feedback, and the complete failure matrix remain. Deployment,
+Agent-scoped conversation history, statistics, `VoiceStage`, and Portal reuse
+have not started.
 
 ## References inspected
 
@@ -449,15 +452,16 @@ stage component does not require sharing the entire page theme.
    pending**: `AgentRecord`/`AgentSpec`, owner-scoped YAML registry, immutable
    published snapshots, resolution, CRUD, publish/audit, and native session start
    by Agent id are implemented. CLI Agent commands remain.
-2. **Builder foundation — Configuration/Speech delivered 2026-08-02**: the real
+2. **Builder foundation — delivered 2026-08-02**: the real
    list, template creation, durable section routes, shared header, revision-safe
    saving, publish, runtime-dependency alerts, and advanced Configuration/Speech
-   controls are implemented. Duplicate/export actions and version history remain.
-3. **Try it live — draft preview slice delivered 2026-08-02**: revision-pinned
-   draft start, transcript, connection truth, mute, stop reply, restart, and end
-   use existing session events. Published-version selection, desktop drawer,
-   mobile full screen, text input, settings, feedback, and the complete failure
-   matrix remain.
+   controls are implemented, together with duplicate, YAML export, audit,
+   delete, immutable version history, and restore-as-draft.
+3. **Try it live — core preview shell delivered 2026-08-02**: revision-pinned
+   draft or exact published-version start, transcript, connection truth, mute,
+   stop reply, restart, and end use existing session events in a desktop drawer
+   or mobile full-screen surface. Text input, settings, feedback, and the
+   complete failure matrix remain.
 4. **VoiceStage — not started**: state-driven visual, reduced-motion/fallback
    paths, and preview integration. This is the first implementation of the
    StreamCore-inspired presentation.

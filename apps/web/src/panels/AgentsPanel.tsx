@@ -9,7 +9,9 @@ import {
   ChevronDown,
   CircleStop,
   Copy,
+  Download,
   Headphones,
+  History,
   LoaderCircle,
   Mic,
   MicOff,
@@ -27,6 +29,7 @@ import {
   UserRoundSearch,
   Volume2,
   Wrench,
+  X,
 } from "lucide-react";
 import { PageHeader, pageShellClass, primaryButton, secondaryButton } from "../components/StudioPage";
 import { conversationControls, startConversation, stopConversation } from "../conversation";
@@ -37,11 +40,13 @@ import {
   deleteAgent,
   getAgent,
   listAgents,
+  listAgentVersions,
   listRuntimeCatalog,
   listVoices,
   publishAgent,
   updateAgent,
   type AgentAudit,
+  type AgentPublishedVersion,
   type AgentRecord,
   type AgentSpec,
   type EngineEntry,
@@ -151,9 +156,58 @@ export function displayTime(value: string, locale: UiLocale): string {
   return new Intl.DateTimeFormat(dateLocales[locale], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
+const auditStatusKeys = {
+  unpublished: "未发布",
+  current: "已发布",
+  drifted: "已漂移",
+  missing_snapshot: "发布快照缺失",
+} as const satisfies Record<AgentAudit["status"], MessageKey>;
+
 function agentSlug(value: string): string {
   const latin = value.normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
   return latin || `agent-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+function yamlKey(value: string): string {
+  return /^[A-Za-z_][A-Za-z0-9_-]*$/.test(value) ? value : JSON.stringify(value);
+}
+
+function yamlScalar(value: string | number | boolean | null): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (value === null) return "null";
+  return String(value);
+}
+
+function yamlLines(value: Record<string, unknown>, depth = 0): string[] {
+  const indent = "  ".repeat(depth);
+  const lines: string[] = [];
+  for (const [key, item] of Object.entries(value)) {
+    if (item === undefined) continue;
+    if (Array.isArray(item)) {
+      lines.push(`${indent}${yamlKey(key)}: ${item.length === 0 ? "[]" : `[${item.map(entry => yamlScalar(entry as string | number | boolean | null)).join(", ")}]`}`);
+    } else if (typeof item === "object" && item !== null) {
+      const nested = yamlLines(item as Record<string, unknown>, depth + 1);
+      lines.push(nested.length > 0 ? `${indent}${yamlKey(key)}:` : `${indent}${yamlKey(key)}: {}`);
+      lines.push(...nested);
+    } else {
+      lines.push(`${indent}${yamlKey(key)}: ${yamlScalar(item as string | number | boolean | null)}`);
+    }
+  }
+  return lines;
+}
+
+/** A portable Agent draft export. Quoted JSON scalars keep arbitrary Unicode valid YAML. */
+export function agentExportYaml(record: AgentRecord): string {
+  return `# VoxStudio Agent draft\n${yamlLines(record as unknown as Record<string, unknown>).join("\n")}\n`;
+}
+
+function downloadAgentYaml(record: AgentRecord): void {
+  const url = URL.createObjectURL(new Blob([agentExportYaml(record)], { type: "application/yaml;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${record.id}.yaml`;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function AgentAvatar({ id, size = "size-7" }: { id: string; size?: string }) {
@@ -167,12 +221,12 @@ interface AgentsPanelProps {
   agentSection: AgentSection;
   onOpenAgent(id: string): void;
   onOpenAgentSection(section: AgentSection): void;
-  onCloseAgent(): void;
+  onCloseAgent(force?: boolean): void;
   onDirtyChange(dirty: boolean): void;
 }
 
 export function AgentsPanel({ agentId, agentSection, onOpenAgent, onOpenAgentSection, onCloseAgent, onDirtyChange }: AgentsPanelProps) {
-  if (agentId) return <AgentBuilder agentId={agentId} section={agentSection} onSectionChange={onOpenAgentSection} onClose={onCloseAgent} onDirtyChange={onDirtyChange} />;
+  if (agentId) return <AgentBuilder agentId={agentId} section={agentSection} onOpenAgent={onOpenAgent} onSectionChange={onOpenAgentSection} onClose={onCloseAgent} onDirtyChange={onDirtyChange} />;
   return <AgentList onOpenAgent={onOpenAgent} />;
 }
 
@@ -186,6 +240,7 @@ function AgentList({ onOpenAgent }: { onOpenAgent(id: string): void }) {
   const [query, setQuery] = useState("");
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [createTemplate, setCreateTemplate] = useState<Template | null | undefined>(undefined);
+  const [duplicateSource, setDuplicateSource] = useState<AgentRecord>();
   const [actionsId, setActionsId] = useState<string>();
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -291,6 +346,10 @@ function AgentList({ onOpenAgent }: { onOpenAgent(id: string): void }) {
               {actionsId === agent.id && (
                 <div className="absolute right-0 top-9 z-20 w-44 rounded-xl border border-edge bg-canvas p-1.5 shadow-[0_12px_32px_rgba(0,0,0,0.12)]">
                   <button onClick={event => { event.stopPropagation(); void navigator.clipboard?.writeText(agent.id); setActionsId(undefined); toast("info", t("已复制助手 ID")); }} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[12px] hover:bg-fill-hover"><Copy className="size-3.5 text-fg-muted" />{t("复制助手 ID")}</button>
+                  <button onClick={event => { event.stopPropagation(); setActionsId(undefined); setDuplicateSource(agent); }} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[12px] hover:bg-fill-hover"><Plus className="size-3.5 text-fg-muted" />{t("复制助手")}</button>
+                  <button onClick={event => { event.stopPropagation(); setActionsId(undefined); downloadAgentYaml(agent); toast("info", t("已导出助手 YAML")); }} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[12px] hover:bg-fill-hover"><Download className="size-3.5 text-fg-muted" />{t("导出 YAML")}</button>
+                  <button onClick={event => { event.stopPropagation(); setActionsId(undefined); void auditAgent(agent.id).then(result => toast("info", t("审计结果：{status}", { status: t(auditStatusKeys[result.status]) }))).catch(error => toast("error", error instanceof Error ? error.message : String(error))); }} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[12px] hover:bg-fill-hover"><ShieldCheck className="size-3.5 text-fg-muted" />{t("审计助手")}</button>
+                  <div className="my-1 border-t border-edge-faint" />
                   <button onClick={event => { event.stopPropagation(); setActionsId(undefined); void remove(agent); }} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[12px] text-danger hover:bg-danger-surface"><Trash2 className="size-3.5" />{t("删除助手")}</button>
                 </div>
               )}
@@ -308,6 +367,7 @@ function AgentList({ onOpenAgent }: { onOpenAgent(id: string): void }) {
       </div>
 
       {createTemplate !== undefined && <CreateAgentDialog template={createTemplate} onClose={() => setCreateTemplate(undefined)} onCreated={agent => { setAgents(current => [agent, ...current]); setCreateTemplate(undefined); onOpenAgent(agent.id); }} />}
+      {duplicateSource && <DuplicateAgentDialog source={duplicateSource} onClose={() => setDuplicateSource(undefined)} onCreated={agent => { setAgents(current => [agent, ...current]); setDuplicateSource(undefined); onOpenAgent(agent.id); }} />}
     </div>
   );
 }
@@ -352,6 +412,48 @@ function CreateAgentDialog({ template, onClose, onCreated }: { template: Templat
         <input value={id} onChange={event => { setIdTouched(true); setId(event.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, "-")); }} placeholder="customer-support" className="mt-2 h-10 w-full rounded-lg border border-edge-strong bg-surface px-3 font-mono text-[12px]" />
         {failure && <p className="mt-3 text-[11px] leading-5 text-danger">{failure}</p>}
         <div className="mt-6 flex justify-end gap-2"><button onClick={onClose} disabled={saving} className={secondaryButton}>{t("取消")}</button><button onClick={() => void submit()} disabled={saving || !name.trim() || !id.trim()} className={primaryButton}>{saving ? <LoaderCircle className="size-4 animate-spin" /> : <Plus className="size-4" />}{t("创建助手")}</button></div>
+      </div>
+    </div>
+  );
+}
+
+function DuplicateAgentDialog({ source, onClose, onCreated }: { source: AgentRecord; onClose(): void; onCreated(agent: AgentRecord): void }) {
+  const t = useT();
+  const [name, setName] = useState(t("{name} 副本", { name: source.name }));
+  const [id, setId] = useState(`${source.id}-copy`.slice(0, 64));
+  const [idTouched, setIdTouched] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [failure, setFailure] = useState("");
+
+  const submit = async () => {
+    const cleanName = name.trim();
+    const cleanId = id.trim();
+    if (!cleanName || !cleanId) return;
+    setSaving(true); setFailure("");
+    try {
+      onCreated(await createAgent({
+        id: cleanId,
+        name: cleanName,
+        ...(source.description ? { description: source.description } : {}),
+        ...(source.avatar ? { avatar: source.avatar } : {}),
+        spec: source.spec,
+      }));
+    } catch (error) {
+      setFailure(error instanceof Error ? error.message : String(error));
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 px-4 backdrop-blur-[2px]" onMouseDown={event => { if (event.target === event.currentTarget && !saving) onClose(); }}>
+      <div role="dialog" aria-modal="true" aria-labelledby="duplicate-agent-title" className="w-full max-w-[430px] rounded-2xl border border-edge bg-canvas p-6 shadow-[0_24px_80px_rgba(0,0,0,0.18)]">
+        <div className="flex items-start gap-3"><span className="flex size-10 items-center justify-center rounded-xl bg-fill-active text-fg-secondary"><Copy className="size-5" /></span><div><h2 id="duplicate-agent-title" className="text-[17px] font-semibold tracking-[-0.02em]">{t("复制助手")}</h2><p className="mt-1 text-[12px] text-fg-muted">{t("复制配置并创建一个独立的新助手。")}</p></div></div>
+        <label className="mt-6 block text-[11px] font-medium text-fg-secondary">{t("名称")}</label>
+        <input autoFocus value={name} onChange={event => { setName(event.target.value); if (!idTouched) setId(agentSlug(event.target.value).slice(0, 64)); }} className="mt-2 h-10 w-full rounded-lg border border-edge-strong bg-surface px-3 text-[13px]" />
+        <label className="mt-4 block text-[11px] font-medium text-fg-secondary">Agent ID</label>
+        <input value={id} onChange={event => { setIdTouched(true); setId(event.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, "-").slice(0, 64)); }} className="mt-2 h-10 w-full rounded-lg border border-edge-strong bg-surface px-3 font-mono text-[12px]" />
+        {failure && <p className="mt-3 text-[11px] leading-5 text-danger">{failure}</p>}
+        <div className="mt-6 flex justify-end gap-2"><button onClick={onClose} disabled={saving} className={secondaryButton}>{t("取消")}</button><button onClick={() => void submit()} disabled={saving || !name.trim() || !id.trim()} className={primaryButton}>{saving ? <LoaderCircle className="size-4 animate-spin" /> : <Copy className="size-4" />}{t("创建副本")}</button></div>
       </div>
     </div>
   );
@@ -567,11 +669,20 @@ export function validateAgentDraftDependencies(
   return issues;
 }
 
-function AgentBuilder({ agentId, section, onSectionChange, onClose, onDirtyChange }: {
+export type AgentPreviewSource = { type: "draft" } | { type: "published"; version: number };
+
+export function agentPreviewOptions(record: AgentRecord, source: AgentPreviewSource) {
+  return source.type === "draft"
+    ? { agent: record.id, agentSource: "draft" as const, agentRevision: record.revision }
+    : { agent: record.id, agentSource: "published" as const, agentVersion: source.version };
+}
+
+function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose, onDirtyChange }: {
   agentId: string;
   section: AgentSection;
+  onOpenAgent(id: string): void;
   onSectionChange(section: AgentSection): void;
-  onClose(): void;
+  onClose(force?: boolean): void;
   onDirtyChange(dirty: boolean): void;
 }) {
   const t = useT();
@@ -585,6 +696,15 @@ function AgentBuilder({ agentId, section, onSectionChange, onClose, onDirtyChang
   const [runtimeCatalogReady, setRuntimeCatalogReady] = useState(false);
   const [voiceCatalogReady, setVoiceCatalogReady] = useState(false);
   const [audit, setAudit] = useState<AgentAudit>();
+  const [versions, setVersions] = useState<AgentPublishedVersion[]>([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [versionsFailure, setVersionsFailure] = useState("");
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewSource, setPreviewSource] = useState<AgentPreviewSource>({ type: "draft" });
+  const [duplicateSource, setDuplicateSource] = useState<AgentRecord>();
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [failure, setFailure] = useState("");
   const [saving, setSaving] = useState(false);
@@ -594,14 +714,17 @@ function AgentBuilder({ agentId, section, onSectionChange, onClose, onDirtyChang
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current;
     setLoading(true); setFailure("");
-    setRecord(undefined); setDraft(undefined); setAudit(undefined);
+    setRecord(undefined); setDraft(undefined); setAudit(undefined); setVersions([]); setVersionsFailure("");
+    setVersionsOpen(false); setPreviewOpen(false); setPreviewSource({ type: "draft" });
+    setDuplicateSource(undefined); setActionsOpen(false);
     setRuntimeCatalogReady(false); setVoiceCatalogReady(false);
     try {
-      const [next, voiceBank, runtimeCatalog, nextAudit] = await Promise.all([
+      const [next, voiceBank, runtimeCatalog, nextAudit, nextVersions] = await Promise.all([
         getAgent(agentId),
         listVoices().catch(() => undefined),
         listRuntimeCatalog().catch(() => undefined),
         auditAgent(agentId).catch(() => undefined),
+        listAgentVersions(agentId).catch(() => undefined),
       ]);
       if (generation !== loadGeneration.current) return;
       setRecord(next); setDraft(draftFrom(next));
@@ -609,16 +732,26 @@ function AgentBuilder({ agentId, section, onSectionChange, onClose, onDirtyChang
       setEngines(runtimeCatalog?.engines ?? []); setMcpServers(runtimeCatalog?.mcpServers ?? []);
       setRuntimeCatalogReady(runtimeCatalog !== undefined);
       setAudit(nextAudit);
+      setVersions(nextVersions ?? []);
+      if (nextVersions === undefined) setVersionsFailure(t("无法加载版本历史"));
     } catch (error) {
       if (generation !== loadGeneration.current) return;
       setFailure(error instanceof Error ? error.message : String(error));
     } finally { if (generation === loadGeneration.current) setLoading(false); }
-  }, [agentId]);
+  }, [agentId, t]);
 
   useEffect(() => {
     void load();
     return () => { loadGeneration.current += 1; };
   }, [load]);
+  useEffect(() => {
+    if (!actionsOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!(event.target as Element).closest?.("[data-builder-actions]")) setActionsOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [actionsOpen]);
   const dirty = useMemo(() => Boolean(record && draft && JSON.stringify(draft) !== JSON.stringify(draftFrom(record))), [record, draft]);
   const behaviorDirty = useMemo(() => Boolean(record && draft && dirty && agentBehaviorChanged(draft, record.spec)), [dirty, draft, record]);
   useEffect(() => {
@@ -671,6 +804,7 @@ function AgentBuilder({ agentId, section, onSectionChange, onClose, onDirtyChang
       if (latestAudit.status === "current") return;
       const result = await publishAgent(saved.id, saved.revision);
       setRecord(result.record); setDraft(draftFrom(result.record));
+      setVersions(current => [result.version, ...current.filter(version => version.version !== result.version.version)]);
       setAudit({ status: "current", draftHash: result.version.hash, publishedHash: result.version.hash, version: result.version.version });
       toast("info", `${t("发布")} v${result.version.version}`);
     } catch (error) {
@@ -678,8 +812,76 @@ function AgentBuilder({ agentId, section, onSectionChange, onClose, onDirtyChang
     } finally { setPublishing(false); }
   };
 
+  const refreshVersions = async () => {
+    setVersionsLoading(true); setVersionsFailure("");
+    try {
+      setVersions(await listAgentVersions(agentId));
+    } catch (error) {
+      setVersionsFailure(error instanceof Error ? error.message : String(error));
+    } finally {
+      setVersionsLoading(false);
+    }
+  };
+
+  const restoreVersion = (version: AgentPublishedVersion) => {
+    if (!record) return;
+    if (dirty && !window.confirm(t("恢复版本会替换当前未保存的更改，继续吗？"))) return;
+    setDraft(draftFrom({ ...record, spec: version.spec }));
+    setVersionsOpen(false);
+    toast("info", t("已将 v{version} 恢复为草稿；保存后生效。", { version: version.version }));
+  };
+
+  const runAudit = async () => {
+    setActionBusy(true); setActionsOpen(false);
+    try {
+      const result = await auditAgent(agentId);
+      setAudit(result);
+      toast("info", t("审计结果：{status}", { status: t(auditStatusKeys[result.status]) }));
+    } catch (error) {
+      toast("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const prepareDuplicate = async () => {
+    setActionBusy(true); setActionsOpen(false);
+    try {
+      const saved = await save();
+      if (saved) setDuplicateSource(saved);
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const exportYaml = async () => {
+    setActionBusy(true); setActionsOpen(false);
+    try {
+      const saved = await save();
+      if (saved) {
+        downloadAgentYaml(saved);
+        toast("info", t("已导出助手 YAML"));
+      }
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const removeBuilderAgent = async () => {
+    if (!record || !window.confirm(`${t("删除助手")} “${record.name}”？`)) return;
+    setActionBusy(true); setActionsOpen(false);
+    try {
+      await deleteAgent(record.id, record.revision);
+      toast("info", t("已从列表移除助手"));
+      onClose(true);
+    } catch (error) {
+      toast("error", error instanceof Error ? error.message : String(error));
+      setActionBusy(false);
+    }
+  };
+
   if (loading) return <div className="flex h-full items-center justify-center"><LoaderCircle className="size-6 animate-spin text-fg-faint" /></div>;
-  if (!record || !draft) return <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center text-[13px] text-danger"><span>{failure || t("获取助手")}</span><div className="flex gap-2"><button onClick={onClose} className={secondaryButton}><ArrowLeft className="size-4" />{t("助手")}</button><button onClick={() => void load()} className={secondaryButton}><RotateCw className="size-4" />{t("刷新")}</button></div></div>;
+  if (!record || !draft) return <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center text-[13px] text-danger"><span>{failure || t("获取助手")}</span><div className="flex gap-2"><button onClick={() => onClose()} className={secondaryButton}><ArrowLeft className="size-4" />{t("助手")}</button><button onClick={() => void load()} className={secondaryButton}><RotateCw className="size-4" />{t("刷新")}</button></div></div>;
 
   const status = validationIssues.length > 0
     ? { label: t("配置无效"), tone: "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300" }
@@ -694,16 +896,30 @@ function AgentBuilder({ agentId, section, onSectionChange, onClose, onDirtyChang
   return (
     <div className="min-h-full bg-surface/55">
       <div className="sticky top-0 z-20 border-b border-edge-faint bg-canvas/95 backdrop-blur">
-        <div className="mx-auto flex min-h-[66px] max-w-[1440px] items-center gap-3 px-4 sm:px-7 lg:px-10">
-          <button onClick={onClose} aria-label={t("返回")} className="flex size-9 shrink-0 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg"><ArrowLeft className="size-[18px]" /></button>
-          <AgentAvatar id={record.id} size="size-8" />
+        <div className="mx-auto flex min-h-[66px] max-w-[1440px] items-center gap-2 px-3 sm:gap-3 sm:px-7 lg:px-10">
+          <button onClick={() => onClose()} aria-label={t("返回")} className="flex size-9 shrink-0 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg"><ArrowLeft className="size-[18px]" /></button>
+          <span className="hidden sm:inline-flex"><AgentAvatar id={record.id} size="size-8" /></span>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2"><span className="truncate text-[14px] font-semibold">{draft.name || record.id}</span><span className={`hidden rounded-full px-2 py-0.5 text-[9px] font-medium sm:inline ${status.tone}`}>{status.label}</span></div>
             <span className="block truncate text-[9px] text-fg-faint">{record.id}{record.published ? ` · v${record.published.version} · ${t("发布于 {time}", { time: displayTime(record.published.publishedAt, locale) })}` : ""}</span>
           </div>
-          <span className="hidden items-center gap-1.5 text-[10px] text-fg-faint sm:flex">{dirty ? <><span className="size-1.5 rounded-full bg-amber-400" />{t("有未保存的更改")}</> : <><Check className="size-3" />{t("已保存")}</>}</span>
-          <button onClick={() => void save()} disabled={!dirty || saving || publishing || shapeIssues.length > 0} className={secondaryButton}>{saving ? <LoaderCircle className="size-4 animate-spin" /> : null}{t("保存")}</button>
-          <button onClick={() => void publish()} disabled={publishDisabled} className={primaryButton}>{publishing ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-3.5" />}{t("发布")}</button>
+          <span className="hidden items-center gap-1.5 text-[10px] text-fg-faint lg:flex">{dirty ? <><span className="size-1.5 rounded-full bg-amber-400" />{t("有未保存的更改")}</> : <><Check className="size-3" />{t("已保存")}</>}</span>
+          <button onClick={() => setVersionsOpen(true)} title={t("版本历史")} aria-label={t("版本历史")} className="hidden size-9 shrink-0 items-center justify-center rounded-full border border-edge bg-canvas text-fg-secondary hover:bg-fill-hover md:flex"><History className="size-3.5" /></button>
+          <button onClick={() => setPreviewOpen(true)} title={t("实时试用")} className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-full border border-edge bg-canvas px-2.5 text-[11px] font-medium text-fg-secondary hover:bg-fill-hover sm:px-3"><Mic className="size-3.5" /><span className="hidden xl:inline">{t("实时试用")}</span></button>
+          <button onClick={() => void save()} disabled={!dirty || saving || publishing || shapeIssues.length > 0} title={t("保存")} className="inline-flex h-9 shrink-0 items-center justify-center rounded-full border border-edge bg-canvas px-2.5 text-[11px] font-medium text-fg-secondary hover:bg-fill-hover disabled:cursor-not-allowed disabled:opacity-40 sm:px-3">{saving ? <LoaderCircle className="size-3.5 animate-spin" /> : <Check className="size-3.5 sm:hidden" />}<span className="hidden sm:inline">{t("保存")}</span></button>
+          <button onClick={() => void publish()} disabled={publishDisabled} title={t("发布")} className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-full bg-ink px-2.5 text-[11px] font-medium text-on-ink hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-40 sm:px-4">{publishing ? <LoaderCircle className="size-3.5 animate-spin" /> : <Send className="size-3.5" />}<span className="hidden sm:inline">{t("发布")}</span></button>
+          <div data-builder-actions className="relative shrink-0">
+            <button onClick={() => setActionsOpen(open => !open)} disabled={actionBusy} aria-label={t("助手操作")} aria-expanded={actionsOpen} className="flex size-9 items-center justify-center rounded-full text-fg-muted hover:bg-fill-hover hover:text-fg disabled:opacity-40">{actionBusy ? <LoaderCircle className="size-4 animate-spin" /> : <MoreHorizontal className="size-4.5" />}</button>
+            {actionsOpen ? <div className="absolute right-0 top-11 z-40 w-48 rounded-xl border border-edge bg-canvas p-1.5 shadow-[0_16px_44px_rgba(0,0,0,0.15)]">
+              <button onClick={() => { setActionsOpen(false); void navigator.clipboard?.writeText(record.id); toast("info", t("已复制助手 ID")); }} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] hover:bg-fill-hover"><Copy className="size-3.5 text-fg-muted" />{t("复制助手 ID")}</button>
+              <button onClick={() => void prepareDuplicate()} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] hover:bg-fill-hover"><Plus className="size-3.5 text-fg-muted" />{t("复制助手")}</button>
+              <button onClick={() => void exportYaml()} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] hover:bg-fill-hover"><Download className="size-3.5 text-fg-muted" />{t("导出 YAML")}</button>
+              <button onClick={() => void runAudit()} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] hover:bg-fill-hover"><ShieldCheck className="size-3.5 text-fg-muted" />{t("审计助手")}</button>
+              <button onClick={() => { setActionsOpen(false); setVersionsOpen(true); }} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] hover:bg-fill-hover md:hidden"><History className="size-3.5 text-fg-muted" />{t("版本历史")}</button>
+              <div className="my-1 border-t border-edge-faint" />
+              <button onClick={() => void removeBuilderAgent()} className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12px] text-danger hover:bg-danger-surface"><Trash2 className="size-3.5" />{t("删除助手")}</button>
+            </div> : null}
+          </div>
         </div>
         <nav className="mx-auto flex max-w-[1440px] gap-6 overflow-x-auto px-4 sm:px-7 lg:px-10" aria-label={t("助手")}>
           {(["configuration", "speech"] as const).map(item => (
@@ -724,7 +940,7 @@ function AgentBuilder({ agentId, section, onSectionChange, onClose, onDirtyChang
         </div>
       ) : null}
 
-      <div className="mx-auto grid w-full max-w-[1440px] gap-5 px-4 py-6 sm:px-7 lg:px-10 xl:grid-cols-[minmax(0,1fr)_400px] xl:items-start">
+      <div className="mx-auto w-full max-w-[1040px] px-4 py-6 sm:px-7 lg:px-10">
         <div className="space-y-5">
           {section === "configuration" ? (
             <>
@@ -786,8 +1002,74 @@ function AgentBuilder({ agentId, section, onSectionChange, onClose, onDirtyChang
           )}
         </div>
 
-        <TryItLive record={record} dirty={dirty} onSave={save} audit={audit} blocked={validationIssues.length > 0} />
       </div>
+
+      {versionsOpen ? <VersionHistoryDrawer
+        record={record}
+        versions={versions}
+        loading={versionsLoading}
+        failure={versionsFailure}
+        dirty={dirty}
+        previewSource={previewSource}
+        onClose={() => setVersionsOpen(false)}
+        onReload={() => void refreshVersions()}
+        onRestore={restoreVersion}
+        onPreviewDraft={() => { setPreviewSource({ type: "draft" }); setVersionsOpen(false); setPreviewOpen(true); }}
+        onPreview={version => { setPreviewSource({ type: "published", version: version.version }); setVersionsOpen(false); setPreviewOpen(true); }}
+      /> : null}
+      {previewOpen ? <TryItLive record={record} versions={versions} source={previewSource} onSourceChange={setPreviewSource} dirty={dirty} onSave={save} blocked={validationIssues.length > 0} onClose={() => setPreviewOpen(false)} /> : null}
+      {duplicateSource ? <DuplicateAgentDialog source={duplicateSource} onClose={() => setDuplicateSource(undefined)} onCreated={agent => { setDuplicateSource(undefined); onOpenAgent(agent.id); }} /> : null}
+    </div>
+  );
+}
+
+function VersionHistoryDrawer({ record, versions, loading, failure, dirty, previewSource, onClose, onReload, onRestore, onPreviewDraft, onPreview }: {
+  record: AgentRecord;
+  versions: AgentPublishedVersion[];
+  loading: boolean;
+  failure: string;
+  dirty: boolean;
+  previewSource: AgentPreviewSource;
+  onClose(): void;
+  onReload(): void;
+  onRestore(version: AgentPublishedVersion): void;
+  onPreviewDraft(): void;
+  onPreview(version: AgentPublishedVersion): void;
+}) {
+  const t = useT();
+  const locale = resolveLocale(useI18n(state => state.locale));
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/20 backdrop-blur-[1px]" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <aside role="dialog" aria-modal="true" aria-labelledby="version-history-title" className="absolute inset-y-0 right-0 flex w-full flex-col border-l border-edge bg-canvas shadow-[-18px_0_60px_rgba(0,0,0,0.12)] sm:max-w-[460px]">
+        <header className="flex shrink-0 items-start gap-3 border-b border-edge px-5 py-5 sm:px-6">
+          <span className="flex size-9 items-center justify-center rounded-xl bg-fill-active text-fg-secondary"><History className="size-4" /></span>
+          <div className="min-w-0 flex-1"><h2 id="version-history-title" className="text-[15px] font-semibold">{t("版本历史")}</h2><p className="mt-1 truncate text-[11px] text-fg-muted">{record.name} · {record.id}</p></div>
+          <button onClick={onClose} aria-label={t("关闭")} className="flex size-9 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg"><X className="size-4" /></button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-6">
+          <section className={`rounded-2xl border p-4 ${previewSource.type === "draft" ? "border-fg bg-fill-faint" : "border-edge bg-surface"}`}>
+            <div className="flex items-start justify-between gap-3"><div><div className="flex items-center gap-2"><span className="text-[12px] font-semibold">{t("当前草稿")}</span>{dirty ? <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[9px] text-amber-700 dark:bg-amber-500/10 dark:text-amber-300">{t("未保存")}</span> : null}</div><p className="mt-1 text-[10px] text-fg-faint">revision {record.revision} · {displayTime(record.updatedAt, locale)}</p></div><button onClick={onPreviewDraft} className="inline-flex h-8 items-center gap-1.5 rounded-full border border-edge bg-canvas px-3 text-[10px] font-medium hover:bg-fill-hover"><Mic className="size-3" />{t("试用")}</button></div>
+          </section>
+
+          <div className="my-5 flex items-center justify-between"><h3 className="text-[11px] font-semibold text-fg-secondary">{t("已发布版本")}</h3><span className="text-[10px] text-fg-faint">{t("共 {n} 个版本", { n: versions.length })}</span></div>
+          {loading ? <div className="flex min-h-40 items-center justify-center"><LoaderCircle className="size-5 animate-spin text-fg-faint" /></div> : failure ? <div className="flex min-h-40 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-edge px-5 text-center text-[11px] text-danger"><span>{failure}</span><button onClick={onReload} className={secondaryButton}><RotateCw className="size-3.5" />{t("重试")}</button></div> : versions.length === 0 ? <div className="flex min-h-40 flex-col items-center justify-center rounded-xl border border-dashed border-edge px-5 text-center"><History className="size-5 text-fg-faint" /><p className="mt-3 text-[11px] font-medium">{t("尚未发布任何版本")}</p><p className="mt-1 text-[10px] leading-5 text-fg-faint">{t("发布后，版本快照会不可变地保存在这里。")}</p></div> : <div className="space-y-3">{versions.map(version => {
+            const current = record.published?.version === version.version;
+            const selected = previewSource.type === "published" && previewSource.version === version.version;
+            return <article key={version.version} className={`rounded-2xl border p-4 transition ${selected ? "border-fg bg-fill-faint" : "border-edge bg-canvas hover:border-edge-strong"}`}>
+              <div className="flex items-start justify-between gap-3"><div><div className="flex items-center gap-2"><span className="text-[13px] font-semibold">v{version.version}</span>{current ? <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">{t("当前发布")}</span> : null}</div><p className="mt-1 text-[10px] text-fg-faint">{displayTime(version.publishedAt, locale)}</p></div><button onClick={() => { void navigator.clipboard?.writeText(version.hash); }} title={t("复制 Hash")} className="flex h-8 items-center gap-1.5 rounded-lg px-2 font-mono text-[9px] text-fg-muted hover:bg-fill-hover"><span>{version.hash.slice(0, 10)}</span><Copy className="size-3" /></button></div>
+              <div className="mt-4 flex gap-2"><button onClick={() => onPreview(version)} className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full border border-edge bg-canvas px-3 text-[10px] font-medium hover:bg-fill-hover"><Mic className="size-3" />{t("试用此版本")}</button><button onClick={() => onRestore(version)} className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full border border-edge bg-canvas px-3 text-[10px] font-medium hover:bg-fill-hover"><RotateCw className="size-3" />{t("恢复为草稿")}</button></div>
+            </article>;
+          })}</div>}
+        </div>
+        <footer className="shrink-0 border-t border-edge-faint px-5 py-4 text-[10px] leading-5 text-fg-faint sm:px-6">{t("已发布版本不可修改；恢复操作只会更新当前草稿。")}</footer>
+      </aside>
     </div>
   );
 }
@@ -892,12 +1174,15 @@ export function previewStatusLabel(connection: ConnectionState, sessionState: st
   return previewSessionLabels[sessionState] ?? "聆听中";
 }
 
-function TryItLive({ record, dirty, onSave, audit, blocked }: {
+function TryItLive({ record, versions, source, onSourceChange, dirty, onSave, blocked, onClose }: {
   record: AgentRecord;
+  versions: AgentPublishedVersion[];
+  source: AgentPreviewSource;
+  onSourceChange(source: AgentPreviewSource): void;
   dirty: boolean;
   onSave(): Promise<AgentRecord | undefined>;
-  audit: AgentAudit | undefined;
   blocked: boolean;
+  onClose(): void;
 }) {
   const t = useT();
   const active = useStudio(state => state.active);
@@ -930,6 +1215,12 @@ function TryItLive({ record, dirty, onSave, audit, blocked }: {
   }, []);
 
   useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape" && !starting) onClose(); };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose, starting]);
+
+  useEffect(() => {
     if (!followLatest.current) {
       setHasUnseen(true);
       return;
@@ -958,20 +1249,20 @@ function TryItLive({ record, dirty, onSave, audit, blocked }: {
 
   const start = async () => {
     if (previewStarting.current) return;
-    if (blocked) { toast("error", t("修复以下配置问题后才能发布或试用：")); return; }
+    if (blocked && source.type === "draft") { toast("error", t("修复以下配置问题后才能发布或试用：")); return; }
     if (active) { toast("error", t("请先结束当前实时对话")); return; }
     const generation = ++operationGeneration.current;
     const current = () => mounted.current && operationGeneration.current === generation;
     previewStarting.current = true;
     setStarting(true);
     try {
-      const saved = dirty ? await onSave() : record;
+      const saved = source.type === "draft" && dirty ? await onSave() : record;
       if (!saved) return;
       if (!current()) return;
       clearHistory();
       followLatest.current = true;
       setHasUnseen(false);
-      await startConversation({ agent: saved.id, agentSource: "draft", agentRevision: saved.revision });
+      await startConversation(agentPreviewOptions(saved, source));
       if (!current()) return;
       previewOwned.current = true;
     } catch (error) {
@@ -992,7 +1283,7 @@ function TryItLive({ record, dirty, onSave, audit, blocked }: {
   };
 
   const restart = async () => {
-    if (!previewOwned.current || previewStarting.current || blocked) return;
+    if (!previewOwned.current || previewStarting.current || (blocked && source.type === "draft")) return;
     const generation = ++operationGeneration.current;
     const current = () => mounted.current && operationGeneration.current === generation;
     // Keep the old session alive while a dirty draft saves; only replace it once the
@@ -1000,7 +1291,7 @@ function TryItLive({ record, dirty, onSave, audit, blocked }: {
     setStarting(true);
     previewStarting.current = true;
     try {
-      const saved = dirty ? await onSave() : record;
+      const saved = source.type === "draft" && dirty ? await onSave() : record;
       if (!saved || !current()) return;
       previewOwned.current = false;
       await stopConversation();
@@ -1008,7 +1299,7 @@ function TryItLive({ record, dirty, onSave, audit, blocked }: {
       clearHistory();
       followLatest.current = true;
       setHasUnseen(false);
-      await startConversation({ agent: saved.id, agentSource: "draft", agentRevision: saved.revision });
+      await startConversation(agentPreviewOptions(saved, source));
       if (!current()) return;
       previewOwned.current = true;
     } catch (error) {
@@ -1026,23 +1317,41 @@ function TryItLive({ record, dirty, onSave, audit, blocked }: {
   const stateLabel = isPreview ? t(previewStatusLabel(connection, sessionState)) : t("未开始");
   const latestTurn = turns.at(-1);
   const liveAnnouncement = latestTurn?.status === "completed" && latestTurn.reply ? latestTurn.reply : stateLabel;
+  const sourceValue = source.type === "draft" ? "draft" : `published:${source.version}`;
+  const sourceDescription = source.type === "draft"
+    ? t("使用当前草稿进行实时测试。")
+    : t("使用不可变的已发布版本 v{version} 进行测试。", { version: source.version });
   return (
-    <aside className="flex h-[70dvh] max-h-[680px] flex-col overflow-hidden rounded-2xl border border-edge bg-canvas shadow-[0_8px_30px_rgba(0,0,0,0.05)] xl:sticky xl:top-[90px] xl:h-[calc(100dvh-114px)] xl:max-h-none">
-      <header className="flex shrink-0 items-start justify-between gap-4 border-b border-edge-faint bg-canvas px-5 py-4">
-        <div>
-          <div className="flex items-center gap-2"><h2 className="text-[13px] font-semibold">{t("实时试用")}</h2>{audit?.status === "current" ? <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300">v{audit.version}</span> : null}</div>
-          <p className="mt-1 text-[11px] text-fg-muted">{t("使用当前草稿进行实时测试。")}</p>
+    <div className="fixed inset-0 z-50 bg-black/20 backdrop-blur-[1px]" onMouseDown={event => { if (event.target === event.currentTarget && !starting) onClose(); }}>
+    <aside role="dialog" aria-modal="true" aria-labelledby="try-live-title" className="absolute inset-0 flex flex-col overflow-hidden bg-canvas shadow-[-18px_0_60px_rgba(0,0,0,0.12)] md:left-auto md:w-[430px] md:border-l md:border-edge">
+      <header className="shrink-0 border-b border-edge-faint bg-canvas px-5 py-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2"><h2 id="try-live-title" className="text-[14px] font-semibold">{t("实时试用")}</h2><span className={`rounded-full px-2 py-0.5 text-[9px] ${source.type === "draft" ? "bg-fill-active text-fg-muted" : "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"}`}>{source.type === "draft" ? t("草稿") : `v${source.version}`}</span></div>
+            <p className="mt-1 truncate text-[10px] text-fg-muted">{record.name}</p>
+          </div>
+          <div className="flex items-center gap-1.5">
+            {isPreview ? <button onClick={() => void restart()} disabled={starting || (blocked && source.type === "draft")} title={t("重新开始")} aria-label={t("重新开始")} className="flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg disabled:opacity-40"><RotateCw className={`size-3.5 ${starting ? "animate-spin" : ""}`} /></button> : null}
+            <span className={`mx-1 size-2 rounded-full ${previewConnected ? "bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.12)]" : isPreview ? "bg-amber-400 shadow-[0_0_0_4px_rgba(251,191,36,0.12)]" : "bg-edge-hover"}`} />
+            <button onClick={onClose} disabled={starting} aria-label={t("关闭")} className="flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg disabled:opacity-40"><X className="size-4" /></button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          {isPreview ? <button onClick={() => void restart()} disabled={starting || blocked} title={t("重新开始")} aria-label={t("重新开始")} className="flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg disabled:opacity-40"><RotateCw className={`size-3.5 ${starting ? "animate-spin" : ""}`} /></button> : null}
-          <span className={`size-2 rounded-full ${previewConnected ? "bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.12)]" : isPreview ? "bg-amber-400 shadow-[0_0_0_4px_rgba(251,191,36,0.12)]" : "bg-edge-hover"}`} />
+        <div className="mt-4 rounded-xl border border-edge bg-surface p-1">
+          <select aria-label={t("试用版本")} value={sourceValue} disabled={isPreview || starting} onChange={event => {
+            const value = event.target.value;
+            onSourceChange(value === "draft" ? { type: "draft" } : { type: "published", version: Number(value.slice("published:".length)) });
+          }} className="h-9 w-full rounded-lg bg-canvas px-3 text-[11px] font-medium text-fg outline-none disabled:opacity-60">
+            <option value="draft">{t("当前草稿")} · revision {record.revision}</option>
+            {versions.map(version => <option key={version.version} value={`published:${version.version}`}>{t("已发布版本")} v{version.version}{record.published?.version === version.version ? ` · ${t("当前发布")}` : ""}</option>)}
+          </select>
         </div>
+        <p className="mt-2 text-[10px] leading-5 text-fg-faint">{sourceDescription}</p>
       </header>
 
       <div className="relative flex min-h-0 flex-1 flex-col bg-surface/45">
         <div ref={messagesRef} onScroll={onMessagesScroll} role="log" aria-label={t("对话记录")} aria-live="off" className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
           {turns.length === 0 ? (
-            <div className="flex h-full min-h-[240px] flex-col items-center justify-center text-center"><span className="flex size-12 items-center justify-center rounded-full border border-edge bg-canvas"><Mic className="size-5 text-fg-muted" /></span><p className="mt-4 text-[12px] font-medium">{t("在浏览器中与助手对话")}</p><p className="mt-1 max-w-[250px] text-[10px] leading-5 text-fg-faint">{t("开始后会使用当前草稿 revision，不影响已发布版本。")}</p></div>
+            <div className="flex h-full min-h-[240px] flex-col items-center justify-center text-center"><span className="flex size-12 items-center justify-center rounded-full border border-edge bg-canvas"><Mic className="size-5 text-fg-muted" /></span><p className="mt-4 text-[12px] font-medium">{t("在浏览器中与助手对话")}</p><p className="mt-1 max-w-[270px] text-[10px] leading-5 text-fg-faint">{sourceDescription}</p></div>
           ) : turns.map(turn => (
             <div key={turn.id} className="space-y-2.5">
               {turn.transcript && <div className="ml-auto w-fit max-w-[86%] rounded-2xl rounded-br-md bg-ink px-3.5 py-2 text-[11px] leading-5 text-on-ink">{turn.transcript}</div>}
@@ -1068,9 +1377,10 @@ function TryItLive({ record, dirty, onSave, audit, blocked }: {
             <button onClick={() => void end()} disabled={starting} className="flex h-10 min-w-0 items-center justify-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 text-[11px] font-medium text-red-600 hover:bg-red-100 disabled:opacity-40 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300"><CircleStop className="size-3.5" />{t("结束测试")}</button>
           </div>
         ) : (
-          <button onClick={() => void start()} disabled={starting || blocked} className="flex h-11 w-full items-center justify-center gap-2 rounded-full bg-ink text-[12px] font-medium text-on-ink transition hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-40">{starting ? <LoaderCircle className="size-4 animate-spin" /> : <Mic className="size-4" />}{dirty ? t("保存并开始测试") : t("开始测试")}</button>
+          <button onClick={() => void start()} disabled={starting || (blocked && source.type === "draft")} className="flex h-11 w-full items-center justify-center gap-2 rounded-full bg-ink text-[12px] font-medium text-on-ink transition hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-40">{starting ? <LoaderCircle className="size-4 animate-spin" /> : <Mic className="size-4" />}{source.type === "draft" && dirty ? t("保存并开始测试") : t("开始测试")}</button>
         )}
       </footer>
     </aside>
+    </div>
   );
 }

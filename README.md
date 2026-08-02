@@ -243,8 +243,9 @@ barge-in detection included (the Silero WASM backend rides along — no native O
 needed). Remote TTS engines can stream Ogg/Opus (`stream_format: opus`,
 ~12KB/s vs raw PCM's 187.5KB/s) for slow WAN links, decoded gateway-side via ffmpeg. The browser studio (`apps/web`) ships six primary surfaces on top of it:
 a registry-backed Agents list and Configuration/Speech Builder (owner-scoped CRUD,
-immutable publish snapshots, revision-safe saving, runtime-dependency validation,
-advanced route/tool/speech controls, and draft Try it live), live conversation
+immutable publish snapshots with restore-as-draft, revision-safe saving,
+duplicate/export/audit actions, runtime-dependency validation, advanced
+route/tool/speech controls, and exact draft/published Try it live), live conversation
 (worklet microphone capture, gapless streamed playback, captions with turn
 state and per-turn timing, the negotiated AEC capability snapshot), generation with takes,
 the voice bank (file upload or in-browser recording, plus design-profile create / audit /
