@@ -15,6 +15,28 @@ function tokenMatches(presented: string, expected: string): boolean {
   return timingSafeEqual(digest(presented), digest(expected));
 }
 
+const openAiApiKeyProtocol = "openai-insecure-api-key.";
+
+/**
+ * The official OpenAI realtime SDK cannot set an Authorization header on a
+ * WebSocket. It carries its API key in an offered subprotocol instead. Read that
+ * credential only on the realtime endpoint and only in the SDK's safe ordering:
+ * plain `realtime` first, secret-bearing offer later. Bun negotiates the first
+ * protocol, so this also keeps the credential out of the response header.
+ */
+export function openAiRealtimeApiKey(request: Request): string | null {
+  if (new URL(request.url).pathname !== "/v1/realtime") return null;
+  const protocols = (request.headers.get("sec-websocket-protocol") ?? "")
+    .split(",")
+    .map(protocol => protocol.trim());
+  const offeredIndex = protocols.findIndex(protocol => protocol.startsWith(openAiApiKeyProtocol));
+  const realtimeIndex = protocols.indexOf("realtime");
+  if (offeredIndex < 0 || realtimeIndex < 0 || realtimeIndex > offeredIndex) return null;
+  const offered = protocols[offeredIndex] as string;
+  const key = offered.slice(openAiApiKeyProtocol.length);
+  return key === "" ? null : key;
+}
+
 /**
  * The single place a credential becomes an identity (docs/auth.md phase 1). Without a
  * configured token every caller is the owner; with one, the token may ride the
@@ -31,6 +53,10 @@ export function resolveAuthContext(request: Request, options: RequestAuthOptions
   }
   const header = request.headers.get("authorization");
   if (header !== null && tokenMatches(header, `Bearer ${options.token}`)) {
+    return { userId: OWNER_USER_ID, via: "token" };
+  }
+  const openAiKey = openAiRealtimeApiKey(request);
+  if (openAiKey !== null && tokenMatches(openAiKey, options.token)) {
     return { userId: OWNER_USER_ID, via: "token" };
   }
   return null;

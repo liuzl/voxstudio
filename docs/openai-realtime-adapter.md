@@ -42,6 +42,10 @@ Subset boundaries, unchanged from the evaluation:
    optional `agent_version=N` pins an exact published snapshot and is invalid without
    an Agent. Agent defaults appear in `session.created`; a later `session.update`
    remains the explicit session layer and may override ordinary Agent defaults.
+   The official SDK transports its API key as an
+   `openai-insecure-api-key.<key>` WebSocket subprotocol. The gateway accepts that at
+   the same identity seam as Bearer/x-api-key credentials, only on this realtime path;
+   authenticated SDK and named-Agent selection therefore compose in one handshake.
 2. **The adapter is an `EventSink`.** It wraps a `GatewaySession` exactly where a
    WebSocket normally sits: native JSON events arrive as strings and are translated
    to OpenAI events; binary reply frames are resampled to PCM16@24kHz and emitted as

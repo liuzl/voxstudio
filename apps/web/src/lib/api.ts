@@ -98,6 +98,7 @@ export async function listAgentVersions(id: string): Promise<AgentPublishedVersi
 export interface DeploymentInfo {
   auth: "self" | "accounts";
   demo: boolean;
+  tokenRequired: boolean;
   demoAgent?: { id: string; version: number };
   maxSessions?: number;
   maxSessionSeconds?: number;
@@ -113,6 +114,7 @@ export async function getDeploymentInfo(): Promise<DeploymentInfo> {
   return {
     auth: body.auth ?? "self",
     demo: body.deployment?.demo ?? false,
+    tokenRequired: body.deployment?.tokenRequired ?? false,
     ...(body.deployment?.demoAgent === undefined ? {} : { demoAgent: body.deployment.demoAgent }),
     ...(body.deployment?.maxSessions === undefined ? {} : { maxSessions: body.deployment.maxSessions }),
     ...(body.deployment?.maxSessionSeconds === undefined ? {} : { maxSessionSeconds: body.deployment.maxSessionSeconds }),

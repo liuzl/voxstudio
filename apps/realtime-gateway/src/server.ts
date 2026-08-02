@@ -905,6 +905,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       if (url.pathname === "/healthz") {
         const deployment = {
           demo: options.demoMode === true,
+          tokenRequired: options.accounts === undefined && options.token !== undefined && options.token !== "",
           ...(options.demoAgent === undefined ? {} : { demoAgent: options.demoAgent }),
           ...(options.maxSessions === undefined ? {} : { maxSessions: options.maxSessions }),
           ...(options.maxSessionSeconds === undefined ? {} : { maxSessionSeconds: options.maxSessionSeconds }),

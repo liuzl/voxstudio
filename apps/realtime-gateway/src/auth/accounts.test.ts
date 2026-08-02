@@ -171,6 +171,22 @@ describe("hosted accounts (docs/auth.md phase 3)", () => {
     });
     expect(spoken.status).toBe(200);
 
+    // The official OpenAI realtime SDK carries the same key in a WebSocket
+    // subprotocol because the WebSocket API cannot set Authorization headers.
+    const realtimeEvent = new Promise<Record<string, unknown>>((resolve, reject) => {
+      const socket = new WebSocket(
+        new URL("/v1/realtime?model=voxstudio-realtime", gateway?.url).toString().replace(/^http/, "ws"),
+        ["realtime", `openai-insecure-api-key.${key}`],
+      );
+      socket.addEventListener("message", event => {
+        const payload = JSON.parse(String(event.data)) as Record<string, unknown>;
+        socket.close();
+        resolve(payload);
+      });
+      socket.addEventListener("error", () => reject(new Error("OpenAI API-key WebSocket was refused")));
+    });
+    await expect(realtimeEvent).resolves.toMatchObject({ type: "session.created" });
+
     expect((await fetch(new URL("/v1/engines", gateway.url), { headers: { "x-api-key": "vox_not_a_key" } })).status).toBe(401);
   });
 
@@ -208,18 +224,26 @@ describe("hosted accounts (docs/auth.md phase 3)", () => {
     expect((await fetch(new URL("/v1/engines", gateway.url), {
       headers: { authorization: "Bearer nope", cookie },
     })).status).toBe(401);
+    expect((await fetch(new URL("/v1/realtime?model=voxstudio-realtime", gateway.url), {
+      headers: { cookie, "sec-websocket-protocol": "realtime, openai-insecure-api-key.nope" },
+    })).status).toBe(401);
   });
 
   test("healthz reports which door this deployment serves, without a credential", async () => {
     gateway = accountsGateway();
     const hosted = await fetch(new URL("/healthz", gateway.url));
     expect(hosted.status).toBe(200);
-    expect((await hosted.json() as { auth: string }).auth).toBe("accounts");
+    expect(await hosted.json()).toMatchObject({ auth: "accounts", deployment: { tokenRequired: false } });
     await gateway.stop();
 
     gateway = startGateway({ config, fetch: engineFetch(), port: 0 });
     const selfHosted = await fetch(new URL("/healthz", gateway.url));
-    expect((await selfHosted.json() as { auth: string }).auth).toBe("self");
+    expect(await selfHosted.json()).toMatchObject({ auth: "self", deployment: { tokenRequired: false } });
+    await gateway.stop();
+
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0, token: "gateway-secret" });
+    const protectedSelfHosted = await fetch(new URL("/healthz", gateway.url));
+    expect(await protectedSelfHosted.json()).toMatchObject({ auth: "self", deployment: { tokenRequired: true } });
   });
 
   test("keys can be listed and revoked, and a revoked key stops opening the door", async () => {

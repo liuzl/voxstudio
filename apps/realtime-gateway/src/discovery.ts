@@ -503,6 +503,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
                         description: "Effective public-demo state and realtime ceilings; credentials are never included.",
                         properties: {
                           demo: { type: "boolean" },
+                          tokenRequired: { type: "boolean", description: "Whether this self-hosted deployment requires its shared token. Always false for account deployments." },
                           demoAgent: {
                             type: "object",
                             properties: { id: { type: "string" }, version: { type: "integer" } },
@@ -511,7 +512,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
                           maxSessions: { type: "integer" },
                           maxSessionSeconds: { type: "number" },
                         },
-                        required: ["demo"],
+                        required: ["demo", "tokenRequired"],
                       },
                     },
                     required: ["ok", "protocol", "auth", "deployment"],

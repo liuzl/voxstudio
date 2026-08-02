@@ -92,8 +92,10 @@ below rather than relitigated per feature.
    advanced runtime controls and validation, draft/publish/version lifecycle,
    duplicate/export/audit actions, and exact draft/published preview are
    delivered. Deployment now exposes the immutable published version, runtime
-   and authentication status, demo pin, and native/OpenAI-compatible connection
-   examples. Conversations, Statistics, telephony attachment, and the remaining
+   and authentication status (including whether self-host uses a shared token),
+   demo pin, and native/OpenAI-compatible connection examples. The local CLI example
+   is explicitly gateway-host-only rather than pretending to be a remote client.
+   Conversations, Statistics, telephony attachment, and the remaining
    preview controls remain.
 2. **对话 Conversation** — live duplex session: mic capture with negotiated AEC (browser
    constraints verified per the duplex doc), agent audio playback, streaming captions,

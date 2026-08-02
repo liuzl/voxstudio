@@ -6,6 +6,7 @@ import { apiKey } from "@better-auth/api-key";
 import { getMigrations } from "better-auth/db/migration";
 import type { AuthContext } from "./auth-context";
 import { AuthAttemptLimiter, attemptLimitDefaults, claimedEmail, type AttemptLimits } from "./attempt-limiter";
+import { openAiRealtimeApiKey } from "./request-auth";
 
 /**
  * Hosted accounts (docs/auth.md phase 3): Better Auth mounted behind the gateway's
@@ -77,8 +78,9 @@ export interface Accounts {
 export const MIN_SECRET_LENGTH = 32;
 
 /**
- * The API key a request presents, or null for a cookie-only (browser) request. Two
- * accepted forms, one meaning — see the resolve() comment for why Bearer leads.
+ * The API key a request presents, or null for a cookie-only browser request. Bearer
+ * and x-api-key cover HTTP; the official OpenAI SDK's subprotocol covers realtime.
+ * One credential, one meaning — see resolve() for why Bearer leads.
  */
 export function apiKeyFrom(request: Request): string | null {
   const header = request.headers.get("authorization");
@@ -87,7 +89,8 @@ export function apiKeyFrom(request: Request): string | null {
     if (match) return match[1] as string;
   }
   const native = request.headers.get("x-api-key");
-  return native === null || native === "" ? null : native;
+  if (native !== null && native !== "") return native;
+  return openAiRealtimeApiKey(request);
 }
 
 export async function startAccounts(options: AccountsOptions): Promise<Accounts> {
@@ -192,8 +195,9 @@ export async function startAccounts(options: AccountsOptions): Promise<Accounts>
       // The machine door first, and it is explicit: a presented key decides the
       // request, so an agent never silently rides an ambient browser cookie.
       // `Authorization: Bearer <key>` is the contract AI clients and CLIs already
-      // speak (docs/auth.md); `x-api-key` is the plugin's native header, kept for
-      // clients that prefer it. Both verify the same way.
+      // speak (docs/auth.md); `x-api-key` is the plugin's native header, and the
+      // OpenAI SDK's realtime subprotocol is its WebSocket transport. All verify
+      // through the same Better Auth API.
       const presented = apiKeyFrom(request);
       if (presented !== null) {
         const verified = await auth.api.verifyApiKey({ body: { key: presented } });

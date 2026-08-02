@@ -43,12 +43,13 @@ describe("Agent API", () => {
       expect(String(input)).toBe("/healthz");
       return Response.json({
         auth: "self",
-        deployment: { demo: true, demoAgent: { id: "support", version: 3 }, maxSessions: 4, maxSessionSeconds: 600 },
+        deployment: { demo: true, tokenRequired: true, demoAgent: { id: "support", version: 3 }, maxSessions: 4, maxSessionSeconds: 600 },
       });
     });
     await expect(getDeploymentInfo()).resolves.toEqual({
       auth: "self",
       demo: true,
+      tokenRequired: true,
       demoAgent: { id: "support", version: 3 },
       maxSessions: 4,
       maxSessionSeconds: 600,

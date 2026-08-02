@@ -25,6 +25,20 @@ describe("resolveAuthContext", () => {
     expect(resolveAuthContext(request("http://gw.test/v1/voices", { authorization: "gw-secret" }), options)).toBeNull();
     expect(resolveAuthContext(request("http://gw.test/v1/realtime?token=gw-secre"), options)).toBeNull();
   });
+
+  test("the official OpenAI realtime API-key subprotocol opens only the realtime endpoint", () => {
+    const options = { token: "gw-secret" };
+    const protocols = { "sec-websocket-protocol": "realtime, openai-insecure-api-key.gw-secret" };
+    expect(resolveAuthContext(request("http://gw.test/v1/realtime?model=voxstudio-realtime", protocols), options))
+      .toEqual({ userId: OWNER_USER_ID, via: "token" });
+    expect(resolveAuthContext(request("http://gw.test/v1/realtime?model=voxstudio-realtime", {
+      "sec-websocket-protocol": "realtime, openai-insecure-api-key.wrong",
+    }), options)).toBeNull();
+    expect(resolveAuthContext(request("http://gw.test/v1/realtime?model=voxstudio-realtime", {
+      "sec-websocket-protocol": "openai-insecure-api-key.gw-secret, realtime",
+    }), options)).toBeNull();
+    expect(resolveAuthContext(request("http://gw.test/v1/voices", protocols), options)).toBeNull();
+  });
 });
 
 describe("upgradeOriginAllowed", () => {

@@ -3,6 +3,8 @@ import { AgentRegistry } from "@voxstudio/agents";
 import { decodePcm16, encodePcm16, writeWav } from "@voxstudio/audio";
 import { parseConfig } from "@voxstudio/config";
 import type { Fetch } from "@voxstudio/clients";
+import OpenAI from "openai";
+import { OpenAIRealtimeWebSocket } from "openai/realtime/websocket";
 import { startGateway, type GatewayServer } from "./server";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -120,6 +122,44 @@ afterEach(async () => {
 });
 
 describe("openai realtime adapter", () => {
+  test("the official SDK authenticates with the shared token subprotocol", async () => {
+    const root = await mkdtemp(join(tmpdir(), "vox-openai-sdk-agent-"));
+    roots.push(root);
+    const registry = new AgentRegistry(root);
+    const created = await registry.create("owner", {
+      id: "support",
+      name: "Support",
+      spec: { instructions: "Official SDK persona" },
+    });
+    await registry.publish("owner", "support", created.revision);
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0, token: "gateway-secret", agentsDir: root });
+    const api = new OpenAI({ apiKey: "gateway-secret", baseURL: new URL("/v1", gateway.url).toString() });
+    const realtime = new OpenAIRealtimeWebSocket({
+      model: "voxstudio-realtime",
+      onURL(url) {
+        url.protocol = "ws:";
+        url.searchParams.set("agent", "support");
+      },
+    }, api);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("official SDK handshake timed out")), 3_000);
+      realtime.on("session.created", event => {
+        clearTimeout(timer);
+        try {
+          expect((event.session as { instructions?: string }).instructions).toBe("Official SDK persona");
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      });
+      realtime.on("error", error => {
+        clearTimeout(timer);
+        reject(error);
+      });
+    });
+    realtime.close();
+  });
+
   test("?agent= selects a published Agent before the OpenAI handshake", async () => {
     const root = await mkdtemp(join(tmpdir(), "vox-openai-agent-"));
     roots.push(root);

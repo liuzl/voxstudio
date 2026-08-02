@@ -102,6 +102,13 @@ Authorization: Bearer <key>   # preferred — what OpenAI-compatible clients,
 x-api-key: <key>              # also accepted (the plugin's native header)
 ```
 
+On `/v1/realtime`, the official OpenAI SDK's
+`openai-insecure-api-key.<key>` WebSocket subprotocol is the same machine door. The
+browser WebSocket API cannot set Authorization, so the SDK uses that standard transport;
+the gateway accepts only the SDK's safe ordering (`realtime` first), consumes the
+credential during authentication, and therefore negotiates the plain subprotocol rather
+than echoing the secret-bearing offer.
+
 **A presented key decides the request.** A bad key is 401 even when a valid browser cookie
 is also present, so an agent's broken credential can never silently borrow a signed-in
 browser's identity. Cookies belong to browsers; no machine client is issued one.

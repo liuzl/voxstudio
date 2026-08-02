@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   agentBehaviorChanged,
   agentDeploymentSnippets,
+  agentDemoPinState,
   agentExportYaml,
   agentPreviewOptions,
   agentRecordFromDraft,
@@ -44,12 +45,28 @@ describe("Agent list timestamps", () => {
 describe("Agent deployment snippets", () => {
   test("binds every supported client example to the published Agent id and public origin", () => {
     const snippets = agentDeploymentSnippets("support.zh", "https://voice.example/");
-    expect(snippets.cli).toBe("vox listen --agent support.zh");
+    expect(snippets.cli).toContain("gateway host");
+    expect(snippets.cli).toContain("vox listen --agent support.zh");
     expect(snippets.native).toContain('new WebSocket("wss://voice.example/v1/realtime")');
     expect(snippets.native).toContain('agent: "support.zh"');
     expect(snippets.openai).toContain('baseURL: "https://voice.example/v1"');
     expect(snippets.openai).toContain('url.searchParams.set("agent", "support.zh")');
     expect(snippets.python).toContain("wss://voice.example/v1/realtime?model=voxstudio-realtime&agent=support.zh");
+
+    const protectedSnippets = agentDeploymentSnippets("support.zh", "https://voice.example", { tokenRequired: true });
+    expect(protectedSnippets.native).toContain('url.searchParams.set("token", "YOUR_GATEWAY_TOKEN")');
+    expect(protectedSnippets.openai).toContain('process.env.VOX_API_KEY ?? "YOUR_API_KEY"');
+    const accountSnippets = agentDeploymentSnippets("support.zh", "https://voice.example", { accountMode: true });
+    expect(accountSnippets.openai).toContain('process.env.VOX_API_KEY ?? "YOUR_API_KEY"');
+  });
+
+  test("distinguishes demo mode without an Agent pin from demo mode being off", () => {
+    expect(agentDemoPinState(undefined, "support", 1)).toBe("loading");
+    expect(agentDemoPinState({ auth: "self", demo: false, tokenRequired: false }, "support", 1)).toBe("off");
+    expect(agentDemoPinState({ auth: "self", demo: true, tokenRequired: false }, "support", 1)).toBe("unpinned");
+    expect(agentDemoPinState({
+      auth: "self", demo: true, tokenRequired: false, demoAgent: { id: "support", version: 1 },
+    }, "support", 1)).toBe("current");
   });
 });
 
