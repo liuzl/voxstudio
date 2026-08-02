@@ -99,19 +99,28 @@ export interface ConversationTool {
   description: string;
   parameters: Record<string, unknown>;
   effect: ToolEffect;
+  /**
+   * Default `always`: feed the result back to the model for a user-facing follow-up.
+   * `if-no-text` is for a terminal action such as end_call: when the successful call's
+   * own model message already contained a farewell, that text is the reply and another
+   * model round would only repeat it. A wordless or failed call still gets a follow-up.
+   */
+  followUp?: "always" | "if-no-text";
   handler(args: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
 }
 
 /**
- * The measured prompt rules from the 2026-07-18 tool spike (docs/tool-loop.md §2): the
- * bare prompt's two systematic failures — farewells without end_call, claiming an action
- * without calling its tool — each cost a hard rule. Changing this text means re-running
- * the tool gate (bun run measure:tools).
+ * The first two prompt rules came from the 2026-07-18 tool spike (docs/tool-loop.md §2):
+ * farewells without end_call, and claiming an action without calling its tool. The third
+ * keeps tool-call messages wordless after a live model emitted a farewell beside end_call
+ * and then repeated it after the result. Changing this text means re-running the tool gate
+ * (bun run measure:tools).
  */
 export const toolPromptRules =
   "你可以使用提供的工具来完成用户的请求。只在用户明确需要时调用工具；普通聊天、提问、闲谈直接用简短的话回答，不要调用工具。"
-  + "两条硬规则：1) 用户表示要结束对话或告别时，调用 end_call；"
-  + "2) 如果你打算执行某个操作（如调整语速、切换音色），必须调用对应工具，不能只在口头上答应。";
+  + "三条硬规则：1) 用户表示要结束对话或告别时，调用 end_call；"
+  + "2) 如果你打算执行某个操作（如调整语速、切换音色），必须调用对应工具，不能只在口头上答应；"
+  + "3) 调用工具的消息只包含工具调用，不要同时输出给用户的文字；收到工具结果后再回复。";
 
 /** A confused model must converge: after this many tool rounds the last request offers no tools. */
 const maxToolRounds = 3;
@@ -360,6 +369,7 @@ export async function runConversation(
           }
           if (calls.length === 0) return;
           messages.push({ role: "assistant", content: roundText, tool_calls: calls });
+          let everyCallCanUseExistingText = true;
           for (const call of calls) {
             if (turn.signal.aborted) return;
             const tool = tools.find(candidate => candidate.name === call.function.name);
@@ -421,7 +431,12 @@ export async function runConversation(
             }
             callbacks.onToolResult?.(reportName, ok, result, turn);
             messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
+            // Only an explicitly terminal, successful tool may treat text already emitted
+            // in this model message as the completed reply. Unknown, failed, confirmation,
+            // external, and ordinary session tools must let the model explain their result.
+            if (!ok || tool?.followUp !== "if-no-text") everyCallCanUseExistingText = false;
           }
+          if (roundText.trim() && everyCallCanUseExistingText) return;
         }
       })();
       const player = deps.createPlayer(turn);

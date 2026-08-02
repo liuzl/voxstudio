@@ -87,9 +87,11 @@ describe("createBuiltinTools", () => {
 
   test("end_call raises the hang-up flag", async () => {
     const dependencies = deps();
-    const result = await tool(dependencies, "end_call").handler({}, signal) as Record<string, unknown>;
+    const endCall = tool(dependencies, "end_call");
+    const result = await endCall.handler({}, signal) as Record<string, unknown>;
     expect(result.ok).toBe(true);
     expect(dependencies.calls.endCall).toEqual([true]);
+    expect(endCall.followUp).toBe("if-no-text");
   });
 });
 

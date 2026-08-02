@@ -106,6 +106,10 @@ export function createBuiltinTools(deps: BuiltinToolDeps): ConversationTool[] {
       description: "结束本次语音对话",
       parameters: { type: "object", properties: {} },
       effect: "session",
+      // Some OpenAI-compatible models emit a complete farewell beside the tool call.
+      // In that case the farewell is already streaming to TTS; asking for a follow-up
+      // produces the same sentence twice. Wordless calls still get the normal result round.
+      followUp: "if-no-text",
       handler: async () => {
         deps.endCall();
         return { ok: true, note: "本轮回复播完后挂断" };

@@ -11,7 +11,8 @@
  *      bounded execute-and-refeed rounds the conversation loop runs.
  *
  * Thresholds: every explicit command calls its tool with usable arguments, plain chat
- * never triggers one, and the model never invents a tool or emits broken JSON.
+ * never triggers one, and the model never invents a tool, emits broken JSON, or mixes
+ * user-facing text into a tool-call message.
  *
  *   bun run measure:tools [--config CONFIG]
  *
@@ -59,6 +60,7 @@ type Expect =
   | { kind: "call"; name: string; args?: Record<string, unknown>; rateBelowOne?: boolean; hasArgs?: string[] }
   | { kind: "no_call" }
   | { kind: "clarify_or_call" }
+  | { kind: "farewell" }
   | { kind: "no_invented_tool" };
 
 const CASES: { utterance: string; expect: Expect; pre?: ChatMessage[] }[] = [
@@ -69,6 +71,14 @@ const CASES: { utterance: string; expect: Expect; pre?: ChatMessage[] }[] = [
   { utterance: "帮我看看引擎状态正常吗", expect: { kind: "call", name: "get_engine_status" } },
   { utterance: "好了先这样，挂了吧", expect: { kind: "call", name: "end_call" } },
   { utterance: "不聊了，再见", expect: { kind: "call", name: "end_call" } },
+  // Production regression (2026-08-02): with this polite-close history the model emitted
+  // a full farewell beside end_call, then repeated it after the tool result.
+  { utterance: "I think I do not need your help in the future.",
+    pre: [
+      { role: "user", content: "Today, I do not need your help." },
+      { role: "assistant", content: "No problem at all! If you need any assistance in the future, feel free to reach out. Have a wonderful day!" },
+    ],
+    expect: { kind: "farewell" } },
   { utterance: "今天天气怎么样？", expect: { kind: "no_call" } },
   { utterance: "给我讲个笑话", expect: { kind: "no_call" } },
   { utterance: "你觉得 opus 和 pcm 编码有什么区别？", expect: { kind: "no_call" } },
@@ -156,6 +166,7 @@ async function main(): Promise<number> {
   const failures: string[] = [];
   let badJson = 0;
   let invented = 0;
+  let mixedText = 0;
 
   const collect = async (messages: ChatMessage[]): Promise<{ parsed: { name: string; args: Record<string, unknown> | undefined }[]; text: string; raw: ChatToolCall[] }> => {
     const raw: ChatToolCall[] = [];
@@ -164,6 +175,7 @@ async function main(): Promise<number> {
       if (item.type === "text") text += item.text;
       else raw.push(...item.calls);
     }
+    if (raw.length > 0 && text.trim()) mixedText += 1;
     const parsed = raw.map(call => {
       let args: Record<string, unknown> | undefined;
       try { args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>; }
@@ -197,10 +209,16 @@ async function main(): Promise<number> {
         edgeTotal += 1;
         ok = expect.kind === "no_invented_tool"
           ? parsed.every(call => known.has(call.name))
-          : (parsed.length === 0 && text.length > 0) || (parsed.length > 0 && parsed.every(call => known.has(call.name) && call.args !== undefined));
+          : expect.kind === "farewell"
+            ? (parsed.length === 0 && text.length > 0)
+              || (parsed.length > 0 && parsed.every(call => call.name === "end_call" && call.args !== undefined))
+            : (parsed.length === 0 && text.length > 0)
+              || (parsed.length > 0 && parsed.every(call => known.has(call.name) && call.args !== undefined));
         edgeOk += ok ? 1 : 0;
       }
-      const summary = parsed.length > 0 ? JSON.stringify(parsed) : text.slice(0, 40);
+      const summary = parsed.length > 0
+        ? `${JSON.stringify(parsed)}${text.trim() ? ` + text=${JSON.stringify(text.slice(0, 40))}` : ""}`
+        : text.slice(0, 40);
       console.error(`${ok ? "✓" : "✗"} [${label}] ${utterance} -> ${summary}`);
       if (!ok) failures.push(`${label}: ${utterance}`);
     }
@@ -237,8 +255,8 @@ async function main(): Promise<number> {
   const multi = await runSuite("turn-9", HISTORY);
   const compound = await runMultiAction();
 
-  console.error(`bad-json ${badJson}  invented ${invented}`);
-  const pass = single && multi && compound && badJson === 0 && invented === 0;
+  console.error(`bad-json ${badJson}  invented ${invented}  mixed-text ${mixedText}`);
+  const pass = single && multi && compound && badJson === 0 && invented === 0 && mixedText === 0;
   const label = studio ? "TOOL GATE (studio capacity)" : "TOOL GATE";
   console.error(pass ? `${label}: PASS` : `${label}: FAIL (${failures.join("; ")})`);
   return pass ? 0 : 1;

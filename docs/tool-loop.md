@@ -63,9 +63,14 @@ degradation, and compound commands land both tools through the loop's rounds.
    2026-07-19 with the first external tools ([mcp-tools.md](./mcp-tools.md)) —
    and the field existed from day one so the boundary is structural, not
    remembered.
-4. **The two spike rules are part of the certified prompt.** They ride with the
+4. **The spike rules are part of the certified prompt.** They ride with the
    loop's system prompt in `packages/conversation`, not per-surface improvisation;
-   changing them means re-running the tool gate.
+   changing them means re-running the tool gate. A third rule now requires a tool-call
+   message to contain only tool calls and defer user-facing words until the result round.
+   The runtime also defends the one terminal exception seen in production: if a successful
+   `end_call` arrives beside an already-emitted farewell, that farewell completes the reply
+   and no second LLM round is requested. Wordless and failed calls still receive a result
+   round, so the guard cannot swallow an error or a needed goodbye.
 5. **The first tool set is self-referential** — zero external dependencies, the
    shortest possible loop from "say it" to "hear it done":
    - `set_voice(voice)` — validated against the live union bank; an unknown id
@@ -125,5 +130,14 @@ degradation, and compound commands land both tools through the loop's rounds.
    and MCP servers' tools join with the `external` effect and the spoken
    confirmation flow the `effect` field was holding a place for
    ([mcp-tools.md](./mcp-tools.md)).
+
+**2026-08-02 mixed-text regression gate:** a live Customer Support session exposed a
+model response that placed a complete farewell beside `end_call`, then repeated the
+farewell after the result round. The gate now includes that English multi-turn context
+and rejects any message carrying both user-facing text and tool calls. Against the live
+Gemma route, single-turn and turn-9 both pass at 8/8 explicit calls, 0/5 false triggers,
+4/4 edge cases, with all three compound commands correct and zero mixed-text, malformed,
+or invented calls. The runtime `if-no-text` guard separately proves that even a model
+violation cannot trigger a second farewell round.
 
 No phase creates empty directories; each lands with its first tested module.

@@ -182,6 +182,31 @@ describe("runConversation tool cycle", () => {
     expect(llm.seen[1]!.messages).toBe(llm.seen[0]!.messages + 2);
   });
 
+  test("a farewell beside a successful terminal call is not generated a second time", async () => {
+    const llm = scriptedLlm([
+      { text: ["好的，祝你今天愉快。"], calls: [{ id: "c1", name: "end_call", args: "{}" }] },
+      // This is the failure mode seen live: if the loop asks again, the model repeats
+      // the already-streaming farewell and both copies enter captions and TTS.
+      { text: ["好的，祝你今天愉快。"] },
+    ]);
+    let ended = false;
+    const deltas: string[] = [];
+    let reply = "";
+    await run(llm, [{
+      name: "end_call", description: "结束对话", effect: "session",
+      followUp: "if-no-text",
+      parameters: { type: "object", properties: {} },
+      handler: async () => { ended = true; return { ok: true }; },
+    }], {
+      onReplyDelta: delta => deltas.push(delta),
+      onReply: text => { reply = text; },
+    });
+    expect(ended).toBe(true);
+    expect(llm.seen).toHaveLength(1);
+    expect(deltas).toEqual(["好的，祝你今天愉快。"]);
+    expect(reply).toBe("好的，祝你今天愉快。");
+  });
+
   test("a looping model is bounded: the final round offers no tools", async () => {
     const call = { id: "c", name: "noop", args: "{}" };
     const llm = scriptedLlm([
@@ -229,12 +254,14 @@ describe("runConversation tool cycle", () => {
     let ended = false;
     await run(llm, [{
       name: "end_call", description: "结束对话", effect: "session", parameters: { type: "object", properties: {} },
+      followUp: "if-no-text",
       handler: async () => { ended = true; return { ok: true }; },
     }], {
       onError: code => errors.push(code),
     });
     expect(ended).toBe(true);
     expect(errors).toEqual([]);
+    expect(llm.seen).toHaveLength(2);
   });
 });
 

@@ -13,9 +13,9 @@ const speech = await fetch(new URL("/v1/audio/speech", gateway), {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({
-    model: "kokoro",
+    model: process.env.VOX_REPLAY_MODEL ?? "kokoro",
     input: process.env.VOX_REPLAY_TEXT ?? "现在几点了？",
-    voice: "zf_001",
+    voice: process.env.VOX_REPLAY_VOICE ?? "zf_001",
     response_format: "wav",
   }),
 });
@@ -59,14 +59,24 @@ ws.addEventListener("message", event => {
       ws.send(JSON.stringify({ v: 1, type: "playback.complete", idempotencyKey: crypto.randomUUID(), turnId: playbackEndedTurn }));
     }, 300);
   }
-  if (parsed.type === "turn.completed" || (parsed.type === "error" && parsed.recoverable === false)) done?.();
+  if (parsed.type === "turn.completed" || parsed.type === "command.rejected"
+    || (parsed.type === "error" && parsed.recoverable === false)) done?.();
 });
 
 ws.addEventListener("open", () => {
   ws.send(JSON.stringify({
     v: 1, type: "session.start", idempotencyKey: crypto.randomUUID(),
     options: {
-      language: "zh", bargeIn: true, playbackAck: true, turnTaking: "speculative", voice: "zf_001",
+      language: process.env.VOX_REPLAY_LANGUAGE ?? "zh",
+      bargeIn: true, playbackAck: true, turnTaking: "speculative",
+      voice: process.env.VOX_REPLAY_VOICE ?? "zf_001",
+      ...(process.env.VOX_REPLAY_AGENT ? {
+        agent: process.env.VOX_REPLAY_AGENT,
+        ...(process.env.VOX_REPLAY_AGENT_REVISION ? {
+          agentSource: "draft",
+          agentRevision: Number(process.env.VOX_REPLAY_AGENT_REVISION),
+        } : {}),
+      } : {}),
       // VOX_REPLAY_VAD=silero makes an unavailable silero a loud failure instead of a
       // silent energy fallback — the compiled-binary VAD gate leans on this.
       ...(process.env.VOX_REPLAY_VAD ? { vad: process.env.VOX_REPLAY_VAD } : {}),
