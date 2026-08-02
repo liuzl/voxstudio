@@ -71,7 +71,10 @@ precisely the path the realtime session exists to replace.
    (`playback.format`, binary audio frames, turn state).
 2. **Visemes, not amplitude**: VRM models carry the full `a/i/u/e/o` preset
    set; phoneme timing from the TTS side (or forced alignment through the ASR
-   reference workflow) drives five mouths instead of one.
+   reference workflow) drives five mouths instead of one. The proposed
+   [TTS-synchronized text-highlighting design](./tts-text-highlighting.md)
+   defines the turn-relative sample timeline that these viseme events can
+   reuse.
 3. **A real channel, not a file**: stdin or a socket, surfaced to the
    widget's policy layer as tick facts — the shape an upstream PR takes.
 
@@ -79,5 +82,8 @@ precisely the path the realtime session exists to replace.
 
 - [duplex-audio-architecture.md](./duplex-audio-architecture.md) — the
   realtime session contract and the WAN/Opus measurements cited above.
+- [tts-text-highlighting.md](./tts-text-highlighting.md) — proposed text/audio
+  alignment events and the shared sample-clock mapping for highlighting and
+  future visemes.
 - [liuzl/pocket-character](https://github.com/liuzl/pocket-character) —
   the fork carrying `--mouth-file` and `scripts/speak-driver.ts`.
