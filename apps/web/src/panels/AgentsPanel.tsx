@@ -411,7 +411,7 @@ function pronunciationsText(value: Record<string, string> | undefined): string {
   return Object.entries(value ?? {}).map(([term, reading]) => `${term} = ${reading}`).join("\n");
 }
 
-interface ValidationIssue {
+export interface ValidationIssue {
   key: MessageKey;
   params?: Record<string, string | number>;
 }
@@ -470,13 +470,16 @@ export function draftFrom(record: AgentRecord): AgentDraft {
 }
 
 export function specFrom(draft: AgentDraft, prior: AgentSpec): AgentSpec {
-  const spec: AgentSpec = {
-    ...prior,
-    instructions: draft.instructions,
-    welcome: draft.welcome,
-    language: draft.language || "auto",
-    studioTools: draft.studioTools,
-  };
+  const spec: AgentSpec = { ...prior };
+  if (draft.instructions || prior.instructions !== undefined) spec.instructions = draft.instructions;
+  else delete spec.instructions;
+  if (draft.welcome || prior.welcome !== undefined) spec.welcome = draft.welcome;
+  else delete spec.welcome;
+  const language = draft.language || "auto";
+  if (language !== "auto" || prior.language !== undefined) spec.language = language;
+  else delete spec.language;
+  if (draft.studioTools || prior.studioTools !== undefined) spec.studioTools = draft.studioTools;
+  else delete spec.studioTools;
   if (draft.voice) spec.voice = draft.voice;
   else delete spec.voice;
   if (draft.asrEngine) spec.asrEngine = draft.asrEngine;
@@ -505,6 +508,63 @@ export function specFrom(draft: AgentDraft, prior: AgentSpec): AgentSpec {
   if (draft.vad) spec.vad = draft.vad;
   else delete spec.vad;
   return spec;
+}
+
+function canonicalJson(value: unknown): string {
+  const normalize = (item: unknown): unknown => {
+    if (Array.isArray(item)) return item.map(normalize);
+    if (typeof item !== "object" || item === null) return item;
+    return Object.fromEntries(Object.entries(item as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, normalize(entry)]));
+  };
+  return JSON.stringify(normalize(value));
+}
+
+export function agentBehaviorChanged(draft: AgentDraft, prior: AgentSpec): boolean {
+  return canonicalJson(specFrom(draft, prior)) !== canonicalJson(prior);
+}
+
+export function validateAgentDraftDependencies(
+  draft: AgentDraft,
+  engines: EngineEntry[],
+  voices: VoiceEntry[],
+  mcpServers: string[],
+  runtimeCatalogReady: boolean,
+  voiceCatalogReady: boolean,
+): ValidationIssue[] {
+  if (!runtimeCatalogReady || (Boolean(draft.voice) && !voiceCatalogReady)) {
+    return [{ key: "无法验证运行依赖；请检查网关后重试。" }];
+  }
+  const issues: ValidationIssue[] = [];
+  const routes = [
+    { kind: "asr", label: "ASR", selected: draft.asrEngine },
+    { kind: "llm", label: "LLM", selected: draft.llmEngine },
+    { kind: "tts", label: "TTS", selected: draft.ttsEngine },
+  ] as const;
+  const effective = new Map<(typeof routes)[number]["kind"], EngineEntry>();
+  for (const route of routes) {
+    const entry = route.selected
+      ? engines.find(engine => engine.name === route.selected && engine.kind === route.kind)
+      : engines.find(engine => engine.kind === route.kind && engine.roles.includes(route.kind));
+    if (!entry) {
+      issues.push(route.selected
+        ? { key: "{kind} 引擎“{name}”不存在", params: { kind: route.label, name: route.selected } }
+        : { key: "未配置 {kind} 默认引擎", params: { kind: route.label } });
+      continue;
+    }
+    effective.set(route.kind, entry);
+    if (!entry.healthy) issues.push({ key: "{kind} 引擎“{name}”当前离线", params: { kind: route.label, name: entry.name } });
+  }
+  const effectiveTts = effective.get("tts");
+  if (draft.voice && effectiveTts && !voices.some(voice => voice.id === draft.voice && voice.engine === effectiveTts.name)) {
+    issues.push({ key: "音色“{voice}”在所选引擎中不可用", params: { voice: draft.voice } });
+  }
+  for (const server of draft.mcpServers) {
+    if (!mcpServers.includes(server)) issues.push({ key: "MCP 服务器“{name}”当前不可用", params: { name: server } });
+  }
+  return issues;
 }
 
 function AgentBuilder({ agentId, section, onSectionChange, onClose, onDirtyChange }: {
@@ -560,33 +620,16 @@ function AgentBuilder({ agentId, section, onSectionChange, onClose, onDirtyChang
     return () => { loadGeneration.current += 1; };
   }, [load]);
   const dirty = useMemo(() => Boolean(record && draft && JSON.stringify(draft) !== JSON.stringify(draftFrom(record))), [record, draft]);
+  const behaviorDirty = useMemo(() => Boolean(record && draft && dirty && agentBehaviorChanged(draft, record.spec)), [dirty, draft, record]);
   useEffect(() => {
     onDirtyChange(dirty);
     return () => onDirtyChange(false);
   }, [dirty, onDirtyChange]);
 
   const shapeIssues = useMemo(() => draft ? validateAgentDraftShape(draft) : [], [draft]);
-  const dependencyIssues = useMemo<ValidationIssue[]>(() => {
-    if (!draft) return [];
-    const issues: ValidationIssue[] = [];
-    if (!runtimeCatalogReady || !voiceCatalogReady) {
-      issues.push({ key: "无法验证运行依赖；请检查网关后重试。" });
-      return issues;
-    }
-    for (const [kind, selected] of [["ASR", draft.asrEngine], ["LLM", draft.llmEngine], ["TTS", draft.ttsEngine]] as const) {
-      if (!selected) continue;
-      const entry = engines.find(engine => engine.name === selected && engine.kind === kind.toLowerCase());
-      if (!entry) issues.push({ key: "{kind} 引擎“{name}”不存在", params: { kind, name: selected } });
-      else if (!entry.healthy) issues.push({ key: "{kind} 引擎“{name}”当前离线", params: { kind, name: selected } });
-    }
-    if (draft.voice && !voices.some(voice => voice.id === draft.voice && (!draft.ttsEngine || voice.engine === draft.ttsEngine))) {
-      issues.push({ key: "音色“{voice}”在所选引擎中不可用", params: { voice: draft.voice } });
-    }
-    for (const server of draft.mcpServers) {
-      if (!mcpServers.includes(server)) issues.push({ key: "MCP 服务器“{name}”未在当前部署中配置", params: { name: server } });
-    }
-    return issues;
-  }, [draft, engines, mcpServers, runtimeCatalogReady, voiceCatalogReady, voices]);
+  const dependencyIssues = useMemo<ValidationIssue[]>(() => draft
+    ? validateAgentDraftDependencies(draft, engines, voices, mcpServers, runtimeCatalogReady, voiceCatalogReady)
+    : [], [draft, engines, mcpServers, runtimeCatalogReady, voiceCatalogReady, voices]);
   const validationIssues = [...shapeIssues, ...dependencyIssues];
   const issueText = (issue: ValidationIssue): string => t(issue.key, issue.params);
 
@@ -623,6 +666,9 @@ function AgentBuilder({ agentId, section, onSectionChange, onClose, onDirtyChang
     try {
       const saved = await save();
       if (!saved) return;
+      const latestAudit = await auditAgent(saved.id);
+      setAudit(latestAudit);
+      if (latestAudit.status === "current") return;
       const result = await publishAgent(saved.id, saved.revision);
       setRecord(result.record); setDraft(draftFrom(result.record));
       setAudit({ status: "current", draftHash: result.version.hash, publishedHash: result.version.hash, version: result.version.version });
@@ -637,12 +683,12 @@ function AgentBuilder({ agentId, section, onSectionChange, onClose, onDirtyChang
 
   const status = validationIssues.length > 0
     ? { label: t("配置无效"), tone: "bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-300" }
-    : dirty || audit?.status === "drifted"
+    : record.published && (behaviorDirty || audit?.status === "drifted")
       ? { label: t("已漂移"), tone: "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300" }
       : record.published
         ? { label: t("已发布"), tone: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300" }
         : { label: t("未发布"), tone: "bg-fill-active text-fg-muted" };
-  const publishDisabled = saving || publishing || validationIssues.length > 0 || (!dirty && audit?.status === "current");
+  const publishDisabled = saving || publishing || validationIssues.length > 0 || (!behaviorDirty && audit?.status === "current");
   const availableMcpServers = [...new Set([...mcpServers, ...draft.mcpServers])];
 
   return (
@@ -703,7 +749,7 @@ function AgentBuilder({ agentId, section, onSectionChange, onClose, onDirtyChang
               <BuilderSection icon={Wrench} title={t("能力与工具")} description={t("只允许助手使用这里明确启用的能力。")}>
                 <ToggleCard checked={draft.studioTools} onChange={studioTools => setDraft({ ...draft, studioTools })} title={t("工作台语音工具")} description={t("允许助手通过语音保存音色、重念和管理发音。")} />
                 <Field label={t("MCP 服务器")}>
-                  {availableMcpServers.length === 0 ? <div className="rounded-xl border border-dashed border-edge bg-surface px-4 py-4 text-[11px] text-fg-faint">{t("部署未配置 MCP 服务器。")}</div> : <div className="grid gap-2 sm:grid-cols-2">{availableMcpServers.map(server => <ToggleCard key={server} checked={draft.mcpServers.includes(server)} onChange={checked => setDraft({ ...draft, mcpServers: checked ? [...draft.mcpServers, server] : draft.mcpServers.filter(item => item !== server) })} title={server} compact />)}</div>}
+                  {availableMcpServers.length === 0 ? <div className="rounded-xl border border-dashed border-edge bg-surface px-4 py-4 text-[11px] text-fg-faint">{t("当前没有可用的 MCP 服务器。")}</div> : <div className="grid gap-2 sm:grid-cols-2">{availableMcpServers.map(server => <ToggleCard key={server} checked={draft.mcpServers.includes(server)} onChange={checked => setDraft({ ...draft, mcpServers: checked ? [...draft.mcpServers, server] : draft.mcpServers.filter(item => item !== server) })} title={server} compact />)}</div>}
                 </Field>
               </BuilderSection>
 
@@ -811,8 +857,8 @@ export function voiceOptionValue(voice: Pick<VoiceEntry, "id" | "engine">): stri
   return `${voice.engine ?? ""}${voiceSeparator}${voice.id}`;
 }
 
-export function voiceFromOption(value: string): { voice: string; ttsEngine: string } {
-  if (!value) return { voice: "", ttsEngine: "" };
+export function voiceFromOption(value: string, currentTtsEngine = ""): { voice: string; ttsEngine: string } {
+  if (!value) return { voice: "", ttsEngine: currentTtsEngine };
   const separator = value.indexOf(voiceSeparator);
   if (separator < 0) return { voice: value, ttsEngine: "" };
   return { ttsEngine: value.slice(0, separator), voice: value.slice(separator + 1) };
@@ -823,7 +869,7 @@ function VoiceSelect({ draft, voices, onChange }: { draft: AgentDraft; voices: V
   const selected = draft.voice ? voiceOptionValue({ id: draft.voice, engine: draft.ttsEngine }) : "";
   const known = voices.some(voice => voiceOptionValue(voice) === selected);
   return (
-    <select value={selected} onChange={event => onChange(voiceFromOption(event.target.value))} className="builder-input">
+    <select value={selected} onChange={event => onChange(voiceFromOption(event.target.value, draft.ttsEngine))} className="builder-input">
       <option value="">{t("自动")}</option>
       {draft.voice && !known ? <option value={selected}>{draft.voice}{draft.ttsEngine ? ` · ${draft.ttsEngine}` : ""}</option> : null}
       {voices.map(voice => <option key={`${voice.engine}:${voice.id}`} value={voiceOptionValue(voice)}>{voice.id}{voice.engine ? ` · ${voice.engine}` : ""}</option>)}

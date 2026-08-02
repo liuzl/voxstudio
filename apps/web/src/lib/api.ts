@@ -177,7 +177,7 @@ export interface EngineEntry {
 
 export interface RuntimeCatalog {
   engines: EngineEntry[];
-  /** Sanitized configured names only; transports and credentials stay gateway-side. */
+  /** Sanitized connected names only; transports and credentials stay gateway-side. */
   mcpServers: string[];
 }
 

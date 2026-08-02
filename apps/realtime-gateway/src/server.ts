@@ -562,12 +562,20 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     return engines;
   };
 
+  // MCP servers connect once per gateway process (docs/mcp-tools.md); sessions await the
+  // connection through the extraTools provider, so startup order costs nothing. Demo mode
+  // leaves them unconnected regardless of config — external tools have no business there.
+  const mcpSource: Promise<McpToolSource> | undefined =
+    options.config.mcpServers.length > 0 && options.demoMode !== true
+      ? connectMcpServers(options.config.mcpServers, { log, reservedNames: builtinToolNames })
+      : undefined;
+
   const engineList = async (): Promise<Response> => Response.json({
     engines: await collectEngines(),
-    // Agent Builder needs an allowlist it can validate without learning how a
-    // server is reached. Names are product configuration; commands, URLs,
-    // credentials, environment, and trust policy remain gateway-only.
-    mcpServers: options.config.mcpServers.map(server => server.name),
+    // Agent Builder needs the live allowlist without learning how a server is
+    // reached. Commands, URLs, credentials, environment, and trust policy stay
+    // gateway-only, and failed/auth-rejected servers are omitted.
+    mcpServers: mcpSource ? (await mcpSource).connectedServers() : [],
   });
 
   const sinkFor = (ws: ServerWebSocket<SocketData>): EventSink => {
@@ -576,14 +584,6 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     ws.data.sink ??= { send: payload => { ws.send(payload); } };
     return ws.data.sink;
   };
-
-  // MCP servers connect once per gateway process (docs/mcp-tools.md); sessions await the
-  // connection through the extraTools provider, so startup order costs nothing. Demo mode
-  // leaves them unconnected regardless of config — external tools have no business there.
-  const mcpSource: Promise<McpToolSource> | undefined =
-    options.config.mcpServers.length > 0 && options.demoMode !== true
-      ? connectMcpServers(options.config.mcpServers, { log, reservedNames: builtinToolNames })
-      : undefined;
 
   /** Thrown by createSession at the capacity guardrail; both dialects translate it. */
   class CapacityError extends Error {

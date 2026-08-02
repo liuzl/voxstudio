@@ -21,6 +21,8 @@ import type { ConversationTool, ToolEffect } from "@voxstudio/conversation";
 export interface McpToolSource {
   /** Fresh tool objects per call; handlers close over the shared clients. */
   tools(servers?: readonly string[]): ConversationTool[];
+  /** Server names whose transport connected and whose tools were listed successfully. */
+  connectedServers(): string[];
   close(): Promise<void>;
 }
 
@@ -162,6 +164,7 @@ export async function connectMcpServers(
       const allowed = servers === undefined ? undefined : new Set(servers);
       return bridged.filter(entry => allowed === undefined || allowed.has(entry.serverName)).map(entry => entry.tool);
     },
+    connectedServers: () => clients.map(entry => entry.name),
     close: async () => {
       await Promise.allSettled(clients.map(entry => entry.client.close()));
     },

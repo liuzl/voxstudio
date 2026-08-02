@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  agentBehaviorChanged,
   displayTime,
   draftFrom,
   listFromText,
@@ -7,6 +8,7 @@ import {
   pronunciationsFromText,
   specFrom,
   validateAgentDraftShape,
+  validateAgentDraftDependencies,
   voiceFromOption,
   voiceOptionValue,
 } from "./AgentsPanel";
@@ -18,8 +20,12 @@ describe("Agent Builder voice selection", () => {
     expect(voiceFromOption(selected)).toEqual({ voice: "default", ttsEngine: "voxcpm" });
   });
 
-  test("clears both fields when automatic voice selection is chosen", () => {
+  test("clears both fields when no TTS route is pinned", () => {
     expect(voiceFromOption("")).toEqual({ voice: "", ttsEngine: "" });
+  });
+
+  test("keeps an independently pinned TTS route when the voice returns to automatic", () => {
+    expect(voiceFromOption("", "kokoro")).toEqual({ voice: "", ttsEngine: "kokoro" });
   });
 });
 
@@ -98,5 +104,32 @@ describe("Agent Builder advanced configuration", () => {
       minSpeechMs: 96,
       threshold: 0.01,
     });
+  });
+
+  test("does not treat metadata-only edits as behavior drift", () => {
+    const current = { ...draftFrom(record), name: "Renamed", description: "New description" };
+    expect(agentBehaviorChanged(current, record.spec)).toBe(false);
+    expect(agentBehaviorChanged({ ...current, instructions: "Changed behavior" }, record.spec)).toBe(true);
+  });
+
+  test("validates the effective default routes and the voice on the effective TTS engine", () => {
+    const draft = { ...draftFrom(record), voice: "calm" };
+    const engines = [
+      { name: "sensevoice", kind: "asr", model: "sv", capabilities: [], roles: ["asr"], healthy: true, runtime: null },
+      { name: "gemma", kind: "llm", model: "gemma", capabilities: [], roles: ["llm"], healthy: false, runtime: null },
+      { name: "kokoro", kind: "tts", model: "kokoro", capabilities: [], roles: ["tts"], healthy: true, runtime: null },
+      { name: "voxcpm", kind: "tts", model: "voxcpm", capabilities: [], roles: [], healthy: true, runtime: null },
+    ];
+    expect(validateAgentDraftDependencies(
+      draft,
+      engines,
+      [{ id: "calm", engine: "voxcpm" }],
+      [],
+      true,
+      true,
+    )).toEqual([
+      { key: "{kind} 引擎“{name}”当前离线", params: { kind: "LLM", name: "gemma" } },
+      { key: "音色“{voice}”在所选引擎中不可用", params: { voice: "calm" } },
+    ]);
   });
 });

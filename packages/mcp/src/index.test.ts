@@ -53,6 +53,7 @@ describe("mcp bridge", () => {
     });
     expect(source.tools([])).toEqual([]);
     expect(source.tools(["memo"]).map(tool => tool.name).sort()).toEqual([...byName.keys()].sort());
+    expect(source.connectedServers()).toEqual(["memo"]);
     await source.close();
   });
 
@@ -98,6 +99,7 @@ describe("mcp bridge", () => {
       },
     );
     expect(source.tools().length).toBe(4);
+    expect(source.connectedServers()).toEqual(["memo"]);
     expect(lines.some(line => line.includes("dead unavailable"))).toBe(true);
     await source.close();
   });
@@ -119,6 +121,7 @@ describe("mcp bridge connect timeout", () => {
     });
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(source.tools()).toEqual([]);
+    expect(source.connectedServers()).toEqual([]);
     expect(lines.some(line => line.includes("hung unavailable"))).toBe(true);
     await source.close();
   });

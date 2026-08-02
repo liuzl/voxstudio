@@ -674,7 +674,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
                       },
                       mcpServers: {
                         type: "array",
-                        description: "Configured MCP server names available for Agent allowlists; transport and credentials remain private.",
+                        description: "Connected MCP server names available for Agent allowlists; transport and credentials remain private.",
                         items: { type: "string" },
                       },
                     },
