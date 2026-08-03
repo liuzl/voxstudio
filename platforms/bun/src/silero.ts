@@ -1,17 +1,16 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { SpeechProbabilityModel } from "@voxstudio/duplex-session";
-// The WASM backend's two artifacts, embedded as file assets: `bun build --compile`
-// packs them into the binary (the same `with { type: "file" }` mechanism as the web
-// shell), and under plain `bun` they resolve to the real files in node_modules. WASM
-// SIMD is the production default in both forms: one backend is easier to certify and
-// deploy consistently across macOS, Linux, and Windows. Native ONNX remains an explicit
-// opt-in for high-concurrency measurement. Hard prerequisite: onnxruntime-web ships only
-// the WebAssembly-SIMD build, and every supported Bun target qualifies; if SIMD init ever
-// fails it propagates loudly to the calling VAD policy.
+// The WASM backend's artifacts are embedded file assets: `bun build --compile` packs them
+// into the binary, and under plain `bun` they resolve to node_modules. ONNX must dynamically
+// import the .mjs loader as JavaScript. Importing that same path first as `type: "file"`
+// makes Bun cache a path string instead, while a compiled binary has no loose module beside
+// it. `wasmLoaderUrl()` therefore materializes the embedded bytes under a content-addressed
+// cache path and gives ONNX a distinct, executable file URL. WASM SIMD stays the production
+// default; native ONNX remains an explicit measurement opt-in.
 import ortWasmAsset from "onnxruntime-web/ort-wasm-simd-threaded.wasm" with { type: "file" };
 import ortWasmLoaderAsset from "onnxruntime-web/ort-wasm-simd-threaded.mjs" with { type: "file" };
 
@@ -39,6 +38,33 @@ function cachePath(): string {
 
 function digest(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+/** A real .mjs path, distinct from Bun's file-asset module identity. */
+async function wasmLoaderUrl(): Promise<string> {
+  const bytes = new Uint8Array(await Bun.file(ortWasmLoaderAsset).arrayBuffer());
+  const expected = digest(bytes);
+  const cacheRoot = process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache");
+  const directory = join(cacheRoot, "voxstudio", "onnxruntime-web");
+  const path = join(directory, `ort-wasm-simd-threaded-${expected.slice(0, 16)}.mjs`);
+  if (!existsSync(path)) {
+    mkdirSync(directory, { recursive: true });
+    const partial = `${path}.write-${process.pid}-${Math.random().toString(36).slice(2)}`;
+    await Bun.write(partial, bytes);
+    try {
+      renameSync(partial, path);
+    } catch (error) {
+      // Another process may have won the same content-addressed write. Its bytes have
+      // the same digest by construction; only propagate failures with no final file.
+      rmSync(partial, { force: true });
+      if (!existsSync(path)) throw error;
+    }
+  }
+  const actual = digest(new Uint8Array(await Bun.file(path).arrayBuffer()));
+  if (actual !== expected) {
+    throw new TypeError(`cached ONNX WASM loader at ${path} has SHA-256 ${actual}, expected ${expected}; delete it and retry`);
+  }
+  return pathToFileURL(path).href;
 }
 
 /**
@@ -143,7 +169,7 @@ async function createBackend(
     ort.env.wasm.numThreads = 1;
     ort.env.wasm.wasmPaths = {
       wasm: pathToFileURL(ortWasmAsset).href,
-      mjs: pathToFileURL(ortWasmLoaderAsset).href,
+      mjs: await wasmLoaderUrl(),
     };
     const session = await ort.InferenceSession.create(bytes);
     return { ort, session };
