@@ -466,10 +466,15 @@ stage component does not require sharing the entire page theme.
 4. **VoiceStage — not started**: state-driven visual, reduced-motion/fallback
    paths, and preview integration. This is the first implementation of the
    StreamCore-inspired presentation.
-5. **Deployment delivered; history not started**: the durable Deployment route shows
+5. **Deployment and Conversations core delivered 2026-08-03**: the durable Deployment route shows
    the published version/hash, public origin, authentication/demo truth, native CLI
-   and WebSocket examples, and OpenAI-compatible TypeScript/Python examples. Agent-scoped
-   conversation traces, retention truth, and only then measured statistics remain.
+   and WebSocket examples, and OpenAI-compatible TypeScript/Python examples. The durable
+   Conversations route lists owner-scoped sessions, filters by id/status (with time and
+   duration filters at the API), displays exact draft revision or published version/hash,
+   transcript/tool/protocol detail when allowed, and supports deletion. `--traces DIR`
+   is the metadata opt-in; `--trace-content` is a separate content opt-in, demo mode
+   forces content off, and audio never enters this store. Retained-audio replay, a
+   byte-based trace ceiling, and only then measured statistics remain.
 6. **Portal reuse — not started**: curated public Agent and hardened demo
    experience after the preview component has passed desktop/mobile and
    real-browser gates.

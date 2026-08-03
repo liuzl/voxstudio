@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createAgent, deleteAgent, getDeploymentInfo, listAgents, publishAgent, transcribe, updateAgent } from "./api";
+import { createAgent, deleteAgent, deleteAgentConversation, getAgentConversation, getDeploymentInfo, listAgentConversations, listAgents, publishAgent, transcribe, updateAgent } from "./api";
 
 const realFetch = globalThis.fetch;
 
@@ -89,5 +89,29 @@ describe("Agent API", () => {
   test("lists the owner-visible records", async () => {
     stubFetch(() => Response.json({ agents: [{ id: "a", name: "A", revision: 1, createdAt: "now", updatedAt: "now", spec: {} }] }));
     await expect(listAgents()).resolves.toMatchObject([{ id: "a", name: "A", revision: 1 }]);
+  });
+
+  test("exposes trace-disabled as an explicit retention policy and encodes conversation ids", async () => {
+    const calls: Array<{ path: string; method: string }> = [];
+    stubFetch((input, init) => {
+      const path = String(input);
+      calls.push({ path, method: init?.method ?? "GET" });
+      if (path.includes("/conversations?")) {
+        return Response.json({ error: { code: "traces_disabled", message: "off" } }, { status: 404 });
+      }
+      if ((init?.method ?? "GET") === "DELETE") return Response.json({ deleted: true });
+      return Response.json({ conversation: { id: "session/1", events: [] }, policy: { enabled: true, content: false, audio: false } });
+    });
+
+    await expect(listAgentConversations("support", { outcome: "error", limit: 25 })).resolves.toEqual({
+      conversations: [], total: 0, policy: { enabled: false, content: false, audio: false },
+    });
+    await getAgentConversation("support", "session/1");
+    await deleteAgentConversation("support", "session/1");
+    expect(calls).toEqual([
+      { path: "/v1/agents/support/conversations?outcome=error&limit=25", method: "GET" },
+      { path: "/v1/agents/support/conversations/session%2F1", method: "GET" },
+      { path: "/v1/agents/support/conversations/session%2F1", method: "DELETE" },
+    ]);
   });
 });

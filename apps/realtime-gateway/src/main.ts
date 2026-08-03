@@ -43,7 +43,12 @@ syntheses at once and queues --max-queued-synthesis Q (default N) more; past tha
 caller gets 429 with Retry-After. Measured: throughput is flat past two in flight
 while latency grows linearly, so admitting more finishes nothing sooner.
 --agents DIR (VOX_GATEWAY_AGENTS; default ~/.config/voxstudio/agents) stores Agent
-drafts and immutable published versions.`;
+drafts and immutable published versions.
+--traces DIR (VOX_GATEWAY_TRACES) retains Agent conversation metadata and protocol
+events. Off by default; audio is never stored. --trace-content
+(VOX_GATEWAY_TRACE_CONTENT=1) separately enables transcripts, replies, and tool
+payloads; demo mode always forces content off. --trace-retention-days N and
+--trace-max-conversations N bound completed records.`;
 
 /**
  * OAuth providers from the environment. Credentials never travel in argv, where a
@@ -79,6 +84,10 @@ async function main(args: string[]): Promise<number> {
   let demoAgentId = process.env.VOX_GATEWAY_DEMO_AGENT;
   let libraryDir = process.env.VOX_GATEWAY_LIBRARY;
   let libraryMaxBytes = process.env.VOX_GATEWAY_LIBRARY_MAX_BYTES;
+  let traceDir = process.env.VOX_GATEWAY_TRACES;
+  let traceContent = process.env.VOX_GATEWAY_TRACE_CONTENT === "1";
+  let traceRetentionDays = process.env.VOX_GATEWAY_TRACE_RETENTION_DAYS;
+  let traceMaxConversations = process.env.VOX_GATEWAY_TRACE_MAX_CONVERSATIONS;
   let accountsDir = process.env.VOX_GATEWAY_ACCOUNTS;
   let quotaOperations = process.env.VOX_GATEWAY_QUOTA;
   let quotaWindow = process.env.VOX_GATEWAY_QUOTA_WINDOW;
@@ -106,6 +115,10 @@ async function main(args: string[]): Promise<number> {
     else if (arg === "--demo-agent") demoAgentId = value();
     else if (arg === "--library") libraryDir = value();
     else if (arg === "--library-max-bytes") libraryMaxBytes = value();
+    else if (arg === "--traces") traceDir = value();
+    else if (arg === "--trace-content") traceContent = true;
+    else if (arg === "--trace-retention-days") traceRetentionDays = value();
+    else if (arg === "--trace-max-conversations") traceMaxConversations = value();
     else if (arg === "--accounts") accountsDir = value();
     else if (arg === "--quota") quotaOperations = value();
     else if (arg === "--quota-window") quotaWindow = value();
@@ -138,6 +151,12 @@ async function main(args: string[]): Promise<number> {
   // A quota with no library is a config mistake; failing closed beats silently ignoring it.
   if (quotaBytes !== undefined && !hasLibrary) {
     throw new TypeError("vox-gateway: --library-max-bytes requires --library");
+  }
+  const hasTraces = traceDir !== undefined && traceDir !== "";
+  const retentionDays = positive(traceRetentionDays, "--trace-retention-days", true);
+  const maxTraces = positive(traceMaxConversations, "--trace-max-conversations", true);
+  if (!hasTraces && (traceContent || retentionDays !== undefined || maxTraces !== undefined)) {
+    throw new TypeError("vox-gateway: trace content and retention options require --traces");
   }
   // Hosted accounts fail closed at startup: a weak or missing secret must never boot,
   // and accounts + token is two products in one config (docs/auth.md decision 1).
@@ -192,6 +211,10 @@ async function main(args: string[]): Promise<number> {
     ...(demoAgent === undefined ? {} : { demoAgent }),
     ...(hasLibrary ? { libraryDir: libraryDir as string } : {}),
     ...(quotaBytes === undefined ? {} : { libraryMaxBytes: quotaBytes }),
+    ...(hasTraces ? { traceDir: traceDir as string } : {}),
+    ...(traceContent ? { traceContent: true } : {}),
+    ...(retentionDays === undefined ? {} : { traceRetentionDays: retentionDays }),
+    ...(maxTraces === undefined ? {} : { traceMaxConversations: maxTraces }),
     ...(hasAccounts ? {
       accounts: {
         dir: accountsDir as string,

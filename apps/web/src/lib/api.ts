@@ -96,6 +96,96 @@ export async function listAgentVersions(id: string): Promise<AgentPublishedVersi
   return payload.versions ?? [];
 }
 
+export type ConversationOutcome = "active" | "completed" | "error" | "abandoned";
+
+export interface ConversationTracePolicy {
+  enabled: boolean;
+  content: boolean;
+  audio: boolean;
+  retentionDays?: number | null;
+  maxConversations?: number | null;
+}
+
+export interface ConversationTraceSummary {
+  id: string;
+  agentId: string;
+  agentSource: "draft" | "published";
+  agentRevision: number | null;
+  agentVersion: number | null;
+  agentHash: string | null;
+  startedAt: number;
+  endedAt: number | null;
+  durationMs: number;
+  outcome: ConversationOutcome;
+  errorCode: string | null;
+  turnCount: number;
+  contentRetained: boolean;
+}
+
+export interface ConversationTraceEvent {
+  type: string;
+  sequence: number;
+  timestampMs: number;
+  sessionId: string;
+  turnId?: string;
+  revision?: number;
+  text?: string;
+  name?: string;
+  arguments?: Record<string, unknown>;
+  result?: unknown;
+  ok?: boolean;
+  code?: string;
+  message?: string;
+  recoverable?: boolean;
+  state?: string;
+  previous?: string;
+  reason?: string;
+  offsetsMs?: Record<string, number>;
+  [key: string]: unknown;
+}
+
+export interface ConversationTraceDetail extends ConversationTraceSummary {
+  events: ConversationTraceEvent[];
+}
+
+export async function listAgentConversations(id: string, filters: {
+  outcome?: ConversationOutcome;
+  query?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<{ conversations: ConversationTraceSummary[]; total: number; policy: ConversationTracePolicy }> {
+  const query = new URLSearchParams();
+  if (filters.outcome) query.set("outcome", filters.outcome);
+  if (filters.query?.trim()) query.set("id", filters.query.trim());
+  if (filters.limit !== undefined) query.set("limit", String(filters.limit));
+  if (filters.offset !== undefined) query.set("offset", String(filters.offset));
+  const response = await gatewayFetch(`/v1/agents/${encodeURIComponent(id)}/conversations${query.size ? `?${query}` : ""}`);
+  if (response.status === 404) {
+    const body = await response.clone().json().catch(() => null) as { error?: { code?: string } } | null;
+    if (body?.error?.code === "traces_disabled") {
+      return { conversations: [], total: 0, policy: { enabled: false, content: false, audio: false } };
+    }
+  }
+  if (!response.ok) await fail(response, "获取助手会话");
+  return response.json() as Promise<{ conversations: ConversationTraceSummary[]; total: number; policy: ConversationTracePolicy }>;
+}
+
+export async function getAgentConversation(agentId: string, sessionId: string): Promise<{
+  conversation: ConversationTraceDetail;
+  policy: ConversationTracePolicy;
+}> {
+  const response = await gatewayFetch(`/v1/agents/${encodeURIComponent(agentId)}/conversations/${encodeURIComponent(sessionId)}`);
+  if (!response.ok) await fail(response, "获取会话详情");
+  return response.json() as Promise<{ conversation: ConversationTraceDetail; policy: ConversationTracePolicy }>;
+}
+
+export async function deleteAgentConversation(agentId: string, sessionId: string): Promise<void> {
+  const response = await gatewayFetch(`/v1/agents/${encodeURIComponent(agentId)}/conversations/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) await fail(response, "删除会话");
+}
+
 export interface DeploymentInfo {
   auth: "self" | "accounts";
   demo: boolean;

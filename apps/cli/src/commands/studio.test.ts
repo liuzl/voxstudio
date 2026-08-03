@@ -167,6 +167,27 @@ describe("vox studio", () => {
       .rejects.toThrow("requires --library");
   });
 
+  test("conversation trace retention is an explicit, independently bounded opt-in", async () => {
+    const io = collectingIo();
+    let seen: GatewayServerOptions | undefined;
+    expect(await runStudio([
+      "--traces", "/tmp/vox-traces",
+      "--trace-content",
+      "--trace-retention-days", "14",
+      "--trace-max-conversations", "500",
+    ], config, io, options => { seen = options; return fakeGateway(); }, false)).toBe(0);
+    expect(seen).toMatchObject({
+      traceDir: "/tmp/vox-traces",
+      traceContent: true,
+      traceRetentionDays: 14,
+      traceMaxConversations: 500,
+    });
+    await expect(runStudio(["--trace-content"], config, io, () => fakeGateway(), false))
+      .rejects.toThrow("require --traces");
+    await expect(runStudio(["--traces", "/tmp/vox-traces", "--trace-retention-days", "0"], config, io, () => fakeGateway(), false))
+      .rejects.toThrow("positive integer");
+  });
+
   test("--demo-agent resolves and pins the current immutable published version", async () => {
     const root = await mkdtemp(join(tmpdir(), "vox-studio-demo-agent-"));
     try {

@@ -1,5 +1,5 @@
 import { auditDesignProfile, TtsClient, type Fetch, type PcmStreamDecoder } from "@voxstudio/clients";
-import { AgentRegistry, AgentRegistryError, type AgentSpec, type CreateAgentInput, type UpdateAgentInput } from "@voxstudio/agents";
+import { AgentRegistry, AgentRegistryError, type AgentPublishedVersion, type AgentRecord, type AgentSpec, type CreateAgentInput, type UpdateAgentInput } from "@voxstudio/agents";
 import { engine, engineByCapability, enginesOfKind, roleInstance } from "@voxstudio/config";
 import type { EngineKind, ResolvedEngineConfig, VoxConfig } from "@voxstudio/contracts";
 import type { SpeechProbabilityModel } from "@voxstudio/duplex-session";
@@ -23,6 +23,7 @@ import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand, type
 import { studioToolNames } from "@voxstudio/conversation";
 import { estSeconds } from "@voxstudio/text";
 import { builtinToolNames, GatewaySession, type EventSink } from "./session";
+import { ConversationTraceStore, type TraceAgentIdentity, type TraceOutcome } from "./trace-store";
 
 export interface GatewayServerOptions {
   config: VoxConfig;
@@ -124,6 +125,14 @@ export interface GatewayServerOptions {
    * own machine, wrong for anything long-running or shared.
    */
   libraryMaxBytes?: number;
+  /** Agent conversation metadata/protocol traces. Off by default; audio is never stored. */
+  traceDir?: string;
+  /** Retain transcript/reply/tool payloads in traces. Independent opt-in; forced off in demo mode. */
+  traceContent?: boolean;
+  /** Remove completed traces older than this many days. */
+  traceRetentionDays?: number;
+  /** Keep at most this many completed traces deployment-wide. */
+  traceMaxConversations?: number;
   /** Agent drafts and immutable published snapshots. Off when absent. */
   agentsDir?: string;
   loadSileroVad?: () => Promise<SpeechProbabilityModel>;
@@ -165,6 +174,7 @@ interface SocketData {
   /** Published Agent defaults resolved before the OpenAI socket is accepted. */
   openaiStart?: SessionStartOptions;
   openaiAgentSpec?: AgentSpec;
+  openaiTrace?: TraceAgentIdentity;
 }
 
 /** Engine endpoints the facade forwards, keyed by public path. The browser sees only these. */
@@ -180,6 +190,7 @@ const voiceEntryPattern = /^\/v1\/voices\/[A-Za-z0-9._-]{1,64}$/;
 /** Library entries: gateway-minted UUIDs, plus the audio and promote sub-resources. */
 const libraryEntryPattern = /^\/v1\/library\/([A-Za-z0-9-]{1,64})(\/audio|\/promote)?$/;
 const agentEntryPattern = /^\/v1\/agents\/([A-Za-z0-9._-]{1,64})(?:\/(publish|audit|versions))?$/;
+const agentConversationPattern = /^\/v1\/agents\/([A-Za-z0-9._-]{1,64})\/conversations(?:\/([A-Za-z0-9-]{1,64}))?$/;
 const voiceIdPattern = /^[A-Za-z0-9._-]{1,64}$/;
 
 /**
@@ -249,6 +260,10 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   }
   if (options.demoAgent !== undefined && options.accounts !== undefined) {
     throw new TypeError("demoAgent and accounts cannot be combined until the Portal has an operator-owned Agent namespace");
+  }
+  if (options.traceDir === undefined && (options.traceContent === true
+      || options.traceRetentionDays !== undefined || options.traceMaxConversations !== undefined)) {
+    throw new TypeError("trace content and retention options require a traceDir");
   }
   // Fail at startup, not on the first request: a hosted deployment with a weak or
   // missing secret must never come up. 32 is Better Auth's own floor.
@@ -404,6 +419,15 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         log,
       })
     : undefined;
+  if (options.traceDir !== undefined && options.demoMode === true && options.traceContent === true) {
+    log("demo mode: conversation metadata may be retained, but transcript and tool content stay off");
+  }
+  const traces = options.traceDir === undefined ? undefined : new ConversationTraceStore(options.traceDir, {
+    retainContent: options.traceContent === true && options.demoMode !== true,
+    ...(options.traceRetentionDays === undefined ? {} : { retentionDays: options.traceRetentionDays }),
+    ...(options.traceMaxConversations === undefined ? {} : { maxConversations: options.traceMaxConversations }),
+    log,
+  });
   const agents = options.agentsDir === undefined ? undefined : new AgentRegistry(options.agentsDir);
 
   const assets = options.staticAssets && Object.keys(options.staticAssets).length > 0
@@ -624,6 +648,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     extraTools: ConversationTool[] = [],
     owner: string = OWNER_USER_ID,
     agentSpec?: AgentSpec,
+    trace?: TraceAgentIdentity,
   ): GatewaySession => {
     if (options.maxSessions !== undefined && sessions.size >= options.maxSessions) {
       log(`session refused: at the ${options.maxSessions}-session capacity`);
@@ -733,9 +758,19 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       ...((options.maxSessionSeconds === undefined && agentSpec?.maxSessionSeconds === undefined) ? {} : {
         maxSessionSeconds: Math.min(options.maxSessionSeconds ?? Number.POSITIVE_INFINITY, agentSpec?.maxSessionSeconds ?? Number.POSITIVE_INFINITY),
       }),
-      onClosed: closed => { sessions.delete(closed.id); },
+      ...(traces === undefined || trace === undefined ? {} : {
+        onEvent: event => { traces.append(owner, event); },
+      }),
+      onClosed: closed => {
+        if (traces !== undefined && trace !== undefined) {
+          try { traces.finish(owner, closed.id); }
+          catch (error) { log(`traces: finish ${closed.id} failed: ${error instanceof Error ? error.message : String(error)}`); }
+        }
+        sessions.delete(closed.id);
+      },
       ...(options.log === undefined ? {} : { log: options.log }),
     });
+    if (traces !== undefined && trace !== undefined) traces.begin(owner, session.id, trace);
     sessions.set(session.id, session);
     return session;
   };
@@ -743,7 +778,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   const resolveAgentStart = async (
     owner: string,
     start: SessionStartOptions,
-  ): Promise<{ start: SessionStartOptions; spec?: AgentSpec }> => {
+  ): Promise<{ start: SessionStartOptions; spec?: AgentSpec; trace?: TraceAgentIdentity }> => {
     if (start.agent === undefined) return { start };
     if (agents === undefined) throw new AgentRegistryError("not_found", "this deployment has no Agent registry configured");
     const source = start.agentSource === "draft"
@@ -778,13 +813,21 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     // Tool policy is a ceiling: the caller may turn an allowed capability off, never
     // turn one on that the saved Agent did not grant.
     merged.studioTools = spec.studioTools === true && explicit.studioTools !== false;
-    return { start: merged, spec };
+    const trace: TraceAgentIdentity = source.type === "draft"
+      ? { agentId: start.agent, source: "draft", revision: (resolved as AgentRecord).revision }
+      : {
+          agentId: start.agent,
+          source: "published",
+          version: (resolved as AgentPublishedVersion).version,
+          hash: (resolved as AgentPublishedVersion).hash,
+        };
+    return { start: merged, spec, trace };
   };
 
   const resolveDeploymentStart = async (
     owner: string,
     requested: SessionStartOptions,
-  ): Promise<{ start: SessionStartOptions; spec?: AgentSpec }> => {
+  ): Promise<{ start: SessionStartOptions; spec?: AgentSpec; trace?: TraceAgentIdentity }> => {
     let start = requested;
     if (options.demoAgent !== undefined) {
       if (start.agent !== undefined && start.agent !== options.demoAgent.id) {
@@ -821,7 +864,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           // cross-owner, or stale draft Agent costs no quota and starts no session.
           resolved = await resolveDeploymentStart(ws.data.ctx.userId, command.options ?? {});
           if (ws.data.closed === true || ws.data.pendingStart !== pendingKey) return;
-          session = createSession([], ws.data.ctx.userId, resolved.spec);
+          session = createSession([], ws.data.ctx.userId, resolved.spec, resolved.trace);
         } catch (error) {
           if (ws.data.pendingStart === pendingKey) {
             ws.data.pendingStart = undefined;
@@ -910,6 +953,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           ...(options.demoAgent === undefined ? {} : { demoAgent: options.demoAgent }),
           ...(options.maxSessions === undefined ? {} : { maxSessions: options.maxSessions }),
           ...(options.maxSessionSeconds === undefined ? {} : { maxSessionSeconds: options.maxSessionSeconds }),
+          traces: traces?.policy ?? { enabled: false, content: false, audio: false },
         };
         if (options.accounts !== undefined) {
           return (async (): Promise<Response> => Response.json({
@@ -993,7 +1037,8 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         return response;
       };
       const agentMatch = agentEntryPattern.exec(url.pathname);
-      if (url.pathname === "/v1/agents" || agentMatch !== null) {
+      const conversationMatch = agentConversationPattern.exec(url.pathname);
+      if (url.pathname === "/v1/agents" || agentMatch !== null || conversationMatch !== null) {
         if (agents === undefined) {
           return problem(404, "agents_disabled", "this deployment has no Agent registry configured");
         }
@@ -1024,6 +1069,68 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           headers: { etag: `\"${record.revision}\"` },
         });
         try {
+          if (conversationMatch !== null) {
+            if (traces === undefined) {
+              return problem(404, "traces_disabled", "conversation traces are not enabled on this gateway (start with --traces DIR)");
+            }
+            const agentId = conversationMatch[1] as string;
+            const sessionId = conversationMatch[2];
+            if (sessionId === undefined) {
+              if (request.method !== "GET") return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
+              const integer = (name: string, fallback: number, maximum = Number.MAX_SAFE_INTEGER): number | Response => {
+                const raw = url.searchParams.get(name);
+                if (raw === null) return fallback;
+                const value = Number(raw);
+                return Number.isSafeInteger(value) && value >= 0
+                  ? Math.min(value, maximum)
+                  : problem(400, "bad_filter", `${name} must be a non-negative integer`);
+              };
+              const timestamp = (name: string): number | undefined | Response => {
+                const raw = url.searchParams.get(name);
+                if (raw === null || raw === "") return undefined;
+                const value = /^\d+$/.test(raw) ? Number(raw) : Date.parse(raw);
+                return Number.isFinite(value) && value >= 0
+                  ? value
+                  : problem(400, "bad_filter", `${name} must be a timestamp or ISO date`);
+              };
+              const limit = integer("limit", 50, 200);
+              const offset = integer("offset", 0);
+              const minDurationMs = integer("min_duration_ms", 0);
+              const maxDurationMs = integer("max_duration_ms", Number.MAX_SAFE_INTEGER);
+              const from = timestamp("from");
+              const to = timestamp("to");
+              for (const value of [limit, offset, minDurationMs, maxDurationMs, from, to]) {
+                if (value instanceof Response) return value;
+              }
+              const rawOutcome = url.searchParams.get("outcome") ?? undefined;
+              const outcomes: TraceOutcome[] = ["active", "completed", "error", "abandoned"];
+              if (rawOutcome !== undefined && !outcomes.includes(rawOutcome as TraceOutcome)) {
+                return problem(400, "bad_filter", `outcome must be one of ${outcomes.join(", ")}`);
+              }
+              return Response.json(traces.list(ctx.userId, agentId, {
+                limit: limit as number,
+                offset: offset as number,
+                ...(rawOutcome === undefined ? {} : { outcome: rawOutcome as TraceOutcome }),
+                ...(from === undefined ? {} : { from: from as number }),
+                ...(to === undefined ? {} : { to: to as number }),
+                ...((minDurationMs as number) === 0 ? {} : { minDurationMs: minDurationMs as number }),
+                ...((maxDurationMs as number) === Number.MAX_SAFE_INTEGER ? {} : { maxDurationMs: maxDurationMs as number }),
+                ...(url.searchParams.get("id") === null ? {} : { id: url.searchParams.get("id") as string }),
+              }));
+            }
+            if (request.method === "GET") {
+              const trace = traces.get(ctx.userId, agentId, sessionId);
+              return trace === undefined
+                ? problem(404, "conversation_not_found", "conversation was not found")
+                : Response.json({ conversation: trace, policy: traces.policy });
+            }
+            if (request.method === "DELETE") {
+              return traces.remove(ctx.userId, agentId, sessionId)
+                ? Response.json({ deleted: true })
+                : problem(404, "conversation_not_found", "conversation was not found");
+            }
+            return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
+          }
           if (url.pathname === "/v1/agents") {
             if (request.method === "GET") return Response.json({ agents: await agents.list(ctx.userId) });
             const parsed = await body();
@@ -1082,6 +1189,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           || subprotocols.includes("realtime");
         let openaiStart: SessionStartOptions | undefined;
         let openaiAgentSpec: AgentSpec | undefined;
+        let openaiTrace: TraceAgentIdentity | undefined;
         if (openai) {
           const selectedAgent = url.searchParams.get("agent") ?? undefined;
           const rawVersion = url.searchParams.get("agent_version") ?? undefined;
@@ -1102,6 +1210,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
             });
             openaiStart = resolved.start;
             openaiAgentSpec = resolved.spec;
+            openaiTrace = resolved.trace;
           } catch (error) {
             if (!(error instanceof AgentRegistryError)) throw error;
             const status = error.code === "invalid" ? 400
@@ -1118,6 +1227,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           ...(openai ? { openaiModel: url.searchParams.get("model") ?? "voxstudio-realtime" } : {}),
           ...(openaiStart === undefined ? {} : { openaiStart }),
           ...(openaiAgentSpec === undefined ? {} : { openaiAgentSpec }),
+          ...(openaiTrace === undefined ? {} : { openaiTrace }),
         };
         // Clients that offer subprotocols (the OpenAI SDKs offer `realtime`) get their
         // first choice echoed back by Bun's upgrade; adding it manually here duplicates
@@ -1367,7 +1477,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         ws.data.openai = new OpenAiRealtimeConnection({
           send: text => { ws.send(text); },
           close: () => { ws.close(); },
-          createSession: extraTools => createSession(extraTools, ws.data.ctx.userId, ws.data.openaiAgentSpec),
+          createSession: extraTools => createSession(extraTools, ws.data.ctx.userId, ws.data.openaiAgentSpec, ws.data.openaiTrace),
           reservedToolNames: builtinToolNames,
           model: ws.data.openaiModel,
           ...(ws.data.openaiStart === undefined ? {} : { startOptions: ws.data.openaiStart }),
@@ -1443,6 +1553,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // Draining: in-flight library work (a promote awaiting its engine) finishes
       // against an open database; only then does the store close.
       if (library) await library.close();
+      traces?.close();
       // Bounded: Bun's force-stop has been observed to never resolve when a client's
       // WebSocket close handshake is still in flight at stop time (reproduced 2026-07-19
       // with an MCP-configured gateway). The sockets are already torn down above; a stop

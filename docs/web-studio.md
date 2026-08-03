@@ -3,8 +3,8 @@
 Status: Accepted, 2026-07-14; living delivery record. The realtime gateway,
 five original functional panels, single-binary packaging, hosted authentication,
 and explicit engine-route selection are delivered. The registry-backed Agents
-list, Configuration/Speech Builder sections, immutable version lifecycle, and
-draft/published Try it live were delivered 2026-08-02. The remaining Builder sections,
+list, Configuration/Speech/Deployment/Conversations Builder sections, immutable version
+lifecycle, and draft/published Try it live are delivered. The remaining Builder work,
 real-browser double-talk gate, and production hosting operations remain.
 
 ## Scope

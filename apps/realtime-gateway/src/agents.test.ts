@@ -68,6 +68,14 @@ class RealtimeClient {
     for (const amplitude of [0.2, 0.2, 0, 0]) this.socket.send(new Float32Array(320).fill(amplitude).buffer);
   }
 
+  stop(): void {
+    this.socket.send(JSON.stringify({
+      v: protocolVersion,
+      type: "session.stop",
+      idempotencyKey: crypto.randomUUID(),
+    }));
+  }
+
   async until(predicate: (events: GatewayEvent[]) => boolean, label: string): Promise<void> {
     const deadline = Date.now() + 5_000;
     while (!predicate(this.events)) {
@@ -292,6 +300,82 @@ describe("Agent REST registry", () => {
     expect(chats[0]?.messages[0]?.content).toStartWith("You are the published support persona.");
     expect(chats[0]?.tools?.some(tool => tool.function.name === "save_last_utterance_as_voice")).toBe(false);
     client.close();
+  });
+
+  test("Agent conversations persist an owner-scoped, version-pinned trace only when configured", async () => {
+    const agentsDir = await root();
+    const traceDir = await root();
+    const engineFetch: Fetch = async (input, init) => {
+      const engineRequest = new Request(input instanceof Request ? input : String(input), init);
+      const path = new URL(engineRequest.url).pathname;
+      if (path === "/v1/audio/transcriptions") return Response.json({ text: "retained question" });
+      if (path === "/v1/chat/completions") return Response.json({ choices: [{ message: { content: "retained answer" } }] });
+      if (path === "/v1/audio/speech") return new Response(new Uint8Array(writeWav(new Float32Array(1_200), 24_000)));
+      if (path === "/v1/voices") return Response.json({ voices: [] });
+      throw new Error(`unexpected engine path ${path}`);
+    };
+    gateway = startGateway({
+      config,
+      port: 0,
+      agentsDir,
+      traceDir,
+      traceContent: true,
+      authResolver: identity,
+      fetch: engineFetch,
+    });
+    const created = await request("/v1/agents", {
+      method: "POST",
+      body: JSON.stringify({
+        id: "traced",
+        name: "Traced",
+        spec: { vad: "energy", threshold: 0.1, minSpeechMs: 40, silenceMs: 20 },
+      }),
+    }).then(response => response.json()) as { revision: number };
+    const published = await request("/v1/agents/traced/publish", {
+      method: "POST", body: JSON.stringify({ revision: created.revision }),
+    }).then(response => response.json()) as { version: { version: number; hash: string } };
+
+    const client = new RealtimeClient(gateway.url);
+    await client.ready();
+    client.command({ agent: "traced", bargeIn: true });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "snapshot");
+    client.sendTurn();
+    await client.until(events => events.some(event => event.type === "turn.completed"), "completed turn");
+    const sessionId = client.events[0]?.sessionId as string;
+    client.stop();
+    await client.until(events => events.some(event => event.type === "session.state" && event.state === "closed"), "closed state");
+
+    const listResponse = await request("/v1/agents/traced/conversations");
+    expect(listResponse.status).toBe(200);
+    const list = await listResponse.json() as {
+      conversations: Array<{ id: string; agentVersion: number; agentHash: string; outcome: string; turnCount: number }>;
+      policy: { content: boolean; audio: boolean };
+    };
+    expect(list.policy).toEqual(expect.objectContaining({ content: true, audio: false }));
+    expect(list.conversations).toEqual([expect.objectContaining({
+      id: sessionId,
+      agentVersion: published.version.version,
+      agentHash: published.version.hash,
+      outcome: "completed",
+      turnCount: 1,
+    })]);
+
+    const detail = await request(`/v1/agents/traced/conversations/${sessionId}`).then(response => response.json()) as {
+      conversation: { events: GatewayEvent[] };
+    };
+    expect(detail.conversation.events).toContainEqual(expect.objectContaining({ type: "transcript.final", text: "retained question" }));
+    expect(detail.conversation.events).toContainEqual(expect.objectContaining({ type: "response.text.final", text: "retained answer" }));
+    expect((await request(`/v1/agents/traced/conversations/${sessionId}`, { user: "bob" })).status).toBe(404);
+    expect((await request(`/v1/agents/traced/conversations/${sessionId}`, { method: "DELETE", user: "bob" })).status).toBe(404);
+    expect((await request(`/v1/agents/traced/conversations/${sessionId}`, { method: "DELETE" })).status).toBe(200);
+    client.close();
+  });
+
+  test("the Conversations API reports that retention is disabled instead of returning a fake empty history", async () => {
+    gateway = startGateway({ config, port: 0, agentsDir: await root(), authResolver: identity });
+    const response = await request("/v1/agents/support/conversations");
+    expect(response.status).toBe(404);
+    expect((await response.json() as { error: { code: string } }).error.code).toBe("traces_disabled");
   });
 
   test("a demo deployment stays pinned to the operator-selected immutable version", async () => {

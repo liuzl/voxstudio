@@ -57,6 +57,7 @@ import {
 } from "../lib/api";
 import type { ConnectionState } from "../lib/client";
 import { useStudio } from "../store";
+import { AgentConversations } from "./AgentConversations";
 
 const templates = [
   {
@@ -221,7 +222,7 @@ function AgentAvatar({ id, size = "size-7" }: { id: string; size?: string }) {
   return <span aria-hidden className={`${size} shrink-0 rounded-full border border-black/10 shadow-[inset_0_0_8px_rgba(255,255,255,0.22)] dark:border-white/15`} style={avatarStyle(id)} />;
 }
 
-export type AgentSection = "configuration" | "speech" | "deployment";
+export type AgentSection = "configuration" | "speech" | "deployment" | "conversations";
 
 interface AgentsPanelProps {
   agentId?: string | undefined;
@@ -1100,9 +1101,9 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
           </div>
         </div>
         <nav className="mx-auto flex max-w-[1440px] gap-6 overflow-x-auto px-4 sm:px-7 lg:px-10" aria-label={t("助手")}>
-          {(["configuration", "speech", "deployment"] as const).map(item => (
+          {(["configuration", "speech", "deployment", "conversations"] as const).map(item => (
             <button key={item} onClick={() => onSectionChange(item)} aria-current={section === item ? "page" : undefined} className={`relative h-10 shrink-0 px-1 text-[11px] font-medium transition ${section === item ? "text-fg" : "text-fg-muted hover:text-fg"}`}>
-              {item === "configuration" ? t("配置") : item === "speech" ? t("语音设置") : t("部署")}
+              {item === "configuration" ? t("配置") : item === "speech" ? t("语音设置") : item === "deployment" ? t("部署") : t("会话记录")}
               {section === item ? <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-ink" /> : null}
             </button>
           ))}
@@ -1177,7 +1178,7 @@ function AgentBuilder({ agentId, section, onOpenAgent, onSectionChange, onClose,
                 </div>
               </details>
             </>
-          ) : <AgentDeployment record={record} />}
+          ) : section === "deployment" ? <AgentDeployment record={record} /> : <AgentConversations agentId={record.id} />}
         </div>
 
       </div>

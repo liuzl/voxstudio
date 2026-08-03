@@ -24,6 +24,7 @@ import {
   protocolVersion,
   snapshotEvent,
   type GatewayCommand,
+  type GatewayEvent,
   type GatewayEventPayload,
   type SessionStartOptions,
 } from "./protocol";
@@ -103,6 +104,8 @@ export interface GatewaySessionOptions {
   maxSessionSeconds?: number;
   /** Called when the session ends for any reason, so the registry can forget it. */
   onClosed?: (session: GatewaySession) => void;
+  /** Optional trace observer. It must never become part of the conversation's critical path. */
+  onEvent?: (event: GatewayEvent) => void;
   /** Operational logging (session lifecycle, turn milestones, errors). No transcript text. */
   log?: (line: string) => void;
 }
@@ -521,7 +524,7 @@ export class GatewaySession {
   }
 
   emit(payload: GatewayEventPayload): void {
-    const event = {
+    const event: GatewayEvent = {
       ...payload,
       v: protocolVersion,
       sequence: ++this.sequence,
@@ -538,6 +541,13 @@ export class GatewaySession {
         const state = payload.type === "session.state" ? ` ${payload.state}` : "";
         this.options.log(`session ${this.id.slice(0, 8)} #${event.sequence} ${payload.type}${turn}${state}`);
       }
+    }
+    try {
+      this.options.onEvent?.(event);
+    } catch (error) {
+      // Retention is an observer. A full/corrupt trace store must not silence a live
+      // conversation or prevent its endpoint from receiving the event.
+      this.options.log?.(`session ${this.id.slice(0, 8)} trace write failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     // A detached session keeps running; events during the gap are not buffered because the
     // reconnecting client resynchronizes from the snapshot, not from a replay.

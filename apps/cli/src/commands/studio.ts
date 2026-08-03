@@ -9,6 +9,8 @@ import type { CliIo } from "../io";
 
 export const studioUsage = `usage: vox studio [--host HOST] [--port PORT] [--token TOKEN]
                  [--agents DIR] [--library DIR] [--library-max-bytes SIZE] [--accounts DIR]
+                 [--traces DIR] [--trace-content] [--trace-retention-days N]
+                 [--trace-max-conversations N]
                  [--quota N] [--quota-window SECONDS] [--max-synthesis-seconds N]
                  [--max-concurrent-synthesis N] [--max-queued-synthesis Q]
                  [--max-sessions N] [--max-session-seconds N] [--demo] [--demo-agent ID]
@@ -40,6 +42,17 @@ options:
                  captures are evicted to stay under it; corrected or promoted captures
                  are curated work and are never auto-deleted — once they alone fill
                  the quota, new captures are refused instead. Unbounded when unset
+  --traces DIR   retain Agent conversation metadata and protocol events in DIR
+                 (VOX_GATEWAY_TRACES). Off by default; audio is never retained
+  --trace-content
+                 additionally retain transcripts, replies, and tool payloads
+                 (VOX_GATEWAY_TRACE_CONTENT=1). Demo mode always forces content off
+  --trace-retention-days N
+                 remove completed traces older than N days
+                 (VOX_GATEWAY_TRACE_RETENTION_DAYS)
+  --trace-max-conversations N
+                 keep at most N completed traces deployment-wide
+                 (VOX_GATEWAY_TRACE_MAX_CONVERSATIONS)
   --accounts DIR hosted accounts (docs/auth.md): auth.db in DIR, signup/login at
                  /v1/auth, cookie sessions and API keys instead of the shared token
                  (mutually exclusive with --token). Requires VOX_AUTH_SECRET (>= 32
@@ -132,6 +145,10 @@ export async function runStudio(
   let demoMode = process.env.VOX_GATEWAY_DEMO === "1";
   let demoAgentId = process.env.VOX_GATEWAY_DEMO_AGENT;
   let libraryDir = process.env.VOX_GATEWAY_LIBRARY;
+  let traceDir = process.env.VOX_GATEWAY_TRACES;
+  let traceContent = process.env.VOX_GATEWAY_TRACE_CONTENT === "1";
+  let traceRetentionDays = positiveEnv("VOX_GATEWAY_TRACE_RETENTION_DAYS", true);
+  let traceMaxConversations = positiveEnv("VOX_GATEWAY_TRACE_MAX_CONVERSATIONS", true);
   let agentsDir = process.env.VOX_GATEWAY_AGENTS ?? join(homedir(), ".config", "voxstudio", "agents");
   let accountsDir = process.env.VOX_GATEWAY_ACCOUNTS;
   // A quota typo fails closed, exactly like the guardrail envs above.
@@ -167,6 +184,10 @@ export async function runStudio(
     else if (arg === "--demo-agent") demoAgentId = value();
     else if (arg === "--library") libraryDir = value();
     else if (arg === "--library-max-bytes") libraryMaxBytes = parseByteSize(value(), `studio: ${arg}`);
+    else if (arg === "--traces") traceDir = value();
+    else if (arg === "--trace-content") traceContent = true;
+    else if (arg === "--trace-retention-days") traceRetentionDays = positiveNumber(value(), arg, true);
+    else if (arg === "--trace-max-conversations") traceMaxConversations = positiveNumber(value(), arg, true);
     else if (arg === "--accounts") accountsDir = value();
     else if (arg === "--quota") quotaOperations = positiveNumber(value(), arg, true);
     else if (arg === "--quota-window") quotaWindow = positiveNumber(value(), arg);
@@ -178,6 +199,10 @@ export async function runStudio(
   // A quota with no library is a config mistake; failing closed beats silently ignoring it.
   if (libraryMaxBytes !== undefined && (libraryDir === undefined || libraryDir === "")) {
     throw new TypeError("studio: --library-max-bytes requires --library");
+  }
+  const hasTraces = traceDir !== undefined && traceDir !== "";
+  if (!hasTraces && (traceContent || traceRetentionDays !== undefined || traceMaxConversations !== undefined)) {
+    throw new TypeError("studio: trace content and retention options require --traces");
   }
   // Hosted accounts fail closed at startup (docs/auth.md): no weak secrets, no
   // accounts + token double-door.
@@ -232,6 +257,10 @@ export async function runStudio(
     ...(agentsDir === "" ? {} : { agentsDir }),
     ...(libraryDir === undefined || libraryDir === "" ? {} : { libraryDir }),
     ...(libraryMaxBytes === undefined ? {} : { libraryMaxBytes }),
+    ...(hasTraces ? { traceDir: traceDir as string } : {}),
+    ...(traceContent ? { traceContent: true } : {}),
+    ...(traceRetentionDays === undefined ? {} : { traceRetentionDays }),
+    ...(traceMaxConversations === undefined ? {} : { traceMaxConversations }),
     ...(hasAccounts ? {
       accounts: {
         dir: accountsDir as string,

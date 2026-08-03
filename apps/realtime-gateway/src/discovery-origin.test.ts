@@ -139,7 +139,11 @@ describe("a self-hosted studio answers the machine paths honestly", () => {
     const selfHosted = await (await fetch(new URL("/healthz", gateway.url))).json() as Record<string, unknown>;
     expect(selfHosted.auth).toBe("self");
     expect(selfHosted.sessions).toBe(0);
-    expect(selfHosted.deployment).toEqual({ demo: false, tokenRequired: false });
+    expect(selfHosted.deployment).toEqual({
+      demo: false,
+      tokenRequired: false,
+      traces: { enabled: false, content: false, audio: false },
+    });
     await gateway.stop();
 
     gateway = startGateway({
@@ -150,7 +154,11 @@ describe("a self-hosted studio answers the machine paths honestly", () => {
     });
     const hosted = await (await fetch(new URL("/healthz", gateway.url))).json() as Record<string, unknown>;
     expect(hosted.auth).toBe("accounts");
-    expect(hosted.deployment).toEqual({ demo: false, tokenRequired: false });
+    expect(hosted.deployment).toEqual({
+      demo: false,
+      tokenRequired: false,
+      traces: { enabled: false, content: false, audio: false },
+    });
     // Live-session counts are nobody's business on a public entrance.
     expect("sessions" in hosted).toBe(false);
   });

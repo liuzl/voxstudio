@@ -1,6 +1,6 @@
 # Agents: the session options, reified
 
-Status: Accepted; runtime, CLI, dialect/demo, and Configuration/Speech/Deployment Web Builder slices delivered
+Status: Accepted; runtime, CLI, dialect/demo, and Configuration/Speech/Deployment/Conversations Web Builder slices delivered
 2026-08-03.
 The competitive gap the console walkthroughs made concrete
 ([competitive-voice-agents.md](./competitive-voice-agents.md)): xAI's
@@ -35,8 +35,11 @@ restore-as-draft, duplicate/export/audit/delete actions, and exact
 published-version preview. The CLI manages and runs published Agents, the OpenAI
 dialect accepts `?agent=`, demo deployments pin an immutable version, and the
 Deployment section provides native/compatible integration examples. Conversation
-history, statistics, and the remaining preview controls described in
-[agent-builder-ui.md](./agent-builder-ui.md) remain next.
+history now uses an optional owner-scoped Trace Store: every record pins the exact
+draft revision or immutable published version/hash, metadata retention is explicit,
+content retention is a second opt-in, and audio is never stored there. Statistics,
+audio replay/byte-bounded trace retention, and the remaining preview controls described
+in [agent-builder-ui.md](./agent-builder-ui.md) remain next.
 
 ## The question
 
@@ -152,11 +155,14 @@ sharing, and knowledge attachments (RAG hangs off `AgentSpec` later).
    `--demo-agent` resolves once at startup and pins an immutable published version;
    it requires demo mode and is deliberately self-hosted until the Portal owns an
    operator Agent namespace.
-3. **Surfaces — Builder and Deployment delivered; remainder in progress.** Web: the
+3. **Surfaces — Builder, Deployment, and Conversations core delivered; remainder in progress.** Web: the
    Agent Builder delivery in [agent-builder-ui.md](./agent-builder-ui.md),
    including real list and detail routes, create-from-template, edit,
-   draft/publish, and Try it live; the conversation trace viewer ties call
-   history to the agent that served it. Conversation history remains pending.
+   draft/publish, and Try it live; the conversation trace viewer ties owner-scoped call
+   history to the exact Agent revision/version that served it. Trace persistence is off
+   by default (`--traces DIR`); `--trace-content` independently enables transcript and
+   tool payload retention, demo mode forces that content off, and audio remains out of
+   the Trace Store. Measured statistics and retained-audio replay remain pending.
 4. **Later — conditional.** Organizations and multi-principal sharing;
    knowledge attachments per agent; agent switching mid-call as a session tool,
    if real usage asks for it.
