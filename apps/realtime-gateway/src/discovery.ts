@@ -756,6 +756,46 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         get: { summary: "List immutable published Agent versions", responses: { "200": { description: "Published versions, newest first." }, "404": errorResponse("No such Agent.") } },
       },
+      "/v1/agents/{id}/conversations": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        get: {
+          summary: "List retained conversations for one Agent",
+          parameters: [
+            { name: "limit", in: "query", schema: { type: "integer", default: 50, maximum: 200 } },
+            { name: "offset", in: "query", schema: { type: "integer", default: 0 } },
+            { name: "id", in: "query", schema: { type: "string" }, description: "Exact session id." },
+            { name: "outcome", in: "query", schema: { type: "string", enum: ["active", "completed", "error", "abandoned"] } },
+            { name: "from", in: "query", schema: { type: "string" }, description: "Unix epoch milliseconds or an ISO date." },
+            { name: "to", in: "query", schema: { type: "string" }, description: "Unix epoch milliseconds or an ISO date." },
+            { name: "min_duration_ms", in: "query", schema: { type: "integer", minimum: 0 } },
+            { name: "max_duration_ms", in: "query", schema: { type: "integer", minimum: 0 } },
+          ],
+          responses: {
+            "200": { description: "Owner-scoped conversation summaries and the active retention policy." },
+            "404": errorResponse("Conversation retention is not enabled (`traces_disabled`)."),
+          },
+        },
+      },
+      "/v1/agents/{id}/conversations/{sessionId}": {
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } },
+          { name: "sessionId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        get: {
+          summary: "Get one retained Agent conversation and its protocol events",
+          responses: {
+            "200": { description: "The owner-scoped conversation trace and retention policy." },
+            "404": errorResponse("Retention is disabled or the conversation does not exist for this owner."),
+          },
+        },
+        delete: {
+          summary: "Permanently delete one retained Agent conversation",
+          responses: {
+            "200": { description: "Deleted." },
+            "404": errorResponse("Retention is disabled or the conversation does not exist for this owner."),
+          },
+        },
+      },
       "/v1/voices": {
         get: {
           summary: "The caller's voice bank across every TTS instance",

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   ChevronRight,
@@ -201,28 +201,51 @@ export function AgentConversations({ agentId }: { agentId: string }) {
   const [loading, setLoading] = useState(true);
   const [failure, setFailure] = useState("");
   const [query, setQuery] = useState("");
+  const [serverQuery, setServerQuery] = useState("");
   const [outcome, setOutcome] = useState<ConversationOutcome | "">("");
   const [selected, setSelected] = useState<ConversationTraceDetail>();
   const [detailLoading, setDetailLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const loadGeneration = useRef(0);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
+    const generation = ++loadGeneration.current;
     setLoading(true); setFailure("");
     try {
-      const result = await listAgentConversations(agentId, { ...(outcome ? { outcome } : {}), limit: 200 });
+      const result = await listAgentConversations(agentId, {
+        ...(outcome ? { outcome } : {}),
+        ...(serverQuery ? { query: serverQuery } : {}),
+        limit: 200,
+        ...(signal === undefined ? {} : { signal }),
+      });
+      if (generation !== loadGeneration.current) return;
       setConversations(result.conversations); setPolicy(result.policy);
       setSelected(current => current && !result.conversations.some(item => item.id === current.id) ? undefined : current);
     } catch (error) {
+      if (signal?.aborted || generation !== loadGeneration.current) return;
       setFailure(error instanceof Error ? error.message : String(error));
-    } finally { setLoading(false); }
-  }, [agentId, outcome]);
+    } finally {
+      if (generation === loadGeneration.current) setLoading(false);
+    }
+  }, [agentId, outcome, serverQuery]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const timer = setTimeout(() => setServerQuery(query.trim()), 250);
+    return () => clearTimeout(timer);
+  }, [query]);
 
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return needle ? conversations.filter(item => item.id.toLowerCase().includes(needle)) : conversations;
-  }, [conversations, query]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
+
+  useEffect(() => {
+    setConversations([]);
+    setSelected(undefined);
+    setQuery("");
+    setServerQuery("");
+  }, [agentId]);
 
   const open = async (summary: ConversationTraceSummary) => {
     setDetailLoading(true);
@@ -265,7 +288,7 @@ export function AgentConversations({ agentId }: { agentId: string }) {
         </header>
         <div className="grid min-h-[520px] lg:grid-cols-[minmax(0,0.9fr)_minmax(390px,1.1fr)]">
           <div className="min-w-0 border-edge lg:border-r">
-            {filtered.length === 0 ? <div className="flex min-h-[360px] flex-col items-center justify-center px-6 text-center"><FileClock className="size-6 text-fg-faint" /><p className="mt-3 text-[11px] font-medium">{query || outcome ? t("没有符合筛选条件的会话") : t("还没有会话记录")}</p><p className="mt-1 text-[10px] leading-5 text-fg-faint">{t("通过实时试用或部署接口运行这个助手后，记录会出现在这里。")}</p></div> : filtered.map(item => <ConversationRow key={item.id} conversation={item} selected={selected?.id === item.id} locale={locale} onOpen={() => void open(item)} />)}
+            {conversations.length === 0 ? <div className="flex min-h-[360px] flex-col items-center justify-center px-6 text-center"><FileClock className="size-6 text-fg-faint" /><p className="mt-3 text-[11px] font-medium">{query || outcome ? t("没有符合筛选条件的会话") : t("还没有会话记录")}</p><p className="mt-1 text-[10px] leading-5 text-fg-faint">{t("通过实时试用或部署接口运行这个助手后，记录会出现在这里。")}</p></div> : conversations.map(item => <ConversationRow key={item.id} conversation={item} selected={selected?.id === item.id} locale={locale} onOpen={() => void open(item)} />)}
           </div>
           <div className="hidden min-w-0 bg-surface/35 lg:block">{detailLoading ? <div className="flex h-full items-center justify-center"><LoaderCircle className="size-5 animate-spin text-fg-faint" /></div> : selected ? <ConversationDetail conversation={selected} locale={locale} deleting={deleting} onClose={() => setSelected(undefined)} onDelete={() => void remove()} /> : <div className="flex h-full min-h-[520px] flex-col items-center justify-center text-center"><Clock3 className="size-6 text-fg-faint" /><p className="mt-3 text-[10px] text-fg-muted">{t("选择一条会话查看详情")}</p></div>}</div>
         </div>

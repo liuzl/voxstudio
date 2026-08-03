@@ -153,13 +153,17 @@ export async function listAgentConversations(id: string, filters: {
   query?: string;
   limit?: number;
   offset?: number;
+  signal?: AbortSignal;
 } = {}): Promise<{ conversations: ConversationTraceSummary[]; total: number; policy: ConversationTracePolicy }> {
   const query = new URLSearchParams();
   if (filters.outcome) query.set("outcome", filters.outcome);
   if (filters.query?.trim()) query.set("id", filters.query.trim());
   if (filters.limit !== undefined) query.set("limit", String(filters.limit));
   if (filters.offset !== undefined) query.set("offset", String(filters.offset));
-  const response = await gatewayFetch(`/v1/agents/${encodeURIComponent(id)}/conversations${query.size ? `?${query}` : ""}`);
+  const response = await gatewayFetch(
+    `/v1/agents/${encodeURIComponent(id)}/conversations${query.size ? `?${query}` : ""}`,
+    filters.signal === undefined ? undefined : { signal: filters.signal },
+  );
   if (response.status === 404) {
     const body = await response.clone().json().catch(() => null) as { error?: { code?: string } } | null;
     if (body?.error?.code === "traces_disabled") {

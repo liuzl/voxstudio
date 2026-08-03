@@ -103,13 +103,13 @@ describe("Agent API", () => {
       return Response.json({ conversation: { id: "session/1", events: [] }, policy: { enabled: true, content: false, audio: false } });
     });
 
-    await expect(listAgentConversations("support", { outcome: "error", limit: 25 })).resolves.toEqual({
+    await expect(listAgentConversations("support", { outcome: "error", query: "session/1", limit: 25 })).resolves.toEqual({
       conversations: [], total: 0, policy: { enabled: false, content: false, audio: false },
     });
     await getAgentConversation("support", "session/1");
     await deleteAgentConversation("support", "session/1");
     expect(calls).toEqual([
-      { path: "/v1/agents/support/conversations?outcome=error&limit=25", method: "GET" },
+      { path: "/v1/agents/support/conversations?outcome=error&id=session%2F1&limit=25", method: "GET" },
       { path: "/v1/agents/support/conversations/session%2F1", method: "GET" },
       { path: "/v1/agents/support/conversations/session%2F1", method: "DELETE" },
     ]);

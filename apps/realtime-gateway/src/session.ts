@@ -191,6 +191,7 @@ export class GatewaySession {
   private lifetimeTimer: ReturnType<typeof setTimeout> | undefined;
   private conversation: Promise<void> | undefined;
   private stopped = false;
+  private terminalErrorCode: string | undefined;
   private playbackAck = false;
   private playbackWaiter: { turnId: string; resolve: () => void } | undefined;
   private lastAckedTurnId: string | undefined;
@@ -226,6 +227,15 @@ export class GatewaySession {
 
   get done(): Promise<void> {
     return this.conversation ?? Promise.resolve();
+  }
+
+  get failureCode(): string | undefined {
+    return this.terminalErrorCode;
+  }
+
+  /** Record a failure translated by the protocol adapter before it closes the session. */
+  markFailed(code: string): void {
+    this.terminalErrorCode ??= code;
   }
 
   /**
@@ -542,6 +552,9 @@ export class GatewaySession {
         this.options.log(`session ${this.id.slice(0, 8)} #${event.sequence} ${payload.type}${turn}${state}`);
       }
     }
+    // A detached session keeps running; events during the gap are not buffered because the
+    // reconnecting client resynchronizes from the snapshot, not from a replay.
+    this.sink?.send(JSON.stringify(event));
     try {
       this.options.onEvent?.(event);
     } catch (error) {
@@ -549,9 +562,6 @@ export class GatewaySession {
       // conversation or prevent its endpoint from receiving the event.
       this.options.log?.(`session ${this.id.slice(0, 8)} trace write failed: ${error instanceof Error ? error.message : String(error)}`);
     }
-    // A detached session keeps running; events during the gap are not buffered because the
-    // reconnecting client resynchronizes from the snapshot, not from a replay.
-    this.sink?.send(JSON.stringify(event));
   }
 
   accept(command: GatewayCommand): void {

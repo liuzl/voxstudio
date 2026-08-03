@@ -351,6 +351,7 @@ export class OpenAiRealtimeConnection {
       });
     }).catch(error => {
       this.sendError("session_start_failed", error instanceof Error ? error.message : String(error));
+      session.markFailed("session_start_failed");
       session.stop();
       this.options.close();
     });

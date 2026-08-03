@@ -9,6 +9,7 @@ import type { AuthContext } from "./auth/auth-context";
 import { startGateway, type GatewayServer } from "./server";
 import { parseCommand, protocolVersion, type GatewayEvent } from "./protocol";
 import { voicePrefix } from "./voice-namespace";
+import { ConversationTraceStore } from "./trace-store";
 
 const config = parseConfig();
 let gateway: GatewayServer | undefined;
@@ -376,6 +377,60 @@ describe("Agent REST registry", () => {
     const response = await request("/v1/agents/support/conversations");
     expect(response.status).toBe(404);
     expect((await response.json() as { error: { code: string } }).error.code).toBe("traces_disabled");
+  });
+
+  test("a trace write failure never prevents an Agent session from starting", async () => {
+    const agentsDir = await root();
+    gateway = startGateway({ config, port: 0, agentsDir, traceDir: await root(), authResolver: identity });
+    const created = await request("/v1/agents", {
+      method: "POST",
+      body: JSON.stringify({ id: "observer", name: "Observer", spec: { vad: "energy" } }),
+    }).then(response => response.json()) as { revision: number };
+    await request("/v1/agents/observer/publish", {
+      method: "POST", body: JSON.stringify({ revision: created.revision }),
+    });
+
+    const originalBegin = ConversationTraceStore.prototype.begin;
+    ConversationTraceStore.prototype.begin = function brokenBegin(): never { throw new Error("disk full"); };
+    const client = new RealtimeClient(gateway.url);
+    try {
+      await client.ready();
+      client.command({ agent: "observer" });
+      await client.until(events => events.some(event => event.type === "session.snapshot"), "snapshot despite trace failure");
+      const list = await request("/v1/agents/observer/conversations").then(response => response.json()) as { conversations: unknown[] };
+      expect(list.conversations).toHaveLength(0);
+      expect(gateway.sessionCount()).toBe(1);
+    } finally {
+      ConversationTraceStore.prototype.begin = originalBegin;
+      client.close();
+    }
+  });
+
+  test("an Agent session that fails during startup is retained as an error", async () => {
+    const agentsDir = await root();
+    gateway = startGateway({ config, port: 0, agentsDir, traceDir: await root(), authResolver: identity });
+    const created = await request("/v1/agents", {
+      method: "POST",
+      body: JSON.stringify({ id: "broken", name: "Broken", spec: { vad: "energy", asrEngine: "missing" } }),
+    }).then(response => response.json()) as { revision: number };
+    await request("/v1/agents/broken/publish", {
+      method: "POST", body: JSON.stringify({ revision: created.revision }),
+    });
+
+    const client = new RealtimeClient(gateway.url);
+    await client.ready();
+    client.command({ agent: "broken" });
+    await client.until(events => events.some(event => event.type === "command.rejected"), "start rejection");
+    const sessionId = client.events.find(event => event.type === "command.rejected")?.sessionId as string;
+    const list = await request("/v1/agents/broken/conversations").then(response => response.json()) as {
+      conversations: Array<{ id: string; outcome: string; errorCode: string }>;
+    };
+    expect(list.conversations).toContainEqual(expect.objectContaining({
+      id: sessionId,
+      outcome: "error",
+      errorCode: "session_start_failed",
+    }));
+    client.close();
   });
 
   test("a demo deployment stays pinned to the operator-selected immutable version", async () => {

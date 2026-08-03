@@ -19,7 +19,7 @@ import { QuotaLedger } from "./quota";
 import { SynthesisBusyError, SynthesisGate } from "./synthesis-gate";
 import { discoveryPaths, isCharged, routeFor } from "./routes";
 import { CaptureLibrary } from "./library";
-import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand, type SessionStartOptions } from "./protocol";
+import { parseCommand, ProtocolError, protocolVersion, type GatewayCommand, type GatewayEvent, type SessionStartOptions } from "./protocol";
 import { studioToolNames } from "@voxstudio/conversation";
 import { estSeconds } from "@voxstudio/text";
 import { builtinToolNames, GatewaySession, type EventSink } from "./session";
@@ -428,6 +428,44 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     ...(options.traceMaxConversations === undefined ? {} : { maxConversations: options.traceMaxConversations }),
     log,
   });
+  type TraceOperation =
+    | { type: "begin"; owner: string; sessionId: string; agent: TraceAgentIdentity; startedAt: number }
+    | { type: "event"; owner: string; event: GatewayEvent }
+    | { type: "error"; owner: string; sessionId: string; code: string }
+    | { type: "finish"; owner: string; sessionId: string; endedAt: number };
+  const traceQueue: TraceOperation[] = [];
+  let traceFlushTimer: ReturnType<typeof setTimeout> | undefined;
+  const flushTraces = (): void => {
+    if (traceFlushTimer !== undefined) {
+      clearTimeout(traceFlushTimer);
+      traceFlushTimer = undefined;
+    }
+    if (traces === undefined || traces.isClosed) {
+      traceQueue.length = 0;
+      return;
+    }
+    const pending = traceQueue.splice(0);
+    for (const operation of pending) {
+      try {
+        if (operation.type === "begin") traces.begin(operation.owner, operation.sessionId, operation.agent, operation.startedAt);
+        else if (operation.type === "event") traces.append(operation.owner, operation.event);
+        else if (operation.type === "error") traces.markError(operation.owner, operation.sessionId, operation.code);
+        else traces.finish(operation.owner, operation.sessionId, operation.endedAt);
+      } catch (error) {
+        // Retention is intentionally lossy under storage failure. One broken write must
+        // not reject, slow down, or terminate the realtime conversation it observes.
+        log(`traces: ${operation.type} failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  };
+  const enqueueTrace = (operation: TraceOperation): void => {
+    if (traces === undefined || traces.isClosed) return;
+    traceQueue.push(operation);
+    // Keep synchronous SQLite work out of GatewaySession.emit. A single scheduled flush
+    // coalesces a burst of state/timing events and runs only after the client event has
+    // already been handed to the socket.
+    traceFlushTimer ??= setTimeout(flushTraces, 0);
+  };
   const agents = options.agentsDir === undefined ? undefined : new AgentRegistry(options.agentsDir);
 
   const assets = options.staticAssets && Object.keys(options.staticAssets).length > 0
@@ -759,18 +797,22 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         maxSessionSeconds: Math.min(options.maxSessionSeconds ?? Number.POSITIVE_INFINITY, agentSpec?.maxSessionSeconds ?? Number.POSITIVE_INFINITY),
       }),
       ...(traces === undefined || trace === undefined ? {} : {
-        onEvent: event => { traces.append(owner, event); },
+        onEvent: event => { enqueueTrace({ type: "event", owner, event }); },
       }),
       onClosed: closed => {
         if (traces !== undefined && trace !== undefined) {
-          try { traces.finish(owner, closed.id); }
-          catch (error) { log(`traces: finish ${closed.id} failed: ${error instanceof Error ? error.message : String(error)}`); }
+          if (closed.failureCode !== undefined) {
+            enqueueTrace({ type: "error", owner, sessionId: closed.id, code: closed.failureCode });
+          }
+          enqueueTrace({ type: "finish", owner, sessionId: closed.id, endedAt: Date.now() });
         }
         sessions.delete(closed.id);
       },
       ...(options.log === undefined ? {} : { log: options.log }),
     });
-    if (traces !== undefined && trace !== undefined) traces.begin(owner, session.id, trace);
+    if (traces !== undefined && trace !== undefined) {
+      enqueueTrace({ type: "begin", owner, sessionId: session.id, agent: trace, startedAt: Date.now() });
+    }
     sessions.set(session.id, session);
     return session;
   };
@@ -912,6 +954,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
             commandType: command.type,
             idempotencyKey: command.idempotencyKey,
           });
+          session.markFailed("session_start_failed");
           ws.data.session = undefined;
           session.stop();
         }
@@ -1075,6 +1118,9 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
             }
             const agentId = conversationMatch[1] as string;
             const sessionId = conversationMatch[2];
+            // Make the read/delete surface causally consistent with a session that just
+            // closed while still keeping SQLite out of the realtime event path.
+            flushTraces();
             if (sessionId === undefined) {
               if (request.method !== "GET") return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
               const integer = (name: string, fallback: number, maximum = Number.MAX_SAFE_INTEGER): number | Response => {
@@ -1553,6 +1599,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // Draining: in-flight library work (a promote awaiting its engine) finishes
       // against an open database; only then does the store close.
       if (library) await library.close();
+      flushTraces();
       traces?.close();
       // Bounded: Bun's force-stop has been observed to never resolve when a client's
       // WebSocket close handshake is still in flight at stop time (reproduced 2026-07-19

@@ -195,6 +195,13 @@ describe("openapi document", () => {
     expect(Object.keys(document.paths).some(path => path.startsWith("/v1/auth"))).toBe(false);
   });
 
+  test("documents the Agent conversation list, detail, and delete contract", () => {
+    expect(document.paths["/v1/agents/{id}/conversations"]?.get).toBeDefined();
+    const detail = document.paths["/v1/agents/{id}/conversations/{sessionId}"];
+    expect(detail?.get).toBeDefined();
+    expect(detail?.delete).toBeDefined();
+  });
+
   test("only the public surface is unauthenticated; every /v1 operation is guarded", () => {
     const health = document.paths["/healthz"]?.get as { security: unknown[] };
     expect(health.security).toEqual([]);

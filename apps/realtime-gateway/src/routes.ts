@@ -90,6 +90,17 @@ export const apiRoutes: readonly ApiRoute[] = [
     methods: ["GET"],
   },
   {
+    path: "/v1/agents/{id}/conversations",
+    match: /^\/v1\/agents\/[A-Za-z0-9._-]{1,64}\/conversations$/,
+    methods: ["GET"],
+  },
+  {
+    path: "/v1/agents/{id}/conversations/{sessionId}",
+    match: /^\/v1\/agents\/[A-Za-z0-9._-]{1,64}\/conversations\/[A-Za-z0-9-]{1,64}$/,
+    methods: ["GET", "DELETE"],
+    demoRefusable: ["DELETE"],
+  },
+  {
     path: "/v1/voices",
     methods: ["GET", "POST"],
     charged: ["POST"],

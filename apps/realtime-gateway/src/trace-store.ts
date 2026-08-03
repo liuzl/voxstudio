@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { GatewayEvent } from "./protocol";
 
@@ -109,6 +109,7 @@ export class ConversationTraceStore {
   private readonly db: Database;
   private readonly now: () => number;
   private readonly log: (line: string) => void;
+  private readonly pruneTimer: ReturnType<typeof setInterval> | undefined;
   private closed = false;
 
   constructor(readonly dir: string, options: ConversationTraceStoreOptions = {}) {
@@ -123,10 +124,18 @@ export class ConversationTraceStore {
       retentionDays,
       maxConversations,
     };
-    mkdirSync(dir, { recursive: true });
-    this.db = new Database(join(dir, "traces.db"), { create: true });
+    // Trace content can contain transcripts and tool payloads. Do not inherit a
+    // process-wide 022 umask here: on a multi-user host that makes the store readable by
+    // every local account. chmod also repairs directories created by an older release.
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    chmodSync(dir, 0o700);
+    const databasePath = join(dir, "traces.db");
+    this.db = new Database(databasePath, { create: true });
     this.db.run("PRAGMA journal_mode = WAL");
     this.db.run("PRAGMA foreign_keys = ON");
+    for (const path of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+      if (existsSync(path)) chmodSync(path, 0o600);
+    }
     this.db.run(`CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
       owner_user_id TEXT NOT NULL,
@@ -154,6 +163,13 @@ export class ConversationTraceStore {
     this.db.run("CREATE INDEX IF NOT EXISTS conversation_events_session_time ON conversation_events (session_id, timestamp_ms, sequence)");
     this.db.run(`PRAGMA user_version = ${SCHEMA_VERSION}`);
     this.reconcile();
+    this.pruneTimer = this.policy.retentionDays === null
+      ? undefined
+      : setInterval(() => {
+          if (this.closed) return;
+          try { this.prune(); }
+          catch (error) { this.log(`traces: scheduled prune failed: ${error instanceof Error ? error.message : String(error)}`); }
+        }, Math.min(3_600_000, Math.max(60_000, this.policy.retentionDays * 3_600_000)));
   }
 
   get isClosed(): boolean { return this.closed; }
@@ -247,6 +263,14 @@ export class ConversationTraceStore {
     this.prune(endedAt);
   }
 
+  markError(owner: string, sessionId: string, code: string): void {
+    this.requireOpen();
+    this.db.run(
+      "UPDATE conversations SET error_code = COALESCE(error_code, ?) WHERE id = ? AND owner_user_id = ?",
+      [code, sessionId, owner],
+    );
+  }
+
   private summary(row: TraceRow): ConversationTraceSummary {
     const endedAt = row.ended_at;
     return {
@@ -277,6 +301,9 @@ export class ConversationTraceStore {
     id?: string;
   } = {}): { conversations: ConversationTraceSummary[]; total: number; policy: TracePolicy } {
     this.requireOpen();
+    // Reads are a second enforcement point beside the timer. Even if the event loop was
+    // suspended through the deadline, expired content is removed before it can be served.
+    this.prune();
     const where = ["owner_user_id = ?", "agent_id = ?"];
     const values: Array<string | number> = [owner, agentId];
     if (options.outcome !== undefined) { where.push("outcome = ?"); values.push(options.outcome); }
@@ -297,6 +324,7 @@ export class ConversationTraceStore {
 
   get(owner: string, agentId: string, sessionId: string): ConversationTraceDetail | undefined {
     this.requireOpen();
+    this.prune();
     const row = this.db.query<TraceRow, [string, string, string]>(
       "SELECT * FROM conversations WHERE owner_user_id = ? AND agent_id = ? AND id = ?",
     ).get(owner, agentId, sessionId);
@@ -318,6 +346,7 @@ export class ConversationTraceStore {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    if (this.pruneTimer !== undefined) clearInterval(this.pruneTimer);
     this.db.close();
   }
 }

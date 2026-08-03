@@ -98,7 +98,8 @@ describe("the catalog matches the gateway that runs", () => {
     // also proves the path is routed at all rather than falling through to 404.
     for (const route of apiRoutes) {
       const probe = route.path
-        .replace("{id}", route.path.startsWith("/v1/library") ? "00000000-0000-4000-8000-000000000000" : "probe-voice");
+        .replace("{id}", route.path.startsWith("/v1/library") ? "00000000-0000-4000-8000-000000000000" : "probe-voice")
+        .replace("{sessionId}", "00000000-0000-4000-8000-000000000000");
       const refused = await fetch(new URL(probe, gateway.url), { method: "PUT" });
       expect({ path: route.path, status: refused.status }).toEqual({ path: route.path, status: 405 });
       const body = await refused.json() as { error: { code: string } };

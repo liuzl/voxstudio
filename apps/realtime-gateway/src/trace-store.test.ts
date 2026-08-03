@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GatewayEvent } from "./protocol";
@@ -68,7 +68,8 @@ describe("ConversationTraceStore", () => {
   });
 
   test("retains content only under the independent content policy", async () => {
-    const store = new ConversationTraceStore(await root(), { retainContent: true });
+    const dir = await root();
+    const store = new ConversationTraceStore(dir, { retainContent: true });
     store.begin("owner", "session-2", { agentId: "draft", source: "draft", revision: 7 }, 10);
     store.append("owner", event("session-2", 1, {
       type: "response.text.final", turnId: "turn-1", revision: 0, text: "retained reply",
@@ -76,6 +77,31 @@ describe("ConversationTraceStore", () => {
     store.finish("owner", "session-2", 20);
     expect(store.get("owner", "draft", "session-2")?.events[0]).toMatchObject({ text: "retained reply" });
     expect(store.policy).toMatchObject({ enabled: true, content: true, audio: false });
+    expect((await stat(dir)).mode & 0o777).toBe(0o700);
+    expect((await stat(join(dir, "traces.db"))).mode & 0o777).toBe(0o600);
+    store.close();
+  });
+
+  test("enforces age retention before a stale record can be read", async () => {
+    let now = 0;
+    const store = new ConversationTraceStore(await root(), { retentionDays: 1, now: () => now });
+    store.begin("owner", "expired", { agentId: "support", source: "draft", revision: 1 }, 0);
+    store.finish("owner", "expired", 1);
+    now = 2 * 86_400_000;
+    expect(store.list("owner", "support").conversations).toHaveLength(0);
+    expect(store.get("owner", "support", "expired")).toBeUndefined();
+    store.close();
+  });
+
+  test("records an adapter-level start failure as an error outcome", async () => {
+    const store = new ConversationTraceStore(await root());
+    store.begin("owner", "failed-start", { agentId: "support", source: "draft", revision: 1 }, 10);
+    store.markError("owner", "failed-start", "session_start_failed");
+    store.finish("owner", "failed-start", 20);
+    expect(store.get("owner", "support", "failed-start")).toMatchObject({
+      outcome: "error",
+      errorCode: "session_start_failed",
+    });
     store.close();
   });
 
