@@ -3,6 +3,7 @@ import { t } from "./i18n";
 import { synthesize } from "./lib/api";
 import { MicCapture, SpeakerOutput } from "./lib/audio";
 import { GatewayClient } from "./lib/client";
+import { gatewayRealtimeUrl } from "./lib/gateway-auth";
 import { useStudio } from "./store";
 
 /**
@@ -28,7 +29,7 @@ export class ConversationController {
       throw new Error("conversation start cancelled");
     }
     const client = new GatewayClient({
-      url: realtimeUrl(),
+      url: gatewayRealtimeUrl(),
       startOptions: overrides?.agent ? {
         // Agent preview/runtime options are already a complete behavior snapshot on the
         // gateway. Only endpoint capabilities belong here; local conversation prefs must
@@ -167,12 +168,6 @@ export class ConversationController {
         return;
     }
   }
-}
-
-function realtimeUrl(): string {
-  const base = new URL("/v1/realtime", window.location.href);
-  base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
-  return base.toString();
 }
 
 /**

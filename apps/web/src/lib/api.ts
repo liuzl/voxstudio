@@ -1,5 +1,6 @@
 /** REST facade helpers: same-origin /v1 endpoints proxied by the gateway. */
 import { t, type MessageKey } from "../i18n";
+import { gatewayFetch, gatewayResourceUrl } from "./gateway-auth";
 import { reportUnauthorized } from "./unauthorized";
 import type {
   AgentAudit,
@@ -35,16 +36,16 @@ async function agentJson<T>(response: Response, what: MessageKey): Promise<T> {
 }
 
 export async function listAgents(): Promise<AgentRecord[]> {
-  const payload = await agentJson<{ agents?: AgentRecord[] }>(await fetch("/v1/agents"), "获取助手列表");
+  const payload = await agentJson<{ agents?: AgentRecord[] }>(await gatewayFetch("/v1/agents"), "获取助手列表");
   return payload.agents ?? [];
 }
 
 export async function getAgent(id: string): Promise<AgentRecord> {
-  return agentJson(await fetch(`/v1/agents/${encodeURIComponent(id)}`), "获取助手");
+  return agentJson(await gatewayFetch(`/v1/agents/${encodeURIComponent(id)}`), "获取助手");
 }
 
 export async function createAgent(input: CreateAgentInput): Promise<AgentRecord> {
-  return agentJson(await fetch("/v1/agents", {
+  return agentJson(await gatewayFetch("/v1/agents", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
@@ -57,7 +58,7 @@ export async function updateAgent(id: string, revision: number, input: {
   avatar?: string | null;
   spec?: AgentSpec;
 }): Promise<AgentRecord> {
-  return agentJson(await fetch(`/v1/agents/${encodeURIComponent(id)}`, {
+  return agentJson(await gatewayFetch(`/v1/agents/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ revision, ...input }),
@@ -65,7 +66,7 @@ export async function updateAgent(id: string, revision: number, input: {
 }
 
 export async function deleteAgent(id: string, revision: number): Promise<void> {
-  await agentJson(await fetch(`/v1/agents/${encodeURIComponent(id)}`, {
+  await agentJson(await gatewayFetch(`/v1/agents/${encodeURIComponent(id)}`, {
     method: "DELETE",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ revision }),
@@ -76,7 +77,7 @@ export async function publishAgent(id: string, revision: number): Promise<{
   record: AgentRecord;
   version: AgentPublishedVersion;
 }> {
-  return agentJson(await fetch(`/v1/agents/${encodeURIComponent(id)}/publish`, {
+  return agentJson(await gatewayFetch(`/v1/agents/${encodeURIComponent(id)}/publish`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ revision }),
@@ -84,12 +85,12 @@ export async function publishAgent(id: string, revision: number): Promise<{
 }
 
 export async function auditAgent(id: string): Promise<AgentAudit> {
-  return agentJson(await fetch(`/v1/agents/${encodeURIComponent(id)}/audit`, { method: "POST" }), "检查助手版本");
+  return agentJson(await gatewayFetch(`/v1/agents/${encodeURIComponent(id)}/audit`, { method: "POST" }), "检查助手版本");
 }
 
 export async function listAgentVersions(id: string): Promise<AgentPublishedVersion[]> {
   const payload = await agentJson<{ versions?: AgentPublishedVersion[] }>(
-    await fetch(`/v1/agents/${encodeURIComponent(id)}/versions`),
+    await gatewayFetch(`/v1/agents/${encodeURIComponent(id)}/versions`),
     "获取助手版本",
   );
   return payload.versions ?? [];
@@ -141,7 +142,7 @@ export interface VoiceEntry {
 }
 
 export async function listVoices(): Promise<VoiceEntry[]> {
-  const response = await fetch("/v1/voices");
+  const response = await gatewayFetch("/v1/voices");
   if (!response.ok) await fail(response, "获取音色列表");
   const payload = await response.json() as {
     voices?: { id?: string; engine?: string; design_profile?: DesignProfileMeta; prompt_text?: string }[];
@@ -168,7 +169,7 @@ export interface DesignProfileRequestParams {
 /** Create a reproducible design voice; routed to a design-capable engine. */
 export async function createDesignProfile(params: DesignProfileRequestParams, engine?: string): Promise<VoiceEntry> {
   const query = engine ? `?engine=${encodeURIComponent(engine)}` : "";
-  const response = await fetch(`/v1/design-profiles${query}`, {
+  const response = await gatewayFetch(`/v1/design-profiles${query}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -208,7 +209,7 @@ export interface RuntimeCatalog {
 }
 
 export async function listRuntimeCatalog(): Promise<RuntimeCatalog> {
-  const response = await fetch("/v1/engines");
+  const response = await gatewayFetch("/v1/engines");
   if (!response.ok) await fail(response, "获取引擎列表");
   const payload = await response.json() as { engines?: EngineEntry[]; mcpServers?: string[] };
   return { engines: payload.engines ?? [], mcpServers: payload.mcpServers ?? [] };
@@ -223,13 +224,13 @@ export async function registerVoice(id: string, text: string, audio: File): Prom
   form.set("id", id);
   form.set("text", text);
   form.set("audio", audio);
-  const response = await fetch("/v1/voices", { method: "POST", body: form });
+  const response = await gatewayFetch("/v1/voices", { method: "POST", body: form });
   if (!response.ok) await fail(response, "注册音色");
 }
 
 export async function deleteVoice(id: string, engine?: string): Promise<void> {
   const query = engine ? `?engine=${encodeURIComponent(engine)}` : "";
-  const response = await fetch(`/v1/voices/${encodeURIComponent(id)}${query}`, { method: "DELETE" });
+  const response = await gatewayFetch(`/v1/voices/${encodeURIComponent(id)}${query}`, { method: "DELETE" });
   if (!response.ok) await fail(response, "删除音色");
 }
 
@@ -241,7 +242,7 @@ export async function transcribe(audio: File, language = "auto", revise = false)
   form.set("language", language);
   if (revise) form.set("revise", "true");
   form.set("file", audio);
-  const response = await fetch("/v1/audio/transcriptions", { method: "POST", body: form });
+  const response = await gatewayFetch("/v1/audio/transcriptions", { method: "POST", body: form });
   if (!response.ok) await fail(response, "识别");
   const payload = await response.json() as { text?: string };
   return (payload.text ?? "").trim();
@@ -306,7 +307,7 @@ async function libraryDisabled(response: Response): Promise<boolean> {
 }
 
 export async function listCaptures(limit = 50, offset = 0): Promise<CapturePage> {
-  const response = await fetch(`/v1/library?limit=${limit}&offset=${offset}`);
+  const response = await gatewayFetch(`/v1/library?limit=${limit}&offset=${offset}`);
   if (await libraryDisabled(response)) return { enabled: false, captures: [], total: 0, bytes: 0, maxBytes: null };
   if (!response.ok) await fail(response, "获取素材库");
   const payload = await response.json() as { captures?: CaptureWire[]; total?: number; bytes?: number; max_bytes?: number | null };
@@ -320,12 +321,12 @@ export async function listCaptures(limit = 50, offset = 0): Promise<CapturePage>
 }
 
 export function captureAudioUrl(id: string): string {
-  return `/v1/library/${encodeURIComponent(id)}/audio`;
+  return gatewayResourceUrl(`/v1/library/${encodeURIComponent(id)}/audio`);
 }
 
 /** Set (or with an empty string, clear) the human reference transcript. */
 export async function correctCapture(id: string, corrected: string): Promise<CaptureEntry> {
-  const response = await fetch(`/v1/library/${encodeURIComponent(id)}`, {
+  const response = await gatewayFetch(`/v1/library/${encodeURIComponent(id)}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ corrected }),
@@ -335,13 +336,13 @@ export async function correctCapture(id: string, corrected: string): Promise<Cap
 }
 
 export async function deleteCapture(id: string): Promise<void> {
-  const response = await fetch(`/v1/library/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const response = await gatewayFetch(`/v1/library/${encodeURIComponent(id)}`, { method: "DELETE" });
   if (!response.ok) await fail(response, "删除素材");
 }
 
 /** Register the capture as a voice sample on the clone-capable engine. */
 export async function promoteCapture(id: string, voiceId: string): Promise<CaptureEntry> {
-  const response = await fetch(`/v1/library/${encodeURIComponent(id)}/promote`, {
+  const response = await gatewayFetch(`/v1/library/${encodeURIComponent(id)}/promote`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ voice_id: voiceId }),
@@ -366,7 +367,7 @@ export interface SynthesisParams {
 /** Batch synthesis through the facade; returns an object URL for playback/download. */
 export async function synthesize(params: SynthesisParams): Promise<string> {
   const query = params.engine ? `?engine=${encodeURIComponent(params.engine)}` : "";
-  const response = await fetch(`/v1/audio/speech${query}`, {
+  const response = await gatewayFetch(`/v1/audio/speech${query}`, {
     method: "POST",
     ...(params.signal ? { signal: params.signal } : {}),
     headers: { "content-type": "application/json" },

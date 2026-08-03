@@ -4,6 +4,7 @@ import {
   authReturnPath,
   createApiKey,
   fetchAuthMode,
+  fetchDoor,
   fetchSession,
   listApiKeys,
   resendVerification,
@@ -52,6 +53,17 @@ describe("auth mode discovery", () => {
 
     stubFetch({ "/healthz": () => Response.json({ ok: true, auth: "self" }) });
     expect(await fetchAuthMode()).toBe("self");
+  });
+
+  test("reports whether a self-hosted door requires its shared token", async () => {
+    stubFetch({
+      "/healthz": () => Response.json({ ok: true, auth: "self", deployment: { tokenRequired: true } }),
+    });
+    expect(await fetchDoor()).toEqual({
+      mode: "self",
+      doors: { password: false, providers: [] },
+      tokenRequired: true,
+    });
   });
 
   test("an unreachable gateway fails closed while an older gateway stays self-hosted", async () => {

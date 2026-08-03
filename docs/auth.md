@@ -48,6 +48,15 @@ hosted deployment does **not** also accept the shared token. Both entrypoints re
 combination at startup, because two doors into one deployment is a configuration mistake
 rather than a feature.
 
+When a self-hosted Web Studio uses the optional token, open it once with
+`#token=<VOX_GATEWAY_TOKEN>` (preferred) or `?token=<VOX_GATEWAY_TOKEN>`. The browser
+immediately removes the credential from the address bar and keeps it in session storage
+for that tab. Same-origin REST calls carry it as `Authorization: Bearer`; native browser
+WebSockets and direct media/download URLs use the gateway's query-token door because
+those browser APIs cannot attach an Authorization header. Auth discovery enables this
+transport only when `/healthz` says `auth: self` and `tokenRequired: true`; account mode
+discards it rather than mixing a shared secret with the user's cookie.
+
 ### Identity: one seam, two fields
 
 A credential becomes an `AuthContext` — `{ userId, via }` — in exactly one place. Nothing

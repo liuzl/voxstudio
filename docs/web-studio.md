@@ -95,6 +95,10 @@ below rather than relitigated per feature.
    and authentication status (including whether self-host uses a shared token),
    demo pin, and native/OpenAI-compatible connection examples. The local CLI example
    is explicitly gateway-host-only rather than pretending to be a remote client.
+   A token-protected self-hosted Studio accepts a one-time `#token=...` bootstrap,
+   redacts it from the URL, retains it for the tab, and applies it consistently to REST,
+   realtime WebSocket, media playback, and downloads; account deployments never consume
+   that shared-token state.
    Conversations, Statistics, telephony attachment, and the remaining
    preview controls remain.
 2. **对话 Conversation** — live duplex session: mic capture with negotiated AEC (browser

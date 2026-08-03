@@ -49,6 +49,7 @@ describe("vox studio", () => {
     // The manifest object is handed to the gateway verbatim (empty stub in tests).
     expect(seen?.staticAssets).toBeDefined();
     expect(io.outs.join("\n")).toContain("http://127.0.0.1:9999/");
+    expect(io.outs.join("\n")).toContain("#token=<VOX_GATEWAY_TOKEN>");
   });
 
   test("VOX_GATEWAY_TOKEN reaches the gateway when --token is absent; the flag wins", async () => {

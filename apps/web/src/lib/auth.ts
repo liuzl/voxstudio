@@ -8,6 +8,8 @@
  * A browser cookie is a browser's business.
  */
 
+import { gatewayFetch } from "./gateway-auth";
+
 /** Which door this deployment serves, from the unauthenticated /healthz probe. */
 export type AuthMode = "self" | "accounts" | "unavailable";
 
@@ -59,7 +61,7 @@ async function refuse(response: Response): Promise<never> {
 }
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`/v1/auth${path}`, {
+  const response = await gatewayFetch(`/v1/auth${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     // Same-origin by construction; the browser attaches the session cookie and the
@@ -83,16 +85,23 @@ export async function fetchAuthMode(): Promise<AuthMode> {
  * predates the field remains self-hosted for compatibility; an explicit failure is an
  * unavailable identity state and fails closed at the AuthGate.
  */
-export async function fetchDoor(): Promise<{ mode: AuthMode; doors: LoginDoors }> {
+export async function fetchDoor(): Promise<{ mode: AuthMode; doors: LoginDoors; tokenRequired: boolean }> {
   const closed: LoginDoors = { password: false, providers: [] };
   try {
     const response = await fetch("/healthz");
-    if (!response.ok) return { mode: "unavailable", doors: closed };
-    const body = await response.json() as { auth?: string; login?: Partial<LoginDoors> };
-    if (body.auth === undefined || body.auth === "self") return { mode: "self", doors: closed };
-    if (body.auth !== "accounts") return { mode: "unavailable", doors: closed };
+    if (!response.ok) return { mode: "unavailable", doors: closed, tokenRequired: false };
+    const body = await response.json() as {
+      auth?: string;
+      login?: Partial<LoginDoors>;
+      deployment?: { tokenRequired?: boolean };
+    };
+    if (body.auth === undefined || body.auth === "self") {
+      return { mode: "self", doors: closed, tokenRequired: body.deployment?.tokenRequired === true };
+    }
+    if (body.auth !== "accounts") return { mode: "unavailable", doors: closed, tokenRequired: false };
     return {
       mode: "accounts",
+      tokenRequired: false,
       doors: {
         // A gateway that reports accounts but no doors predates this field; the password
         // door was the only one then.
@@ -101,7 +110,7 @@ export async function fetchDoor(): Promise<{ mode: AuthMode; doors: LoginDoors }
       },
     };
   } catch {
-    return { mode: "unavailable", doors: closed };
+    return { mode: "unavailable", doors: closed, tokenRequired: false };
   }
 }
 
@@ -134,7 +143,7 @@ export async function socialSignInUrl(provider: string, callbackURL = "/"): Prom
 
 /** The signed-in user, or null when there is no session. Never throws for "no session". */
 export async function fetchSession(): Promise<AccountUser | null> {
-  const response = await fetch("/v1/auth/get-session");
+  const response = await gatewayFetch("/v1/auth/get-session");
   if (response.status === 401) return null;
   if (!response.ok) await refuse(response);
   const body = await response.json().catch(() => null) as
@@ -168,7 +177,7 @@ export async function resendVerification(email: string): Promise<void> {
 }
 
 export async function listApiKeys(): Promise<ApiKeySummary[]> {
-  const response = await fetch("/v1/auth/api-key/list");
+  const response = await gatewayFetch("/v1/auth/api-key/list");
   if (!response.ok) await refuse(response);
   const body = await response.json() as {
     apiKeys?: { id?: string; name?: string | null; start?: string | null; createdAt?: string; lastRequest?: string | null }[];

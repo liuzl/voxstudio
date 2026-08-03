@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { fetchDoor, fetchSession, signOut as signOutRequest, type AccountUser, type AuthMode, type LoginDoors } from "./lib/auth";
+import { configureGatewayAuth } from "./lib/gateway-auth";
 import { onUnauthorized } from "./lib/unauthorized";
 
 /**
@@ -32,7 +33,8 @@ export const useAccount = create<AccountState>((set, get) => ({
 
   refresh: async () => {
     if (get().status === "unavailable") set({ status: "loading" });
-    const { mode, doors } = await fetchDoor();
+    const { mode, doors, tokenRequired } = await fetchDoor();
+    configureGatewayAuth(mode, tokenRequired);
     if (mode === "self") {
       set({ status: "self", mode, doors, user: null });
       return;

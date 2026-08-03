@@ -11,6 +11,7 @@ import {
   type CaptureEntry,
 } from "../lib/api";
 import { useStudio } from "../store";
+import { gatewayFetch } from "../lib/gateway-auth";
 import { useT } from "../i18n";
 
 const pageSize = 50;
@@ -115,7 +116,7 @@ export function LibraryPanel() {
   const retranscribe = async (capture: CaptureEntry) => {
     setBusy(capture.id);
     try {
-      const audio = await (await fetch(captureAudioUrl(capture.id))).blob();
+      const audio = await (await gatewayFetch(captureAudioUrl(capture.id))).blob();
       const text = await transcribe(new File([audio], `${capture.id}.wav`, { type: "audio/wav" }), "auto", true);
       setPromotingId("");
       setEditingId(capture.id);

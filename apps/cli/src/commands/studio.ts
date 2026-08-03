@@ -17,7 +17,8 @@ Serve the Web Studio: the browser app, the realtime WebSocket (/v1/realtime), an
 credential-hiding REST facade in one process. Binds loopback by default; reaching it
 from another machine is a deployment decision (a tunnel, Access at the door). TOKEN,
 when set, guards every /v1 request and the WebSocket upgrade; the app shell itself is
-served without it. Barge-in detection runs the certified Silero VAD everywhere: the
+served without it. Open the Studio once with #token=<TOKEN>; it redacts and retains the
+token for that browser tab. Barge-in detection runs the certified Silero VAD everywhere: the
 WASM SIMD backend is the cross-platform default in source and compiled builds (same
 model, same numbers); set VOXSTUDIO_ONNX_BACKEND=native to opt into the optional
 native runtime for high-concurrency measurement. Install onnxruntime-node separately
@@ -256,6 +257,9 @@ export async function runStudio(
     log: line => io.err(line),
   });
   io.out(`Web Studio at ${gateway.url}`);
+  if (token !== undefined && token !== "") {
+    io.out("Shared-token Studio: append #token=<VOX_GATEWAY_TOKEN> once; the browser redacts it from the URL");
+  }
   if (!waitForever) {
     await gateway.stop();
     return 0;
