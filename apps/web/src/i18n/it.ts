@@ -214,7 +214,7 @@ export const it: Record<MessageKey, string> = {
   "英文·男(英)": "Inglese · M (UK)",
   "搜索…": "Cerca…",
   "收起注册": "Nascondi registrazione",
-  "＋ 注册音色": "＋ Registra voce",
+  "注册新音色": "Registra voce",
   "引擎没有返回音色；克隆型引擎可用下方表单注册。": "I motori non hanno restituito voci; i motori con clonazione accettano la registrazione qui sotto.",
   "没有匹配的音色。": "Nessuna voce corrispondente.",
   "试听 {id}（{engine}）": "Ascolta {id} ({engine})",

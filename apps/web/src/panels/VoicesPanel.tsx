@@ -262,7 +262,7 @@ export function VoicesPanel() {
         actions={(
           <button onClick={() => setShowRegister(value => !value)} className={showRegister ? secondaryButton : primaryButton}>
             <Plus className="size-3.5" />
-            {showRegister ? t("收起注册") : t("＋ 注册音色")}
+            {showRegister ? t("收起注册") : t("注册新音色")}
           </button>
         )}
       />

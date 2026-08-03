@@ -360,7 +360,7 @@ export const en = {
   "英文·男(英)": "English · M (UK)",
   "搜索…": "Search…",
   "收起注册": "Hide registration",
-  "＋ 注册音色": "＋ Register voice",
+  "注册新音色": "Register voice",
   "引擎没有返回音色；克隆型引擎可用下方表单注册。": "The engines returned no voices; clone-capable engines accept registration below.",
   "没有匹配的音色。": "No matching voices.",
   "试听 {id}（{engine}）": "Audition {id} ({engine})",
