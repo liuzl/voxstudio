@@ -1,4 +1,4 @@
-import { ArrowRight, AudioLines, Eye, EyeOff, LoaderCircle, Mail, RefreshCw } from "lucide-react";
+import { ArrowRight, AudioLines, Eye, EyeOff, KeyRound, LoaderCircle, Mail, RefreshCw } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useAccount, type AccountStatus } from "./account";
 import {
@@ -20,6 +20,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const status = useAccount(state => state.status);
   const refresh = useAccount(state => state.refresh);
   const doors = useAccount(state => state.doors);
+  const tokenRejected = useAccount(state => state.tokenRejected);
+  const unlockSelfHosted = useAccount(state => state.unlockSelfHosted);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -27,8 +29,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
     <AuthGateView
       status={status}
       doors={doors}
+      tokenRejected={tokenRejected}
       onRetry={() => { void refresh(); }}
       onAuthenticated={refresh}
+      onToken={unlockSelfHosted}
     >
       {children}
     </AuthGateView>
@@ -39,20 +43,64 @@ export function AuthGate({ children }: { children: ReactNode }) {
 export function AuthGateView({
   status,
   doors,
+  tokenRejected,
   onRetry,
   onAuthenticated,
+  onToken,
   children,
 }: {
   status: AccountStatus;
   doors: LoginDoors;
+  tokenRejected: boolean;
   onRetry: () => void;
   onAuthenticated: () => Promise<void>;
+  onToken: (token: string) => Promise<void>;
   children: ReactNode;
 }) {
   if (status === "loading") return <AuthLoading />;
   if (status === "unavailable") return <AuthUnavailable onRetry={onRetry} />;
+  if (status === "token-required") return <SharedTokenEntrance rejected={tokenRejected} onToken={onToken} />;
   if (status === "self" || status === "signed-in") return <>{children}</>;
   return <AuthEntrance doors={doors} onAuthenticated={onAuthenticated} />;
+}
+
+function SharedTokenEntrance({ rejected, onToken }: { rejected: boolean; onToken: (token: string) => Promise<void> }) {
+  const t = useT();
+  const [token, setToken] = useState("");
+  const [visible, setVisible] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const submit = (event: React.FormEvent): void => {
+    event.preventDefault();
+    if (!token || busy) return;
+    setBusy(true);
+    void onToken(token).finally(() => setBusy(false));
+  };
+  return (
+    <div className="flex h-full items-center justify-center bg-canvas px-5">
+      <div className="w-full max-w-[410px] rounded-3xl border border-edge bg-surface p-7 shadow-[0_18px_60px_rgba(0,0,0,0.06)] sm:p-9">
+        <Brand />
+        <span className="mt-10 flex size-11 items-center justify-center rounded-2xl bg-fill-active text-fg-secondary"><KeyRound className="size-5" strokeWidth={1.8} /></span>
+        <h1 className="mt-5 text-[25px] font-semibold tracking-[-0.04em] text-ink">{t("网关访问令牌")}</h1>
+        <p className="mt-2 text-[13px] leading-5 text-fg-muted">{t("此自托管工作台受共享令牌保护。请输入启动网关时配置的令牌。")}</p>
+        <form onSubmit={submit} className="mt-7">
+          <label className="block text-[12px] font-medium text-fg-secondary">
+            {t("共享令牌")}
+            <div className="relative">
+              <input type={visible ? "text" : "password"} required autoFocus autoComplete="off" value={token} onChange={event => setToken(event.target.value)} className="mt-2 h-11 w-full rounded-xl border border-edge-strong bg-canvas px-3.5 pr-11 text-[14px] text-fg focus:border-edge-hover" />
+              <button type="button" onClick={() => setVisible(value => !value)} aria-label={t(visible ? "隐藏密码" : "显示密码")} className="absolute right-2.5 top-1/2 mt-1 flex size-8 -translate-y-1/2 items-center justify-center rounded-lg text-fg-faint hover:bg-fill-hover hover:text-fg">
+                {visible ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
+          </label>
+          {rejected && <p role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 px-3.5 py-3 text-[12px] text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">{t("令牌无效，请重新输入。")}</p>}
+          <button type="submit" disabled={busy || !token} className="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-full bg-ink px-5 text-[13px] font-medium text-on-ink shadow-sm transition hover:bg-ink-hover active:scale-[0.99] disabled:opacity-40">
+            {busy ? <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" /> : <ArrowRight className="size-4" />}
+            {busy ? t("请稍候…") : t("连接工作台")}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
 }
 
 function Brand({ compact = false }: { compact?: boolean }) {

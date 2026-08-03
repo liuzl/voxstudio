@@ -2,9 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   bootstrapGatewayToken,
   configureGatewayAuth,
+  clearGatewayToken,
   gatewayFetch,
   gatewayRealtimeUrl,
   gatewayResourceUrl,
+  hasGatewayToken,
+  setGatewayToken,
 } from "./gateway-auth";
 
 class MemoryStorage {
@@ -101,6 +104,18 @@ describe("self-hosted shared token", () => {
     }) as typeof fetch;
     await gatewayFetch("/v1/agents", { headers: { authorization: "Bearer explicit" } });
     expect(authorization).toBe("Bearer explicit");
+  });
+
+  test("lets the token entrance replace and clear the tab-scoped credential", () => {
+    const storage = new MemoryStorage();
+    bootstrapGatewayToken({ href: "http://studio.test/", storage, replaceUrl: () => {} });
+    configureGatewayAuth("self", true);
+    expect(hasGatewayToken()).toBe(false);
+    setGatewayToken("entered-secret");
+    expect(hasGatewayToken()).toBe(true);
+    expect(gatewayRealtimeUrl("http://studio.test/")).toContain("token=entered-secret");
+    clearGatewayToken();
+    expect(hasGatewayToken()).toBe(false);
   });
 
   test("clears a captured token when discovery reports accounts or unprotected self-host", async () => {

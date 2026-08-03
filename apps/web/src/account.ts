@@ -1,16 +1,16 @@
 import { create } from "zustand";
 import { fetchDoor, fetchSession, signOut as signOutRequest, type AccountUser, type AuthMode, type LoginDoors } from "./lib/auth";
-import { configureGatewayAuth } from "./lib/gateway-auth";
+import { clearGatewayToken, configureGatewayAuth, gatewayFetch, hasGatewayToken, setGatewayToken } from "./lib/gateway-auth";
 import { onUnauthorized } from "./lib/unauthorized";
 
 /**
  * Shell-level account state (docs/auth.md phase 3), kept apart from the studio session
  * store: this is about who is at the door, not what a conversation is doing.
  *
- * A self-hosted deployment resolves to mode "self" and stays there — no session probe,
- * no login card, nothing changed from before accounts existed.
+ * An unprotected self-hosted deployment passes through unchanged. A protected one must
+ * prove its tab-scoped shared token before the product shell mounts.
  */
-export type AccountStatus = "loading" | "self" | "signed-in" | "signed-out" | "unavailable";
+export type AccountStatus = "loading" | "self" | "token-required" | "signed-in" | "signed-out" | "unavailable";
 
 interface AccountState {
   status: AccountStatus;
@@ -18,9 +18,12 @@ interface AccountState {
   /** Which ways in the deployment offers; the card renders exactly these. */
   doors: LoginDoors;
   user: AccountUser | null;
+  tokenRequired: boolean;
+  tokenRejected: boolean;
   /** Probe the door, then the session. Safe to call again after signing in or out. */
   refresh: () => Promise<void>;
   signOut: () => Promise<void>;
+  unlockSelfHosted: (token: string) => Promise<void>;
   /** A credential that stopped working: back to the card, keeping the mode. */
   markSignedOut: () => void;
 }
@@ -30,21 +33,40 @@ export const useAccount = create<AccountState>((set, get) => ({
   mode: undefined,
   doors: { password: false, providers: [] },
   user: null,
+  tokenRequired: false,
+  tokenRejected: false,
 
   refresh: async () => {
     if (get().status === "unavailable") set({ status: "loading" });
     const { mode, doors, tokenRequired } = await fetchDoor();
     configureGatewayAuth(mode, tokenRequired);
     if (mode === "self") {
-      set({ status: "self", mode, doors, user: null });
+      if (tokenRequired && !hasGatewayToken()) {
+        set({ status: "token-required", mode, doors, user: null, tokenRequired, tokenRejected: false });
+        return;
+      }
+      if (tokenRequired) {
+        try {
+          const probe = await gatewayFetch("/v1/engines");
+          if (probe.status === 401) {
+            clearGatewayToken();
+            set({ status: "token-required", mode, doors, user: null, tokenRequired, tokenRejected: true });
+            return;
+          }
+        } catch {
+          set({ status: "unavailable", mode: "unavailable", doors, user: null, tokenRequired, tokenRejected: false });
+          return;
+        }
+      }
+      set({ status: "self", mode, doors, user: null, tokenRequired, tokenRejected: false });
       return;
     }
     if (mode === "unavailable") {
-      set({ status: "unavailable", mode, doors, user: null });
+      set({ status: "unavailable", mode, doors, user: null, tokenRequired: false, tokenRejected: false });
       return;
     }
     const user = await fetchSession().catch(() => null);
-    set({ status: user === null ? "signed-out" : "signed-in", mode, doors, user });
+    set({ status: user === null ? "signed-out" : "signed-in", mode, doors, user, tokenRequired: false, tokenRejected: false });
   },
 
   signOut: async () => {
@@ -55,8 +77,18 @@ export const useAccount = create<AccountState>((set, get) => ({
     set({ status: "signed-out", user: null });
   },
 
+  unlockSelfHosted: async sharedToken => {
+    setGatewayToken(sharedToken);
+    set({ status: "loading", tokenRejected: false });
+    await get().refresh();
+  },
+
   markSignedOut: () => {
-    // Only meaningful under accounts: a self-hosted studio has no card to fall back to.
+    if (get().mode === "self" && get().tokenRequired) {
+      clearGatewayToken();
+      set({ status: "token-required", user: null, tokenRejected: true });
+      return;
+    }
     if (get().mode !== "accounts") return;
     set({ status: "signed-out", user: null });
   },

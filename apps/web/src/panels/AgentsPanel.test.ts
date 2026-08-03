@@ -57,6 +57,9 @@ describe("Agent deployment snippets", () => {
     expect(protectedSnippets.native).toContain('url.searchParams.set("token", "YOUR_GATEWAY_TOKEN")');
     expect(protectedSnippets.openai).toContain('process.env.VOX_API_KEY ?? "YOUR_API_KEY"');
     const accountSnippets = agentDeploymentSnippets("support.zh", "https://voice.example", { accountMode: true });
+    expect(accountSnippets.cli).toBeNull();
+    expect(accountSnippets.native).toContain('import WebSocket from "ws"');
+    expect(accountSnippets.native).toContain('Authorization: `Bearer ${process.env.VOX_API_KEY ?? "YOUR_API_KEY"}`');
     expect(accountSnippets.openai).toContain('process.env.VOX_API_KEY ?? "YOUR_API_KEY"');
   });
 

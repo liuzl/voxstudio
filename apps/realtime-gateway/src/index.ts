@@ -9,5 +9,6 @@ export {
   type SessionStartOptions,
 } from "./protocol";
 export { parseByteSize } from "./library";
+export { assertGatewayToken } from "./auth/request-auth";
 export { startGateway, type GatewayServer, type GatewayServerOptions } from "./server";
 export { GatewaySession, type EventSink, type GatewaySessionOptions } from "./session";

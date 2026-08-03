@@ -112,6 +112,11 @@ afterEach(async () => {
 });
 
 describe("realtime gateway", () => {
+  test("refuses a shared token that Realtime SDK clients cannot offer", () => {
+    expect(() => startGateway({ config, fetch: engineFetch(), port: 0, token: "base64/secret=" }))
+      .toThrow("WebSocket protocol-token");
+  });
+
   test("runs a simulated duplex turn over the WebSocket protocol", async () => {
     gateway = startGateway({ config, fetch: engineFetch(), port: 0 });
     const client = new TestClient(gateway.url);

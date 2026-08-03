@@ -98,6 +98,23 @@ function activeToken(): string | undefined {
   return mode === "self" && tokenRequired ? token : undefined;
 }
 
+/** Whether the current tab already holds the credential a protected self-host needs. */
+export function hasGatewayToken(): boolean {
+  return activeToken() !== undefined;
+}
+
+/** Replace the protected self-host credential and retain it only in this browser tab. */
+export function setGatewayToken(value: string): void {
+  token = value === "" ? undefined : value;
+  persistToken(storage, token);
+}
+
+/** Forget a rejected credential so reload cannot silently retry it forever. */
+export function clearGatewayToken(): void {
+  token = undefined;
+  persistToken(storage, undefined);
+}
+
 function isGatewayRequest(input: RequestInfo | URL): boolean {
   const raw = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   if (raw.startsWith("/v1/")) return true;

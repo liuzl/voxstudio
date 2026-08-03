@@ -72,6 +72,12 @@ describe("vox studio", () => {
     }
   });
 
+  test("refuses a shared token that OpenAI realtime clients cannot carry", async () => {
+    const io = collectingIo();
+    await expect(runStudio(["--token", "base64/secret="], config, io, () => fakeGateway(), false))
+      .rejects.toThrow("WebSocket protocol-token");
+  });
+
   test("--accounts fails closed without a real secret, and refuses to share the door with --token", async () => {
     const io = collectingIo();
     const before = process.env.VOX_AUTH_SECRET;

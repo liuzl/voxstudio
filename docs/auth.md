@@ -51,11 +51,20 @@ rather than a feature.
 When a self-hosted Web Studio uses the optional token, open it once with
 `#token=<VOX_GATEWAY_TOKEN>` (preferred) or `?token=<VOX_GATEWAY_TOKEN>`. The browser
 immediately removes the credential from the address bar and keeps it in session storage
-for that tab. Same-origin REST calls carry it as `Authorization: Bearer`; native browser
+for that tab. If the link omits the token, or the saved value is rejected, Studio shows a
+token entrance and verifies the replacement before mounting the product UI. Same-origin
+REST calls carry it as `Authorization: Bearer`; native browser
 WebSockets and direct media/download URLs use the gateway's query-token door because
 those browser APIs cannot attach an Authorization header. Auth discovery enables this
 transport only when `/healthz` says `auth: self` and `tokenRequired: true`; account mode
 discards it rather than mixing a shared secret with the user's cookie.
+
+The OpenAI Realtime SDK carries its API key as a WebSocket subprotocol, whose syntax is
+stricter than an arbitrary password. Both gateway entrypoints therefore reject shared
+tokens containing whitespace, `/`, `=`, or other characters outside the HTTP token set;
+letters, digits, and ``!#$%&'*+-.^_`|~`` are accepted. This startup check prevents a
+deployment whose REST clients work but whose documented Realtime SDK client cannot even
+begin a WebSocket handshake.
 
 ### Identity: one seam, two fields
 

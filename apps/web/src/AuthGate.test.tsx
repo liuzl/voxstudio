@@ -5,6 +5,7 @@ import { useI18n } from "./i18n";
 
 const noAction = (): void => {};
 const noAsyncAction = async (): Promise<void> => {};
+const noTokenAction = async (_token: string): Promise<void> => {};
 
 beforeEach(() => {
   useI18n.setState({ locale: "zh" });
@@ -13,7 +14,7 @@ beforeEach(() => {
 describe("AuthGate surface", () => {
   test("an unknown deployment state fails closed with a retry surface", () => {
     const html = renderToStaticMarkup(
-      <AuthGateView status="unavailable" doors={{ password: false, providers: [] }} onRetry={noAction} onAuthenticated={noAsyncAction}>
+      <AuthGateView status="unavailable" doors={{ password: false, providers: [] }} tokenRejected={false} onRetry={noAction} onAuthenticated={noAsyncAction} onToken={noTokenAction}>
         <div>private studio</div>
       </AuthGateView>,
     );
@@ -24,7 +25,7 @@ describe("AuthGate surface", () => {
 
   test("a hosted password door renders the unified product entrance", () => {
     const html = renderToStaticMarkup(
-      <AuthGateView status="signed-out" doors={{ password: true, providers: ["github"] }} onRetry={noAction} onAuthenticated={noAsyncAction}>
+      <AuthGateView status="signed-out" doors={{ password: true, providers: ["github"] }} tokenRejected={false} onRetry={noAction} onAuthenticated={noAsyncAction} onToken={noTokenAction}>
         <div>private studio</div>
       </AuthGateView>,
     );
@@ -38,9 +39,20 @@ describe("AuthGate surface", () => {
 
   test("a signed-in account reaches the studio", () => {
     expect(renderToStaticMarkup(
-      <AuthGateView status="signed-in" doors={{ password: true, providers: [] }} onRetry={noAction} onAuthenticated={noAsyncAction}>
+      <AuthGateView status="signed-in" doors={{ password: true, providers: [] }} tokenRejected={false} onRetry={noAction} onAuthenticated={noAsyncAction} onToken={noTokenAction}>
         <div>private studio</div>
       </AuthGateView>,
     )).toContain("private studio");
+  });
+
+  test("a protected self-host renders a token entrance instead of the studio", () => {
+    const html = renderToStaticMarkup(
+      <AuthGateView status="token-required" doors={{ password: false, providers: [] }} tokenRejected onRetry={noAction} onAuthenticated={noAsyncAction} onToken={noTokenAction}>
+        <div>private studio</div>
+      </AuthGateView>,
+    );
+    expect(html).toContain("网关访问令牌");
+    expect(html).toContain("令牌无效");
+    expect(html).not.toContain("private studio");
   });
 });

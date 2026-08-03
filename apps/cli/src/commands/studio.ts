@@ -3,7 +3,7 @@ import { AgentRegistry } from "@voxstudio/agents";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ffmpegPcmDecoder, loadSileroVadModel, persistPronunciationsFile, resolveConfigPath } from "@voxstudio/platform-bun";
-import { parseByteSize, startGateway, type GatewayServer, type GatewayServerOptions } from "@voxstudio/realtime-gateway";
+import { assertGatewayToken, parseByteSize, startGateway, type GatewayServer, type GatewayServerOptions } from "@voxstudio/realtime-gateway";
 import { webAssets } from "../generated/web-assets";
 import type { CliIo } from "../io";
 
@@ -28,7 +28,7 @@ options:
   --host HOST    bind address (default 127.0.0.1)
   --port PORT    listen port (default 8790)
   --token TOKEN  bearer token required on /v1 requests and the realtime socket
-                 (VOX_GATEWAY_TOKEN)
+                 (VOX_GATEWAY_TOKEN); use URL/WebSocket-safe token characters only
   --agents DIR   Agent drafts and immutable published versions
                  (default ~/.config/voxstudio/agents; VOX_GATEWAY_AGENTS)
   --library DIR  retain every finalized utterance (WAV + transcript) in DIR and serve
@@ -189,6 +189,7 @@ export async function runStudio(
   if (hasAccounts && token !== undefined && token !== "") {
     throw new TypeError("studio: --accounts and --token are mutually exclusive");
   }
+  if (token !== undefined) assertGatewayToken(token, "studio: --token/VOX_GATEWAY_TOKEN");
   const authBaseUrl = process.env.VOX_AUTH_BASE_URL;
   // A quota with no accounts would meter the one person running the studio.
   if (quotaOperations !== undefined && !hasAccounts) {

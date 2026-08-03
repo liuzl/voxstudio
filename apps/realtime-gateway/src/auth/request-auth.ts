@@ -16,6 +16,18 @@ function tokenMatches(presented: string, expected: string): boolean {
 }
 
 const openAiApiKeyProtocol = "openai-insecure-api-key.";
+const websocketProtocolToken = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/**
+ * The official OpenAI realtime clients carry the API key in a WebSocket subprotocol.
+ * Reject a shared token that a standards-compliant client could never offer instead of
+ * starting a deployment whose generated SDK example fails before the handshake.
+ */
+export function assertGatewayToken(token: string, source = "gateway token"): void {
+  if (token !== "" && !websocketProtocolToken.test(token)) {
+    throw new TypeError(`${source} may contain only WebSocket protocol-token characters (letters, digits, and !#$%&'*+-.^_\`|~)`);
+  }
+}
 
 /**
  * The official OpenAI realtime SDK cannot set an Authorization header on a

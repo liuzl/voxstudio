@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { OWNER_USER_ID } from "./auth-context";
-import { isLoopbackHost, resolveAuthContext, upgradeOriginAllowed } from "./request-auth";
+import { assertGatewayToken, isLoopbackHost, resolveAuthContext, upgradeOriginAllowed } from "./request-auth";
 
 const request = (url: string, headers: Record<string, string> = {}): Request =>
   new Request(url, { headers });
@@ -38,6 +38,15 @@ describe("resolveAuthContext", () => {
       "sec-websocket-protocol": "openai-insecure-api-key.gw-secret, realtime",
     }), options)).toBeNull();
     expect(resolveAuthContext(request("http://gw.test/v1/voices", protocols), options)).toBeNull();
+  });
+});
+
+describe("shared gateway token", () => {
+  test("accepts WebSocket-compatible secrets and refuses values the OpenAI SDK cannot offer", () => {
+    expect(() => assertGatewayToken("letters-123._~", "test token")).not.toThrow();
+    expect(() => assertGatewayToken("", "test token")).not.toThrow();
+    expect(() => assertGatewayToken("base64/secret=", "test token")).toThrow("WebSocket protocol-token");
+    expect(() => assertGatewayToken("contains a space", "test token")).toThrow("WebSocket protocol-token");
   });
 });
 

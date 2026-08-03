@@ -3,6 +3,7 @@ import { AgentRegistry } from "@voxstudio/agents";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseByteSize } from "./library";
+import { assertGatewayToken } from "./auth/request-auth";
 import { startGateway } from "./server";
 
 const usage = `usage: vox-gateway [--config CONFIG] [--host HOST] [--port PORT] [--token TOKEN] [--agents DIR]
@@ -11,7 +12,8 @@ Realtime gateway for the Web Studio: the duplex session protocol over WebSocket 
 /v1/realtime, plus a REST facade over the engine contract. Binds loopback by default;
 reaching it from a browser is a deployment decision (a tunnel in front, Access at the
 door). TOKEN, when set, is required as a Bearer header or ?token= query parameter.
-Environment: VOX_GATEWAY_HOST, VOX_GATEWAY_PORT, VOX_GATEWAY_TOKEN. Demo guardrails
+Use URL/WebSocket-safe token characters only. Environment: VOX_GATEWAY_HOST,
+VOX_GATEWAY_PORT, VOX_GATEWAY_TOKEN. Demo guardrails
 (docs/public-demo.md): --max-sessions N, --max-session-seconds N, --demo, and
 --demo-agent ID (or VOX_GATEWAY_MAX_SESSIONS, VOX_GATEWAY_MAX_SESSION_SECONDS,
 VOX_GATEWAY_DEMO=1, VOX_GATEWAY_DEMO_AGENT).
@@ -147,6 +149,7 @@ async function main(args: string[]): Promise<number> {
   if (hasAccounts && token !== undefined && token !== "") {
     throw new TypeError("vox-gateway: --accounts and --token are mutually exclusive");
   }
+  if (token !== undefined) assertGatewayToken(token, "vox-gateway: --token/VOX_GATEWAY_TOKEN");
   const authBaseUrl = process.env.VOX_AUTH_BASE_URL;
   // A quota typo fails closed, and a quota without accounts is a config mistake: there
   // would be exactly one account to meter, the operator's own.

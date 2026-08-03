@@ -8,7 +8,7 @@ import type { ConversationTool } from "@voxstudio/conversation";
 import { connectMcpServers, type McpToolSource } from "@voxstudio/mcp";
 import { OpenAiRealtimeConnection } from "./openai-realtime";
 import { OWNER_USER_ID, type AuthContext } from "./auth/auth-context";
-import { isLoopbackHost, resolveAuthContext, upgradeOriginAllowed } from "./auth/request-auth";
+import { assertGatewayToken, isLoopbackHost, resolveAuthContext, upgradeOriginAllowed } from "./auth/request-auth";
 // Type-only: the accounts module (and better-auth with it) loads dynamically, and
 // only when a deployment configured accounts (docs/auth.md phase 3).
 import type { Accounts } from "./auth/accounts";
@@ -233,6 +233,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   if (options.accounts !== undefined && options.token !== undefined && options.token !== "") {
     throw new TypeError("accounts and --token are mutually exclusive: hosted deployments take a session or an API key, nothing else");
   }
+  if (options.token !== undefined) assertGatewayToken(options.token);
   // The resolver seam exists for tests and future identity sources; standing beside
   // hosted accounts it would silently outrank Better Auth on every request — an
   // authentication bypass assembled from two valid options (adversarial review

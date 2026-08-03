@@ -698,7 +698,7 @@ export function agentPreviewOptions(record: AgentRecord, source: AgentPreviewSou
 }
 
 export interface AgentDeploymentSnippets {
-  cli: string;
+  cli: string | null;
   native: string;
   openai: string;
   python: string;
@@ -725,11 +725,15 @@ export function agentDeploymentSnippets(
   const base = origin.replace(/\/$/, "");
   const websocket = base.replace(/^http:/, "ws:").replace(/^https:/, "wss:");
   const encoded = encodeURIComponent(agentId);
-  const nativeSocket = options.tokenRequired
-    ? `const url = new URL(${JSON.stringify(`${websocket}/v1/realtime`)});\nurl.searchParams.set("token", "YOUR_GATEWAY_TOKEN");\nconst ws = new WebSocket(url);`
-    : `const ws = new WebSocket(${JSON.stringify(`${websocket}/v1/realtime`)});`;
+  const nativeSocket = options.accountMode
+    ? `import WebSocket from "ws";\n\nconst ws = new WebSocket(${JSON.stringify(`${websocket}/v1/realtime`)}, {\n  headers: { Authorization: \`Bearer \${process.env.VOX_API_KEY ?? "YOUR_API_KEY"}\` },\n});`
+    : options.tokenRequired
+      ? `const url = new URL(${JSON.stringify(`${websocket}/v1/realtime`)});\nurl.searchParams.set("token", "YOUR_GATEWAY_TOKEN");\nconst ws = new WebSocket(url);`
+      : `const ws = new WebSocket(${JSON.stringify(`${websocket}/v1/realtime`)});`;
   return {
-    cli: `# Run on the gateway host; this uses its local Agent registry and engines.\nvox listen --agent ${agentId}`,
+    // Hosted records live in the signed-in account namespace. The local CLI resolves
+    // only the self-hosted owner namespace, so offering it here could run the wrong id.
+    cli: options.accountMode ? null : `# Run on the gateway host; this uses its local Agent registry and engines.\nvox listen --agent ${agentId}`,
     native: `${nativeSocket}\n\nws.addEventListener("open", () => {\n  ws.send(JSON.stringify({\n    v: 1,\n    type: "session.start",\n    idempotencyKey: crypto.randomUUID(),\n    options: { agent: ${JSON.stringify(agentId)} },\n  }));\n});`,
     openai: `import OpenAI from "openai";\nimport { OpenAIRealtimeWebSocket } from "openai/realtime/websocket";\n\nconst api = new OpenAI({\n  apiKey: process.env.VOX_API_KEY ?? ${JSON.stringify(options.tokenRequired || options.accountMode ? "YOUR_API_KEY" : "local")},\n  baseURL: ${JSON.stringify(`${base}/v1`)},\n});\n\nconst realtime = new OpenAIRealtimeWebSocket({\n  model: "voxstudio-realtime",\n  onURL(url) {\n    url.searchParams.set("agent", ${JSON.stringify(agentId)});\n    if (url.hostname === "127.0.0.1" || url.hostname === "localhost") url.protocol = "ws:";\n  },\n}, api);`,
     python: `import asyncio, json, websockets\n\nasync def main():\n    uri = ${JSON.stringify(`${websocket}/v1/realtime?model=voxstudio-realtime&agent=${encoded}`)}\n    headers = {"Authorization": "Bearer YOUR_API_KEY"}\n    async with websockets.connect(uri, additional_headers=headers) as ws:\n        print(json.loads(await ws.recv()))  # session.created\n\nasyncio.run(main())`,
@@ -754,20 +758,22 @@ function AgentDeployment({ record }: { record: AgentRecord }) {
   const toast = useStudio(state => state.toast);
   const [info, setInfo] = useState<DeploymentInfo>();
   const [failure, setFailure] = useState("");
-  useEffect(() => {
-    let active = true;
-    void getDeploymentInfo().then(value => { if (active) setInfo(value); }).catch(error => {
-      if (active) setFailure(error instanceof Error ? error.message : String(error));
-    });
-    return () => { active = false; };
+  const infoGeneration = useRef(0);
+  const loadInfo = useCallback(async (): Promise<void> => {
+    const generation = ++infoGeneration.current;
+    setFailure("");
+    setInfo(undefined);
+    try {
+      const next = await getDeploymentInfo();
+      if (generation === infoGeneration.current) setInfo(next);
+    } catch (error) {
+      if (generation === infoGeneration.current) setFailure(error instanceof Error ? error.message : String(error));
+    }
   }, []);
-  const snippets = useMemo(
-    () => agentDeploymentSnippets(record.id, window.location.origin, {
-      tokenRequired: info?.tokenRequired === true,
-      accountMode: info?.auth === "accounts",
-    }),
-    [info?.auth, info?.tokenRequired, record.id],
-  );
+  useEffect(() => {
+    void loadInfo();
+    return () => { infoGeneration.current += 1; };
+  }, [loadInfo]);
   const copy = (code: string) => {
     void navigator.clipboard?.writeText(code);
     toast("info", t("已复制代码"));
@@ -775,6 +781,23 @@ function AgentDeployment({ record }: { record: AgentRecord }) {
   if (!record.published) {
     return <div className="rounded-2xl border border-dashed border-edge bg-canvas px-6 py-12 text-center"><Rocket className="mx-auto size-6 text-fg-faint" /><h2 className="mt-4 text-[13px] font-semibold">{t("请先发布助手")}</h2><p className="mt-2 text-[11px] text-fg-muted">{t("部署接口只解析不可变的已发布版本。")}</p></div>;
   }
+  if (info === undefined) {
+    return (
+      <BuilderSection icon={Rocket} title={t("连接已发布的助手")} description={t("复制可直接运行的连接示例；草稿不会通过部署接口提供。")}>
+        {failure ? (
+          <div className="flex flex-col items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-4 text-[11px] text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+            <span>{failure}</span>
+            <button type="button" onClick={() => { void loadInfo(); }} className="inline-flex h-8 items-center gap-2 rounded-full border border-current px-3 font-medium"><RotateCw className="size-3" />{t("刷新")}</button>
+          </div>
+        ) : <div className="flex items-center gap-2 rounded-xl border border-edge-faint bg-surface px-4 py-4 text-[11px] text-fg-muted"><LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />{t("探测中…")}</div>}
+      </BuilderSection>
+    );
+  }
+  const snippets = agentDeploymentSnippets(record.id, window.location.origin, {
+    tokenRequired: info.tokenRequired,
+    accountMode: info.auth === "accounts",
+  });
+  const cliSnippet = snippets.cli;
   const demoState = agentDemoPinState(info, record.id, record.published.version);
   const demoLabel = demoState === "loading" ? "—"
     : demoState === "off" ? t("未启用演示模式")
@@ -790,16 +813,16 @@ function AgentDeployment({ record }: { record: AgentRecord }) {
           {[
             [t("发布版本"), `v${record.published.version} · ${record.published.hash.slice(0, 10)}`],
             [t("公开地址"), window.location.origin],
-            [t("认证模式"), info === undefined ? "—" : info.auth === "accounts" ? t("账户与 API 密钥") : info.tokenRequired ? t("自托管（共享令牌）") : t("自托管")],
-            [t("演示固定"), failure || demoLabel],
+            [t("认证模式"), info.auth === "accounts" ? t("账户与 API 密钥") : info.tokenRequired ? t("自托管（共享令牌）") : t("自托管")],
+            [t("演示固定"), demoLabel],
           ].map(([label, value]) => <div key={label} className="rounded-xl border border-edge-faint bg-surface px-4 py-3"><div className="text-[9px] font-medium text-fg-faint">{label}</div><div className="mt-1.5 break-all font-mono text-[10px] text-fg-secondary">{value}</div></div>)}
         </div>
-        <p className="text-[10px] leading-5 text-fg-muted">{info?.tokenRequired
+        {(info.tokenRequired || info.auth === "accounts") && <p className="text-[10px] leading-5 text-fg-muted">{info.tokenRequired
           ? t("共享令牌部署需替换示例中的令牌；账户模式机器客户端需要 API 密钥；浏览器还必须满足同源策略。")
-          : t("机器客户端在账户模式下需要 Bearer API 密钥；浏览器还必须满足同源策略。")}</p>
+          : t("机器客户端在账户模式下需要 Bearer API 密钥；浏览器还必须满足同源策略。")}</p>}
       </BuilderSection>
-      <BuilderSection icon={ServerCog} title={t("原生 CLI")} description={t("本地命令，仅在 Gateway 主机使用。远程客户端请使用 WebSocket 示例。")}>
-        <DeploymentCode title={t("原生 CLI")} code={snippets.cli} onCopy={() => copy(snippets.cli)} />
+      <BuilderSection icon={ServerCog} title={cliSnippet === null ? t("原生 WebSocket") : t("原生 CLI")} description={info.auth === "accounts" ? t("机器客户端在账户模式下需要 Bearer API 密钥；浏览器还必须满足同源策略。") : t("本地命令，仅在 Gateway 主机使用。远程客户端请使用 WebSocket 示例。") }>
+        {cliSnippet !== null && <DeploymentCode title={t("原生 CLI")} code={cliSnippet} onCopy={() => copy(cliSnippet)} />}
         <DeploymentCode title={t("原生 WebSocket")} code={snippets.native} onCopy={() => copy(snippets.native)} />
       </BuilderSection>
       <BuilderSection icon={Bot} title={t("OpenAI Realtime SDK")} description="OpenAI-compatible WebSocket">
