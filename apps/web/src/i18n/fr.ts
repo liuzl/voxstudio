@@ -247,7 +247,6 @@ export const fr: Record<MessageKey, string> = {
   "先录制或选择参考音频，再识别逐字稿。": "Enregistrez ou choisissez d'abord l'audio de référence, puis transcrivez.",
   "ASR 没有识别出内容；请人工填写逐字稿。": "L'ASR n'a rien reconnu ; veuillez saisir la transcription manuellement.",
   "注册需要：ID、参考音频（上传或录制）、参考音的逐字稿。": "L'enregistrement demande : un ID, un audio de référence (téléversé ou enregistré) et sa transcription mot à mot.",
-  "已注册 {id} —— 见音色库首位，可试听或直接用于生成。": "{id} enregistrée — en tête de la banque ; écoutez-la ou utilisez-la directement pour générer.",
 
   // Voices panel — design profiles
   "设计档（{n}）": "Profils de design ({n})",

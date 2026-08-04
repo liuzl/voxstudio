@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createAgent, deleteAgent, deleteAgentConversation, getAgentConversation, getDeploymentInfo, listAgentConversations, listAgents, publishAgent, transcribe, updateAgent } from "./api";
+import { createAgent, deleteAgent, deleteAgentConversation, getAgentConversation, getDeploymentInfo, listAgentConversations, listAgents, publishAgent, registerVoice, transcribe, updateAgent } from "./api";
 
 const realFetch = globalThis.fetch;
 
@@ -34,6 +34,47 @@ describe("api transcribe", () => {
       .resolves.toBe("机器学习中的过拟合");
     expect(form?.get("language")).toBe("zh");
     expect(form?.get("revise")).toBe("true");
+  });
+});
+
+describe("voice registration API", () => {
+  test("uploads one reference with repeated explicit engine targets and keeps partial results", async () => {
+    let form: FormData | undefined;
+    stubFetch((_input, init) => {
+      form = init?.body as FormData;
+      return Response.json({
+        id: "shuber",
+        registered: ["tts"],
+        failed: ["sz_ws_tts"],
+        results: [
+          { engine: "tts", ok: true, status: 201 },
+          { engine: "sz_ws_tts", ok: false, status: 503, error: { code: "registry_busy", message: "try again" } },
+        ],
+      }, { status: 207 });
+    });
+
+    const result = await registerVoice(
+      "shuber",
+      "今天天气不太好，又下雨了。",
+      new File(["wav"], "reference.wav", { type: "audio/wav" }),
+      ["tts", "sz_ws_tts"],
+    );
+    expect(form?.getAll("engine")).toEqual(["tts", "sz_ws_tts"]);
+    expect((form?.get("audio") as File).name).toBe("reference.wav");
+    expect(result.registered).toEqual(["tts"]);
+    expect(result.failed).toEqual(["sz_ws_tts"]);
+  });
+
+  test("returns structured all-failed results even when the HTTP response is not ok", async () => {
+    stubFetch(() => Response.json({
+      id: "shuber",
+      registered: [],
+      failed: ["tts"],
+      results: [{ engine: "tts", ok: false, status: 502, error: { code: "engine_unreachable", message: "offline" } }],
+    }, { status: 502 }));
+
+    await expect(registerVoice("shuber", "text", new File(["wav"], "reference.wav"), ["tts"]))
+      .resolves.toMatchObject({ registered: [], failed: ["tts"] });
   });
 });
 

@@ -181,6 +181,18 @@ export const agentBuilderMessages = {
   "已发布版本不可修改；恢复操作只会更新当前草稿。": "Published versions are immutable; restoring only updates the current draft.",
   "使用不可变的已发布版本 v{version} 进行测试。": "Test the immutable published version v{version}.",
   "试用版本": "Preview version",
+  // Shared multi-engine voice registration messages. Other catalogs intentionally
+  // inherit these English fallbacks until their next translation pass.
+  "{count} 个引擎副本": "{count} engine replicas",
+  "至少选择一个目标引擎。": "Select at least one target engine.",
+  "{id} 部分注册成功；请重试失败的引擎。": "{id} was registered partially; retry the failed engines.",
+  "{id} 注册失败；请重试失败的引擎。": "{id} was not registered; retry the failed engines.",
+  "已在 {count} 个引擎注册 {id}。": "Registered {id} on {count} engines.",
+  "目标引擎": "Target engines",
+  "没有声明 clone 能力的 TTS 引擎。": "No TTS engine declares the clone capability.",
+  "参考音频会分别发送到你明确选择的引擎；未选择的远程引擎不会收到音频。": "The reference audio is sent separately to the engines you explicitly select; unselected remote engines receive nothing.",
+  "重试失败引擎": "Retry failed engines",
+  "注册结果：{success}/{total} 个引擎成功": "Registration result: {success}/{total} engines succeeded",
 } as const;
 
 /**
@@ -434,7 +446,6 @@ export const en = {
   "先录制或选择参考音频，再识别逐字稿。": "Record or choose the reference audio first, then transcribe.",
   "ASR 没有识别出内容；请人工填写逐字稿。": "ASR recognized nothing; please fill in the transcript manually.",
   "注册需要：ID、参考音频（上传或录制）、参考音的逐字稿。": "Registration needs: an ID, reference audio (uploaded or recorded), and its verbatim transcript.",
-  "已注册 {id} —— 见音色库首位，可试听或直接用于生成。": "Registered {id} — first in the bank now; audition it or use it to generate.",
 
   // Voices panel — design profiles
   "设计档（{n}）": "Design profiles ({n})",

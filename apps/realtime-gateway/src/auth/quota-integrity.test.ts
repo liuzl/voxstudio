@@ -317,6 +317,56 @@ describe("M-4: registering a voice by voice is charged like registering one over
     expect(tally.voices).toBe(0);
     conversation.close();
   });
+
+  test("a multi-engine registration reserves one operation per target before any write", async () => {
+    const multiConfig = parseConfig({
+      engines: {
+        primary: { kind: "tts", base_url: "http://primary.test", capabilities: ["clone"] },
+        remote: { kind: "tts", base_url: "http://remote.test", capabilities: ["clone"] },
+        asr: { base_url: "http://asr.test" },
+        llm: { base_url: "http://llm.test" },
+      },
+      roles: { tts: "primary" },
+    });
+    let writes = 0;
+    gateway = startGateway({
+      config: multiConfig,
+      port: 0,
+      accounts: { dir: tempDir(), secret: SECRET, rateLimit: { window: 60, max: 1_000 } },
+      quota: { operations: 1, windowSeconds: 60 },
+      fetch: async (input, init) => {
+        const request = new Request(input instanceof Request ? input : String(input), init);
+        if (new URL(request.url).pathname === "/v1/voices" && request.method === "POST") writes += 1;
+        return Response.json({ id: "shuber" }, { status: 201 });
+      },
+    });
+    const cookie = await signUp(gateway.url, "replicas@test.dev");
+    const registration = (engines: string[]): FormData => {
+      const form = new FormData();
+      form.set("id", "shuber");
+      form.set("text", "参考音");
+      form.set("audio", new File([new Uint8Array(16)], "ref.wav", { type: "audio/wav" }));
+      for (const engine of engines) form.append("engine", engine);
+      return form;
+    };
+
+    const refused = await fetch(new URL("/v1/voices", gateway.url), {
+      method: "POST",
+      headers: { cookie },
+      body: registration(["primary", "remote"]),
+    });
+    expect(refused.status).toBe(429);
+    expect(writes).toBe(0);
+
+    // The failed reservation refunded its first unit, so a one-target retry can use it.
+    const retried = await fetch(new URL("/v1/voices", gateway.url), {
+      method: "POST",
+      headers: { cookie },
+      body: registration(["primary"]),
+    });
+    expect(retried.status).toBe(201);
+    expect(writes).toBe(1);
+  });
 });
 
 describe("H-2: brute-force protection does not depend on NODE_ENV", () => {

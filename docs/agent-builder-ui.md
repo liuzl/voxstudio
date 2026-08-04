@@ -255,6 +255,11 @@ the future public Portal keep content and audio persistence off regardless of
 operator defaults. The UI reports the deployment's effective policy and never
 copies a hosted vendor's fixed retention period.
 
+The accepted storage, revision, replay, quota, and deletion contract is defined
+in [conversation-retention.md](./conversation-retention.md). In particular, the
+Capture Library remains a dataset surface; a Library WAV is not implicitly a
+Conversation replay asset.
+
 ### Statistics
 
 Only measured fields are shown:
@@ -473,8 +478,10 @@ stage component does not require sharing the entire page theme.
    duration filters at the API), displays exact draft revision or published version/hash,
    transcript/tool/protocol detail when allowed, and supports deletion. `--traces DIR`
    is the metadata opt-in; `--trace-content` is a separate content opt-in, demo mode
-   forces content off, and audio never enters this store. Retained-audio replay, a
-   byte-based trace ceiling, and only then measured statistics remain.
+   forces content off, and the current implementation does not retain trace audio.
+   The retained input/output media design and byte ceiling are now accepted in
+   [conversation-retention.md](./conversation-retention.md), but implementation,
+   replay UI, and only then measured statistics remain.
 6. **Portal reuse — not started**: curated public Agent and hardened demo
    experience after the preview component has passed desktop/mobile and
    real-browser gates.

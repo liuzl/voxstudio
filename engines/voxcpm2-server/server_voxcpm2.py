@@ -74,18 +74,30 @@ async def _pipeline_busy_handler(request, exc):
 
 _CUDA = torch.cuda.is_available()
 _continuations = ContinuationStore()
-_prompt_caches = PromptCacheStore()
 MODEL_ID = model_identity()
 MODEL_MANIFEST_SHA256 = model_manifest_sha256()
+_prompt_caches = PromptCacheStore(
+    capacity=int(os.getenv("VOXCPM2_PROMPT_CACHE_CAPACITY", "16")),
+    namespace=f"{MODEL_ID}:{MODEL_MANIFEST_SHA256 or '-'}",
+)
 
 
 def _generate(text, ref, cfg, ts, prompt=None, seed=None):
     """prompt = (wav_path, transcript). Conditions on an aligned text/audio example, which
     the model follows for tempo; `ref` alone only carries timbre. Output excludes the prompt."""
-    kw = {"prompt_wav_path": prompt[0], "prompt_text": prompt[1]} if prompt else {}
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("target text must be a non-empty string")
+    text = re.sub(r"\s+", " ", text.replace("\n", " "))
     with _pipeline():
-        wav = model.generate(text=text, reference_wav_path=ref, cfg_value=cfg,
-                             inference_timesteps=ts, seed=seed, **kw)
+        cache = _get_prompt_cache(ref, prompt)
+        if cache is None:
+            wav = model.generate(text=text, reference_wav_path=None, cfg_value=cfg,
+                                 inference_timesteps=ts, seed=seed)
+        else:
+            wav, _, _ = model.tts_model.generate_with_prompt_cache(
+                target_text=text, prompt_cache=cache, cfg_value=cfg,
+                inference_timesteps=ts, max_len=4096, retry_badcase=True, seed=seed)
+            wav = wav.squeeze(0).cpu().numpy()
         if _CUDA:
             # Peak VRAM grows with the length of one generation, and the caching allocator
             # keeps that peak forever -- a co-tenant model on the same card never gets it
@@ -112,17 +124,7 @@ def _generate_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
             # dominant fixed cost of a reply's first chunk. It is deterministic per
             # reference, so it is built once per voice and shared: generation only reads
             # it, and merges build new dicts around it.
-            if prompt:
-                cache = _prompt_caches.get_or_build(
-                    prompt_cache_key(ref, prompt),
-                    lambda: model.tts_model.build_prompt_cache(
-                        prompt_text=prompt[1], prompt_wav_path=prompt[0], reference_wav_path=ref))
-            elif ref:
-                cache = _prompt_caches.get_or_build(
-                    prompt_cache_key(ref, None),
-                    lambda: model.tts_model.build_prompt_cache(reference_wav_path=ref))
-            else:
-                cache = None
+            cache = _get_prompt_cache(ref, prompt)
             base = cache
         wav, _, audio_features = model.tts_model.generate_with_prompt_cache(
             target_text=text, prompt_cache=cache, cfg_value=cfg, inference_timesteps=ts,
@@ -169,17 +171,7 @@ def _stream_continuation(text, ref, cfg, ts, prompt, seed, session_id, end):
             cache = _continuations.get(session_id)
             base = _continuations.get_base(session_id)
             if cache is None:
-                if prompt:
-                    cache = _prompt_caches.get_or_build(
-                        prompt_cache_key(ref, prompt),
-                        lambda: model.tts_model.build_prompt_cache(
-                            prompt_text=prompt[1], prompt_wav_path=prompt[0], reference_wav_path=ref))
-                elif ref:
-                    cache = _prompt_caches.get_or_build(
-                        prompt_cache_key(ref, None),
-                        lambda: model.tts_model.build_prompt_cache(reference_wav_path=ref))
-                else:
-                    cache = None
+                cache = _get_prompt_cache(ref, prompt)
                 base = cache
             generator = model.tts_model.generate_with_prompt_cache_streaming(
                 target_text=text, prompt_cache=cache, cfg_value=cfg, inference_timesteps=ts,
@@ -244,6 +236,41 @@ def _vdir(vid):  return os.path.join(VOICES_DIR, vid)
 def _vref(vid):  return os.path.join(_vdir(vid), "ref.wav")
 def _vmeta(vid): return os.path.join(_vdir(vid), "meta.json")
 
+
+def _persistent_prompt_cache_path(ref, prompt):
+    """Return a stable cache path only for retained assets, never request temp files."""
+    if not ref:
+        return None
+    real_ref = os.path.realpath(ref)
+    variant = "prosody" if prompt else "voice"
+    if real_ref == os.path.realpath(DEFAULT_REF):
+        return f"{DEFAULT_REF}.prompt_cache.{variant}.pt"
+    voices_root = os.path.realpath(VOICES_DIR)
+    parent = os.path.dirname(real_ref)
+    if os.path.basename(real_ref) == "ref.wav" and os.path.dirname(parent) == voices_root:
+        return os.path.join(parent, f"prompt_cache.{variant}.pt")
+    return None
+
+
+def _get_prompt_cache(ref, prompt):
+    """Build/load a prompt cache. Callers must already hold the pipeline lock."""
+    if prompt:
+        key = prompt_cache_key(ref, prompt)
+        return _prompt_caches.get_or_build(
+            key,
+            lambda: model.tts_model.build_prompt_cache(
+                prompt_text=prompt[1], prompt_wav_path=prompt[0], reference_wav_path=ref),
+            _persistent_prompt_cache_path(ref, prompt),
+        )
+    if ref:
+        key = prompt_cache_key(ref, None)
+        return _prompt_caches.get_or_build(
+            key,
+            lambda: model.tts_model.build_prompt_cache(reference_wav_path=ref),
+            _persistent_prompt_cache_path(ref, None),
+        )
+    return None
+
 def _now(): return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 def _check_id(vid):
@@ -253,7 +280,15 @@ def _check_id(vid):
 
 def _read_meta(vid):
     with open(_vmeta(vid), encoding="utf-8") as f:
-        return json.load(f)
+        meta = json.load(f)
+    # Older registry entries already retained ref.wav but predate source_audio metadata.
+    # Enrich reads without rewriting their historical manifests.
+    if "source_audio" not in meta and os.path.isfile(_vref(vid)):
+        with open(_vref(vid), "rb") as source:
+            source_bytes = source.read()
+        meta["source_audio"] = {"file": "ref.wav", "bytes": len(source_bytes),
+                                "sha256": audio_fingerprint(source_bytes)}
+    return meta
 
 def resolve_voice(voice):
     """voice -> reference wav path (or None for zero-shot 'design'); raises 404 for unknown id."""
@@ -282,12 +317,15 @@ def health():
         try:
             _continuations.prune()
             sessions = _continuations.stats()
+            prompt_caches = _prompt_caches.stats()
         finally:
             lock.release()
     else:
         sessions = None
+        prompt_caches = None
     return {"status": "ok", "model": MODEL_ID, "model_manifest_sha256": MODEL_MANIFEST_SHA256,
-            "sample_rate": SR, "continuations": sessions, "busy": sessions is None}
+            "sample_rate": SR, "continuations": sessions, "prompt_caches": prompt_caches,
+            "busy": sessions is None}
 
 @app.post("/v1/voices", status_code=201)
 def create_voice(id: str = Form(...), text: str = Form(...), audio: UploadFile = File(...)):
@@ -299,11 +337,22 @@ def create_voice(id: str = Form(...), text: str = Form(...), audio: UploadFile =
         info = sf.info(_vref(id))
         existed = os.path.exists(_vmeta(id))
         created = _read_meta(id)["created_at"] if existed else _now()
+        with open(_vref(id), "rb") as source:
+            source_bytes = source.read()
         meta = {"id": id, "prompt_text": text,
                 "prompt_audio_length": round(info.frames / info.samplerate, 3),
-                "sample_rate": info.samplerate, "created_at": created, "updated_at": _now()}
+                "sample_rate": info.samplerate, "created_at": created, "updated_at": _now(),
+                "source_audio": {"file": "ref.wav", "bytes": len(source_bytes),
+                                 "sha256": audio_fingerprint(source_bytes)}}
         with open(_vmeta(id), "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False)
+        try:
+            with _pipeline():
+                _get_prompt_cache(_vref(id), None)
+        except Exception as error:
+            # Registration is durable once ref.wav + meta.json exist. A derived cache can
+            # safely be rebuilt on first synthesis if prewarming fails or times out.
+            print(f"Prompt cache prewarm deferred for voice {id}: {error}", flush=True)
         return meta
     finally:
         if os.path.exists(ref16k):
@@ -336,6 +385,8 @@ def create_design_profile(r: DesignProfileReq):
         meta = {"id": r.id, "prompt_text": r.anchor_text,
                 "prompt_audio_length": round(info.frames / info.samplerate, 3),
                 "sample_rate": info.samplerate, "created_at": _now(), "updated_at": _now(),
+                "source_audio": {"file": "ref.wav", "bytes": len(wav),
+                                 "sha256": audio_fingerprint(wav)},
                 "design_profile": {"description": r.description, "seed": r.seed,
                                    "cfg_value": r.cfg_value, "timesteps": r.timesteps,
                                    "model": MODEL_ID,
@@ -343,6 +394,11 @@ def create_design_profile(r: DesignProfileReq):
                                    "audio_sha256": audio_fingerprint(wav)}}
         with open(_vmeta(r.id), "w", encoding="utf-8") as output:
             json.dump(meta, output, ensure_ascii=False)
+        try:
+            with _pipeline():
+                _get_prompt_cache(_vref(r.id), None)
+        except Exception as error:
+            print(f"Prompt cache prewarm deferred for voice {r.id}: {error}", flush=True)
         return meta
     except Exception:
         shutil.rmtree(_vdir(r.id), ignore_errors=True)

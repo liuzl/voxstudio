@@ -12,6 +12,7 @@ import {
   transcribe,
   type EngineEntry,
   type VoiceEntry,
+  type VoiceRegistrationResult,
 } from "../lib/api";
 import { VoiceRecorder } from "../lib/audio";
 import { useStudio } from "../store";
@@ -44,10 +45,29 @@ function categoryOf(id: string): MessageKey {
   return categoryLabels[prefix] ?? ownCategory;
 }
 
+export interface VoiceGroup {
+  id: string;
+  replicas: VoiceEntry[];
+}
+
+/** One product voice may have an engine-local replica on several TTS backends. */
+export function groupVoiceEntries(entries: VoiceEntry[]): VoiceGroup[] {
+  const groups = new Map<string, VoiceEntry[]>();
+  for (const entry of entries) groups.set(entry.id, [...(groups.get(entry.id) ?? []), entry]);
+  return [...groups.entries()].map(([id, replicas]) => ({
+    id,
+    replicas: replicas.sort((a, b) => a.engine.localeCompare(b.engine)),
+  }));
+}
+
+const voiceReplicaKey = (id: string, engine: string): string => `${engine}/${id}`;
+
 export function VoicesPanel() {
   const t = useT();
   const voicesList = useStudio(state => state.voicesList);
   const setVoicesList = useStudio(state => state.setVoicesList);
+  const enginesList = useStudio(state => state.enginesList);
+  const setEnginesList = useStudio(state => state.setEnginesList);
   const setGenerateVoice = useStudio(state => state.setGenerateVoice);
   const toast = useStudio(state => state.toast);
   const [query, setQuery] = useState("");
@@ -60,6 +80,8 @@ export function VoicesPanel() {
   const [registering, setRegistering] = useState(false);
   const [newId, setNewId] = useState("");
   const [newText, setNewText] = useState("");
+  const [registrationEngines, setRegistrationEngines] = useState<string[]>([]);
+  const [registrationResult, setRegistrationResult] = useState<VoiceRegistrationResult | undefined>(undefined);
   const [showRegister, setShowRegister] = useState(false);
   const [source, setSource] = useState<"upload" | "record">("upload");
   const [recorder, setRecorder] = useState<VoiceRecorder | undefined>(undefined);
@@ -78,9 +100,26 @@ export function VoicesPanel() {
 
   useEffect(() => {
     void refresh();
+    if (enginesList.length === 0) listEngines().then(setEnginesList).catch(() => {});
     return () => player.current?.pause();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const cloneEngines = useMemo(
+    () => enginesList.filter(engine => engine.kind === "tts" && engine.capabilities.includes("clone")),
+    [enginesList],
+  );
+
+  useEffect(() => {
+    if (cloneEngines.length === 0) return;
+    const available = new Set(cloneEngines.map(engine => engine.name));
+    setRegistrationEngines(current => {
+      const retained = current.filter(name => available.has(name));
+      if (retained.length > 0) return retained;
+      const preferred = cloneEngines.find(engine => engine.roles.includes("tts")) ?? cloneEngines[0];
+      return preferred ? [preferred.name] : [];
+    });
+  }, [cloneEngines]);
 
   // An unanswered inline delete prompt quietly puts the × back.
   useEffect(() => {
@@ -98,12 +137,13 @@ export function VoicesPanel() {
   // Click to play, click again to stop; a newer pick supersedes an in-flight synthesis
   // instead of locking the whole bank behind it.
   const audition = async (id: string, engine: string) => {
-    if (playing === id) {
+    const key = voiceReplicaKey(id, engine);
+    if (playing === key) {
       stopAudition();
       return;
     }
     const seq = ++auditionSeq.current;
-    setAuditioning(id);
+    setAuditioning(key);
     try {
       const url = await synthesize({ input: auditionTextFor(id), voice: id, ...(engine ? { engine } : {}) });
       if (seq !== auditionSeq.current) {
@@ -113,10 +153,10 @@ export function VoicesPanel() {
       stopAudition();
       const audio = new Audio(url);
       player.current = audio;
-      setPlaying(id);
+      setPlaying(key);
       audio.onended = () => {
         URL.revokeObjectURL(url);
-        setPlaying(current => (current === id ? "" : current));
+        setPlaying(current => (current === key ? "" : current));
       };
       await audio.play();
     } catch (error) {
@@ -212,20 +252,35 @@ export function VoicesPanel() {
       toast("error", t("注册需要：ID、参考音频（上传或录制）、参考音的逐字稿。"));
       return;
     }
+    if (registrationEngines.length === 0) {
+      toast("error", t("至少选择一个目标引擎。"));
+      return;
+    }
     setRegistering(true);
+    setRegistrationResult(undefined);
     try {
       const registered = newId.trim();
-      await registerVoice(registered, newText.trim(), file);
-      toast("info", t("已注册 {id} —— 见音色库首位，可试听或直接用于生成。", { id: registered }));
-      setNewId("");
-      setNewText("");
-      if (fileInput.current) fileInput.current.value = "";
-      discardRecording();
-      discardUpload();
+      const result = await registerVoice(registered, newText.trim(), file, registrationEngines);
+      setRegistrationResult(result);
       await refresh();
       // Surface the new voice immediately: filter the bank to it.
       setCategory("全部");
       setQuery(registered);
+      if (result.failed.length > 0) {
+        // Keep the reference and transcript in place: one click retries only the failed
+        // replicas without repeating successful engine writes.
+        setRegistrationEngines(result.failed);
+        toast("error", result.registered.length > 0
+          ? t("{id} 部分注册成功；请重试失败的引擎。", { id: registered })
+          : t("{id} 注册失败；请重试失败的引擎。", { id: registered }));
+      } else {
+        toast("info", t("已在 {count} 个引擎注册 {id}。", { id: registered, count: result.registered.length }));
+        setNewId("");
+        setNewText("");
+        if (fileInput.current) fileInput.current.value = "";
+        discardRecording();
+        discardUpload();
+      }
     } catch (error) {
       toast("error", error instanceof Error ? error.message : String(error));
     } finally {
@@ -233,23 +288,23 @@ export function VoicesPanel() {
     }
   };
 
+  const voiceGroups = useMemo(() => groupVoiceEntries(voicesList), [voicesList]);
   const categories = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const voice of voicesList) {
+    for (const voice of voiceGroups) {
       const key = categoryOf(voice.id);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     // The user's own voices lead; preset categories follow by size.
     return [...counts.entries()].sort((a, b) =>
       a[0] === ownCategory ? -1 : b[0] === ownCategory ? 1 : b[1] - a[1]);
-  }, [voicesList]);
+  }, [voiceGroups]);
 
-  const multiEngine = new Set(voicesList.map(voice => voice.engine)).size > 1;
-  const filtered = voicesList
-    .filter(voice =>
-      (category === "全部" || categoryOf(voice.id) === category)
-      && (query === "" || voice.id.toLowerCase().includes(query.toLowerCase())
-        || voice.engine.toLowerCase().includes(query.toLowerCase())))
+  const filtered = voiceGroups
+    .filter(group =>
+      (category === "全部" || categoryOf(group.id) === category)
+      && (query === "" || group.id.toLowerCase().includes(query.toLowerCase())
+        || group.replicas.some(voice => voice.engine.toLowerCase().includes(query.toLowerCase()))))
     // Own voices sort first in the "全部" view too — not buried under 100+ presets.
     .sort((a, b) => Number(categoryOf(b.id) === ownCategory) - Number(categoryOf(a.id) === ownCategory));
 
@@ -258,7 +313,7 @@ export function VoicesPanel() {
       <PageHeader
         title={t("音色")}
         description={t("浏览、试听和管理可用于实时对话与语音生成的音色。")}
-        badge={<StatusBadge>{voicesList.length}</StatusBadge>}
+        badge={<StatusBadge>{voiceGroups.length}</StatusBadge>}
         actions={(
           <button onClick={() => setShowRegister(value => !value)} className={showRegister ? secondaryButton : primaryButton}>
             <Plus className="size-3.5" />
@@ -273,7 +328,7 @@ export function VoicesPanel() {
             <AudioLines className="size-4 text-ink-500" />
           </div>
           <h2 className="text-[13px] font-medium text-ink-100">
-            {t("音色库")} <span className="text-ink-500">{filtered.length}/{voicesList.length}</span>
+            {t("音色库")} <span className="text-ink-500">{filtered.length}/{voiceGroups.length}</span>
           </h2>
           <div className="flex-1" />
           <label className="flex h-8 w-full items-center gap-2 rounded-lg border border-ink-700 bg-ink-950 px-2.5 sm:w-48">
@@ -307,64 +362,83 @@ export function VoicesPanel() {
         <div className="mt-3 max-h-[45vh] overflow-y-auto pr-1">
           {voicesList.length === 0 && <p className="text-sm text-ink-500">{t("引擎没有返回音色；克隆型引擎可用下方表单注册。")}</p>}
           {voicesList.length > 0 && filtered.length === 0 && <p className="text-sm text-ink-500">{t("没有匹配的音色。")}</p>}
-          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-4">
-            {filtered.map(voice => (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {filtered.map(group => (
               <div
-                key={`${voice.engine}/${voice.id}`}
-                className="group flex min-h-10 items-center gap-1 rounded-lg border border-ink-700/80 bg-ink-900 px-2.5 py-2 text-xs transition hover:border-edge-hover hover:bg-ink-950"
+                key={group.id}
+                className="group rounded-lg border border-ink-700/80 bg-ink-900 px-2.5 py-2 text-xs transition hover:border-edge-hover hover:bg-ink-950"
               >
-                <button
-                  onClick={() => void audition(voice.id, voice.engine)}
-                  disabled={auditioning === voice.id}
-                  className={`min-w-0 flex-1 truncate text-left hover:text-accent-500 disabled:opacity-40 ${
-                    playing === voice.id ? "text-accent-500" : "text-ink-100"
-                  }`}
-                  title={playing === voice.id ? t("停止") : t("试听 {id}（{engine}）", { id: voice.id, engine: voice.engine })}
-                >
-                  {auditioning === voice.id ? t("▶ 合成中…") : playing === voice.id ? `■ ${voice.id}` : voice.id}
-                </button>
-                {confirmDelete === `${voice.engine}/${voice.id}` ? (
-                  <>
-                    <button
-                      onClick={() => {
-                        setConfirmDelete("");
-                        void remove(voice.id, voice.engine);
-                      }}
-                      className="shrink-0 rounded bg-red-500/20 px-2 py-1 text-red-300 hover:bg-red-500/30"
+                <div className="flex items-center gap-2 px-1 pb-1.5">
+                  <span className="min-w-0 flex-1 truncate font-medium text-ink-100">{group.id}</span>
+                  {group.replicas.length > 1 && (
+                    <span
+                      className="rounded-full bg-accent-600/15 px-2 py-0.5 text-[10px] text-accent-500"
+                      title={t("{count} 个引擎副本", { count: group.replicas.length })}
                     >
-                      {t("删除")}
-                    </button>
-                    <button
-                      onClick={() => setConfirmDelete("")}
-                      className="shrink-0 rounded px-2 py-1 text-ink-500 hover:text-ink-300"
-                    >
-                      {t("取消")}
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    {multiEngine && voice.engine && (
-                      <span className="shrink-0 rounded bg-ink-700/80 px-1 text-[10px] text-ink-300">{voice.engine}</span>
-                    )}
-                    <button
-                      onClick={() => {
-                        setGenerateVoice(voice.id, voice.engine);
-                        toast("info", t("已将 {id} 设为「生成」页的音色", { id: voice.id }));
-                      }}
-                      className="shrink-0 rounded px-1.5 py-1 text-ink-500 hover:text-accent-500"
-                      title={t("设为生成音色")}
-                    >
-                      {t("用")}
-                    </button>
-                    <button
-                      onClick={() => setConfirmDelete(`${voice.engine}/${voice.id}`)}
-                      className="shrink-0 rounded px-1.5 py-1 text-ink-500 hover:text-red-300"
-                      title={t("删除（引擎侧参考音一并删除）")}
-                    >
-                      ×
-                    </button>
-                  </>
-                )}
+                      {group.replicas.length}×
+                    </span>
+                  )}
+                </div>
+                <div className="space-y-1">
+                  {group.replicas.map(voice => {
+                    const replicaKey = voiceReplicaKey(voice.id, voice.engine);
+                    const isAuditioning = auditioning === replicaKey;
+                    const isPlaying = playing === replicaKey;
+                    return (
+                      <div key={replicaKey} className="flex min-h-8 items-center gap-1 rounded-md bg-ink-800/60 px-1.5">
+                        <button
+                          onClick={() => void audition(voice.id, voice.engine)}
+                          disabled={isAuditioning}
+                          className={`flex size-6 shrink-0 items-center justify-center rounded hover:bg-ink-700 disabled:opacity-40 ${isPlaying ? "text-accent-500" : "text-ink-400"}`}
+                          title={isAuditioning ? t("▶ 合成中…") : isPlaying ? t("停止") : t("试听 {id}（{engine}）", { id: voice.id, engine: voice.engine })}
+                          aria-label={isAuditioning ? t("▶ 合成中…") : isPlaying ? t("停止") : t("试听 {id}（{engine}）", { id: voice.id, engine: voice.engine })}
+                        >
+                          {isAuditioning ? "…" : isPlaying ? "■" : "▶"}
+                        </button>
+                        <span className="min-w-0 flex-1 truncate font-mono text-[10px] text-ink-400">{voice.engine}</span>
+                        {confirmDelete === replicaKey ? (
+                          <>
+                            <button
+                              onClick={() => {
+                                setConfirmDelete("");
+                                void remove(voice.id, voice.engine);
+                              }}
+                              className="shrink-0 rounded bg-red-500/20 px-2 py-1 text-red-300 hover:bg-red-500/30"
+                            >
+                              {t("删除")}
+                            </button>
+                            <button
+                              onClick={() => setConfirmDelete("")}
+                              className="shrink-0 rounded px-2 py-1 text-ink-500 hover:text-ink-300"
+                            >
+                              {t("取消")}
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => {
+                                setGenerateVoice(voice.id, voice.engine);
+                                toast("info", t("已将 {id} 设为「生成」页的音色", { id: voice.id }));
+                              }}
+                              className="shrink-0 rounded px-1.5 py-1 text-ink-500 hover:text-accent-500"
+                              title={t("设为生成音色")}
+                            >
+                              {t("用")}
+                            </button>
+                            <button
+                              onClick={() => setConfirmDelete(replicaKey)}
+                              className="shrink-0 rounded px-1.5 py-1 text-ink-500 hover:text-red-300"
+                              title={t("删除（引擎侧参考音一并删除）")}
+                            >
+                              ×
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             ))}
           </div>
@@ -376,6 +450,51 @@ export function VoicesPanel() {
               {t("注册到克隆型引擎：5–15 秒干净参考音（上传或现场录制）+ 与音频逐字对应的文本；逐字稿可先用 ASR 识别再修正。")}
             </p>
             <div className="mt-2 flex flex-col gap-3">
+          <div>
+            <div className="mb-1.5 flex items-center gap-2 text-xs font-medium text-ink-200">
+              {t("目标引擎")}
+              <span className="font-normal text-ink-500">{registrationEngines.length}/{cloneEngines.length}</span>
+            </div>
+            {cloneEngines.length === 0 ? (
+              <p className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
+                {t("没有声明 clone 能力的 TTS 引擎。")}
+              </p>
+            ) : (
+              <div className="grid gap-2 sm:grid-cols-2">
+                {cloneEngines.map(engine => {
+                  const selected = registrationEngines.includes(engine.name);
+                  return (
+                    <label
+                      key={engine.name}
+                      className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 transition ${
+                        selected ? "border-accent-600/60 bg-accent-600/10" : "border-ink-700 bg-ink-900 hover:border-edge-hover"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        disabled={registering}
+                        onChange={event => setRegistrationEngines(current => event.target.checked
+                          ? [...current, engine.name]
+                          : current.filter(name => name !== engine.name))}
+                        className="size-3.5 accent-accent-600"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-mono text-[11px] text-ink-100">{engine.name}</span>
+                        <span className="block truncate text-[10px] text-ink-500">{engine.model}</span>
+                      </span>
+                      {engine.roles.includes("tts") && (
+                        <span className="rounded bg-ink-700 px-1.5 py-0.5 text-[9px] text-ink-300">{t("默认")}</span>
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            <p className="mt-1.5 text-[10px] leading-relaxed text-ink-500">
+              {t("参考音频会分别发送到你明确选择的引擎；未选择的远程引擎不会收到音频。")}
+            </p>
+          </div>
           <div className="flex flex-wrap items-center gap-3">
             <input
               value={newId}
@@ -459,13 +578,35 @@ export function VoicesPanel() {
           <div>
             <button
               onClick={() => void register()}
-              disabled={registering || recorder !== undefined}
+              disabled={registering || recorder !== undefined || registrationEngines.length === 0}
               className={primaryButton}
             >
               <Sparkles className="size-3.5" />
-              {registering ? t("注册中…") : t("注册")}
+              {registering
+                ? t("注册中…")
+                : registrationResult?.failed.length ? t("重试失败引擎") : t("注册")}
             </button>
           </div>
+          {registrationResult && (
+            <div className="rounded-lg border border-ink-700 bg-ink-900 p-2.5">
+              <div className="mb-1.5 text-[11px] font-medium text-ink-200">
+                {t("注册结果：{success}/{total} 个引擎成功", {
+                  success: registrationResult.registered.length,
+                  total: registrationResult.results.length,
+                })}
+              </div>
+              <div className="space-y-1">
+                {registrationResult.results.map(result => (
+                  <div key={result.engine} className="flex items-center gap-2 text-[10px]">
+                    <span className={result.ok ? "text-emerald-400" : "text-red-300"}>{result.ok ? "✓" : "!"}</span>
+                    <span className="font-mono text-ink-300">{result.engine}</span>
+                    <span className="text-ink-500">HTTP {result.status}</span>
+                    {result.error && <span className="min-w-0 truncate text-red-300" title={result.error.message}>{result.error.message}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
           </div>
         )}
@@ -661,9 +802,9 @@ function ProfilesSection({ profiles, onChanged, onAudition, auditioning, playing
                 <Fingerprint sha={meta?.audio_sha256} />
                 {profile.engine && <span className="rounded bg-ink-700/80 px-1.5 py-0.5 text-[10px] text-ink-300">{profile.engine}</span>}
                 <div className="flex-1" />
-                <button onClick={() => onAudition(profile.id, profile.engine)} disabled={auditioning === profile.id}
+                <button onClick={() => onAudition(profile.id, profile.engine)} disabled={auditioning === voiceReplicaKey(profile.id, profile.engine)}
                   className="rounded border border-ink-700 px-2 py-1 text-[11px] text-ink-300 hover:text-ink-100 disabled:opacity-40">
-                  {auditioning === profile.id ? t("合成中…") : playing === profile.id ? t("■ 停止") : t("试听")}
+                  {auditioning === voiceReplicaKey(profile.id, profile.engine) ? t("合成中…") : playing === voiceReplicaKey(profile.id, profile.engine) ? t("■ 停止") : t("试听")}
                 </button>
                 <button onClick={() => void verify(profile)} disabled={verifying !== ""}
                   title={t("同参数重新生成一次并比对音频指纹（可逐字节重现性检验）")}

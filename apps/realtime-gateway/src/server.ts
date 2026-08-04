@@ -1057,14 +1057,14 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       if (ctx === null) return problem(401, "unauthorized", "a valid credential is required");
       // Charged after identity, before the work: the account is known, and nothing
       // upstream has been touched yet.
-      let charged = false;
+      let charges = 0;
       if (quota !== undefined && chargeable(request.method, url.pathname)) {
         const verdict = quota.charge(ctx.userId);
         if (!verdict.allowed) {
           log(`quota: ${request.method} ${url.pathname} refused — allowance spent`);
           return quotaRefusal(verdict.retryAfterSeconds as number);
         }
-        charged = true;
+        charges = 1;
       }
       /**
        * A refusal this gateway makes itself, or an engine it could not reach, spent no
@@ -1072,12 +1072,37 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
        * 2026-07-26). Wraps only the gateway's own pre-engine refusals; an error the
        * engine itself returned is work that happened and stays charged.
        */
+      const refundOne = (): void => {
+        if (charges > 0 && quota !== undefined) {
+          quota.refund(ctx.userId);
+          charges -= 1;
+        }
+      };
       const refund = (): void => {
-        if (charged && quota !== undefined) quota.refund(ctx.userId);
+        while (charges > 0) refundOne();
       };
       const refunded = (response: Response): Response => {
         refund();
         return response;
+      };
+      /**
+       * A fan-out registration performs one engine mutation per target. The route-level
+       * charge above reserved the first; reserve the rest before touching any engine so
+       * an exhausted account cannot receive a partial write merely because validation
+       * happened after authentication.
+       */
+      const chargeAdditional = (count: number): Response | undefined => {
+        if (quota === undefined || count <= 0) return undefined;
+        for (let index = 0; index < count; index += 1) {
+          const verdict = quota.charge(ctx.userId);
+          if (!verdict.allowed) {
+            log(`quota: ${request.method} ${url.pathname} fan-out refused — allowance spent`);
+            refund();
+            return quotaRefusal(verdict.retryAfterSeconds as number);
+          }
+          charges += 1;
+        }
+        return undefined;
       };
       const agentMatch = agentEntryPattern.exec(url.pathname);
       const conversationMatch = agentConversationPattern.exec(url.pathname);
@@ -1317,17 +1342,123 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       if (url.pathname === "/v1/voices") {
         if (request.method === "GET") return aggregatedVoices(ctx.userId);
         if (options.demoMode === true) return refunded(demoRefusal());
-        // Registration needs a registry: route to the clone-capable instance by default.
-        const selected = selectEngine(url, "tts", "tts", "clone");
-        if (selected instanceof Response) return selected;
         return (async (): Promise<Response> => {
           const form = await request.formData().catch(() => null);
           const id = form?.get("id");
           if (form === null || typeof id !== "string") return refunded(badVoiceId());
           const engineId = engineVoice(id);
           if (engineId === null) return refunded(badVoiceId());
-          form.set("id", engineId);
-          return proxy(new Request(request.url, { method: "POST", body: form }), selected[1], url.pathname, selected[0], refund);
+          const text = form.get("text");
+          const audio = form.get("audio");
+          if (typeof text !== "string" || !(audio instanceof File)) {
+            return refunded(problem(400, "bad_request", "voice registration requires text and an audio file"));
+          }
+
+          // `?engine=` remains the compatible single-target form. Repeated multipart
+          // `engine` fields are the fan-out form used by Studio: the browser uploads the
+          // biometric reference once, then the gateway explicitly copies it only to the
+          // engines the person selected.
+          const formTargets = form.getAll("engine");
+          if (formTargets.some(value => typeof value !== "string" || value.trim() === "")) {
+            return refunded(badEngine("each registration engine must be a non-empty TTS instance name"));
+          }
+          if (url.searchParams.has("engine") && formTargets.length > 0) {
+            return refunded(problem(400, "ambiguous_engine", "choose engines in either the query or multipart body, not both"));
+          }
+
+          let selected: [string, ResolvedEngineConfig][];
+          if (formTargets.length === 0) {
+            // Registration needs a registry: route to the clone-capable instance by default.
+            const one = selectEngine(url, "tts", "tts", "clone");
+            if (one instanceof Response) return refunded(one);
+            selected = [one];
+          } else {
+            const names = [...new Set(formTargets as string[])];
+            const ttsEngines = enginesOfKind(options.config, "tts");
+            selected = [];
+            for (const name of names) {
+              const target = ttsEngines.find(([candidate]) => candidate === name);
+              if (!target) return refunded(badEngine(`no tts engine named ${name}; see /v1/engines`));
+              if (!target[1].capabilities.includes("clone")) {
+                return refunded(problem(400, "engine_capability_missing", `tts engine ${name} does not declare the clone capability`));
+              }
+              selected.push(target);
+            }
+          }
+
+          // Preserve the original single-engine facade contract for existing CLI/API
+          // clients. Only the new repeated multipart target form opts into aggregate
+          // replica results.
+          if (formTargets.length === 0) {
+            form.set("id", engineId);
+            return proxy(
+              new Request(request.url, { method: "POST", body: form }),
+              selected[0]![1],
+              url.pathname,
+              selected[0]![0],
+              refund,
+            );
+          }
+
+          const quotaFailure = chargeAdditional(selected.length - 1);
+          if (quotaFailure) return quotaFailure;
+          form.delete("engine");
+
+          type RegistrationResult = {
+            engine: string;
+            ok: boolean;
+            status: number;
+            error?: { code: string; message: string };
+          };
+          const results = await Promise.all(selected.map(async ([engineName, target]): Promise<RegistrationResult> => {
+            const targetForm = new FormData();
+            for (const [key, value] of form.entries()) targetForm.append(key, value);
+            targetForm.set("id", engineId);
+            const headers = new Headers();
+            if (target.apiKey) headers.set("authorization", `Bearer ${target.apiKey}`);
+            let upstream: Response;
+            try {
+              upstream = await fetchImpl(new URL("/v1/voices", target.baseUrl), {
+                method: "POST",
+                headers,
+                body: targetForm,
+              });
+            } catch (error) {
+              log(`voices: ${engineName} registration unreachable: ${error instanceof Error ? error.message : String(error)}`);
+              refundOne();
+              return {
+                engine: engineName,
+                ok: false,
+                status: 502,
+                error: { code: "engine_unreachable", message: `${engineName} engine unreachable` },
+              };
+            }
+            if (upstream.ok) {
+              await upstream.body?.cancel().catch(() => {});
+              return { engine: engineName, ok: true, status: upstream.status };
+            }
+            const payload = await upstream.json().catch(() => null) as {
+              error?: { code?: unknown; message?: unknown };
+            } | null;
+            const code = typeof payload?.error?.code === "string"
+              ? payload.error.code
+              : "engine_registration_failed";
+            const message = typeof payload?.error?.message === "string"
+              ? payload.error.message
+              : `${engineName} refused voice registration (HTTP ${upstream.status})`;
+            return { engine: engineName, ok: false, status: upstream.status, error: { code, message } };
+          }));
+
+          const registered = results.filter(result => result.ok).map(result => result.engine);
+          const payload = {
+            id,
+            registered,
+            failed: results.filter(result => !result.ok).map(result => result.engine),
+            results,
+          };
+          if (registered.length === results.length) return Response.json(payload, { status: 201 });
+          if (registered.length > 0) return Response.json(payload, { status: 207 });
+          return Response.json(payload, { status: 502 });
         })();
       }
       if (voiceEntryPattern.test(url.pathname)) {
@@ -1474,6 +1605,11 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           return (async (): Promise<Response> => {
             const body = await request.json().catch(() => null) as Record<string, unknown> | null;
             if (body === null) return refunded(problem(400, "bad_request", "expected a JSON body"));
+            // The registry selects one configured model together with the engine. Studio
+            // clients use the OpenAI-compatible `default` placeholder, which strict
+            // single-model servers correctly reject. Keep a configured registry model
+            // authoritative; legacy custom instances with no model keep the caller value.
+            if (selected[1].model !== "") body.model = selected[1].model;
             if (body.voice !== undefined) {
               if (typeof body.voice !== "string") return refunded(badVoiceId());
               const engineId = engineVoice(body.voice);

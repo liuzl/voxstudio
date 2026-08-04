@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import torch
+
 from prompt_caches import PromptCacheStore, file_identity, prompt_cache_key
 
 
@@ -39,7 +41,14 @@ def test_store_builds_once_per_key_and_reports_stats():
     again = store.get_or_build("k1", build("k1"))
     assert first is again
     assert built == ["k1"]
-    assert store.stats() == {"entries": 1, "hits": 1, "misses": 1}
+    assert store.stats() == {
+        "entries": 1,
+        "hits": 1,
+        "misses": 1,
+        "disk_hits": 0,
+        "builds": 1,
+        "write_errors": 0,
+    }
 
 
 def test_store_evicts_least_recently_used():
@@ -51,3 +60,43 @@ def test_store_evicts_least_recently_used():
     rebuilt = []
     store.get_or_build("b", lambda: rebuilt.append("b") or {"v": "b"})
     assert rebuilt == ["b"]
+
+
+def test_store_reuses_persisted_cache_after_restart(tmp_path: Path):
+    cache_path = tmp_path / "prompt-cache.pt"
+    first = PromptCacheStore(namespace="model:v1")
+    original = first.get_or_build(
+        "voice-key",
+        lambda: {"audio_feat": torch.tensor([1.0, 2.0]), "prompt_text": "hello"},
+        cache_path,
+    )
+
+    restarted = PromptCacheStore(namespace="model:v1")
+    rebuilt = []
+    restored = restarted.get_or_build(
+        "voice-key",
+        lambda: rebuilt.append(True) or {},
+        cache_path,
+    )
+
+    assert rebuilt == []
+    assert torch.equal(restored["audio_feat"], original["audio_feat"])
+    assert restored["prompt_text"] == "hello"
+    assert restarted.stats()["disk_hits"] == 1
+    assert restarted.stats()["builds"] == 0
+
+
+def test_store_rebuilds_cache_for_a_different_model_namespace(tmp_path: Path):
+    cache_path = tmp_path / "prompt-cache.pt"
+    PromptCacheStore(namespace="model:v1").get_or_build(
+        "voice-key", lambda: {"version": "old"}, cache_path
+    )
+
+    replacement = PromptCacheStore(namespace="model:v2")
+    cache = replacement.get_or_build(
+        "voice-key", lambda: {"version": "new"}, cache_path
+    )
+
+    assert cache == {"version": "new"}
+    assert replacement.stats()["disk_hits"] == 0
+    assert replacement.stats()["builds"] == 1

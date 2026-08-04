@@ -386,12 +386,14 @@ describe("realtime gateway", () => {
       roles: { tts: "kokoro" },
     });
     const hits: string[] = [];
+    const speechBodies: Record<string, unknown>[] = [];
     gateway = startGateway({
       config: registry,
       port: 0,
       fetch: async (input, init) => {
-        const url = new URL(input instanceof Request ? input.url : String(input));
-        hits.push(`${init?.method ?? (input instanceof Request ? input.method : "GET")} ${url.host}${url.pathname}`);
+        const engineRequest = new Request(input instanceof Request ? input : String(input), init);
+        const url = new URL(engineRequest.url);
+        hits.push(`${engineRequest.method} ${url.host}${url.pathname}`);
         if (url.pathname === "/v1/voices" && url.host === "kokoro.test") {
           return Response.json({ voices: [{ id: "zf_001" }] });
         }
@@ -404,7 +406,10 @@ describe("realtime gateway", () => {
         if (url.pathname === "/health") {
           return Response.json({ status: "ok", model: `${url.host.split(".")[0]}@1.0`, model_manifest_sha256: "abc123" });
         }
-        if (url.pathname === "/v1/audio/speech") return new Response(new Uint8Array(8));
+        if (url.pathname === "/v1/audio/speech") {
+          speechBodies.push(await engineRequest.json() as Record<string, unknown>);
+          return new Response(new Uint8Array(8));
+        }
         throw new Error(`unexpected ${url.href}`);
       },
     });
@@ -430,12 +435,14 @@ describe("realtime gateway", () => {
     const speak = (query = "") => fetch(new URL(`/v1/audio/speech${query}`, base), {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ input: "你好" }),
+      body: JSON.stringify({ model: "default", input: "你好" }),
     });
     expect((await speak()).status).toBe(200);
     expect(hits.at(-1)).toBe("POST kokoro.test/v1/audio/speech");
+    expect(speechBodies.at(-1)?.model).toBe("kokoro");
     expect((await speak("?engine=voxcpm2")).status).toBe(200);
     expect(hits.at(-1)).toBe("POST voxcpm2.test/v1/audio/speech");
+    expect(speechBodies.at(-1)?.model).toBe("voxcpm2");
     expect((await speak("?engine=ghost")).status).toBe(400);
     expect((await speak("?engine=asr")).status).toBe(400);
 
@@ -508,6 +515,84 @@ describe("realtime gateway", () => {
     // Path traversal and malformed ids never reach an engine.
     expect((await fetch(new URL("/v1/voices/laok/extra", gateway.url))).status).toBe(404);
     expect(seen.map(entry => entry.method)).toEqual(["POST", "GET", "DELETE"]);
+  });
+
+  test("registers one uploaded reference on explicit clone-engine replicas and reports partial failure", async () => {
+    const registry = parseConfig({
+      engines: {
+        primary: { kind: "tts", base_url: "http://primary.test", model: "voxcpm2", capabilities: ["clone"] },
+        remote: { kind: "tts", base_url: "http://remote.test", model: "voxcpm2", capabilities: ["clone"] },
+        asr: { base_url: "http://asr.test" },
+        llm: { base_url: "http://llm.test" },
+      },
+      roles: { tts: "primary" },
+    });
+    const received: { engine: string; id: string; text: string; bytes: number }[] = [];
+    let remoteFails = true;
+    gateway = startGateway({
+      config: registry,
+      port: 0,
+      fetch: async (input, init) => {
+        const engineRequest = new Request(input instanceof Request ? input : String(input), init);
+        const url = new URL(engineRequest.url);
+        if (url.pathname !== "/v1/voices") throw new Error(`unexpected engine path ${url.pathname}`);
+        if (engineRequest.method === "GET") return Response.json({ voices: [] });
+        const form = await engineRequest.formData();
+        received.push({
+          engine: url.hostname.split(".")[0] as string,
+          id: String(form.get("id")),
+          text: String(form.get("text")),
+          bytes: (form.get("audio") as File).size,
+        });
+        if (url.hostname === "remote.test" && remoteFails) {
+          return Response.json({ error: { code: "registry_busy", message: "try again" } }, { status: 503 });
+        }
+        return Response.json({ id: form.get("id") }, { status: 201 });
+      },
+    });
+
+    const registration = (engines: string[]): FormData => {
+      const form = new FormData();
+      form.set("id", "shuber");
+      form.set("text", "今天天气不太好，又下雨了。");
+      form.set("audio", new File([new Uint8Array([1, 2, 3, 4])], "ref.wav", { type: "audio/wav" }));
+      for (const engine of engines) form.append("engine", engine);
+      return form;
+    };
+
+    const partial = await fetch(new URL("/v1/voices", gateway.url), {
+      method: "POST",
+      body: registration(["primary", "remote"]),
+    });
+    expect(partial.status).toBe(207);
+    expect(await partial.json()).toEqual({
+      id: "shuber",
+      registered: ["primary"],
+      failed: ["remote"],
+      results: [
+        { engine: "primary", ok: true, status: 201 },
+        { engine: "remote", ok: false, status: 503, error: { code: "registry_busy", message: "try again" } },
+      ],
+    });
+    expect(received).toEqual([
+      { engine: "primary", id: "shuber", text: "今天天气不太好，又下雨了。", bytes: 4 },
+      { engine: "remote", id: "shuber", text: "今天天气不太好，又下雨了。", bytes: 4 },
+    ]);
+
+    remoteFails = false;
+    const retried = await fetch(new URL("/v1/voices", gateway.url), {
+      method: "POST",
+      body: registration(["remote"]),
+    });
+    expect(retried.status).toBe(201);
+    expect(await retried.json()).toMatchObject({ id: "shuber", registered: ["remote"], failed: [] });
+
+    const invalid = await fetch(new URL("/v1/voices", gateway.url), {
+      method: "POST",
+      body: registration(["missing"]),
+    });
+    expect(invalid.status).toBe(400);
+    expect(received).toHaveLength(3);
   });
 
   test("a configured token gates both the facade and the realtime endpoint", async () => {

@@ -196,6 +196,10 @@ below rather than relitigated per feature.
    lowered quota takes effect and pre-quota databases gain a backfilled `bytes`
    column. `/v1/library` reports `bytes`/`max_bytes` and the 素材库 panel shows usage
    in the header. All paths unit-tested, including the promote/evict race.
+   The Library remains an ASR/voice dataset rather than Agent conversation history.
+   Its future relationship to optional per-turn input/output replay, including typed
+   media references and independent deletion/quota semantics, is specified in
+   [conversation-retention.md](./conversation-retention.md).
 5. **Settings & hosting**: health surface; voxstudio.cc deployment behind Access.
    **Single-binary packaging delivered 2026-07-16**: `vox studio` serves the browser
    app, the realtime WebSocket, and the credential-hiding REST facade from the one

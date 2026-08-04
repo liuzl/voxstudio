@@ -534,9 +534,10 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
               "application/json": {
                 schema: {
                   type: "object",
-                  description: "Fields beyond those named are forwarded to the engine unchanged; the engine decides what it accepts.",
+                  description: "The selected registry instance supplies the upstream model. Other fields beyond those named are forwarded unchanged; the engine decides what it accepts.",
                   additionalProperties: true,
                   properties: {
+                    model: { type: "string", description: "OpenAI-compatible placeholder; replaced by the selected engine instance's configured model when present." },
                     input: { type: "string", description: "The text to speak." },
                     voice: { type: "string", description: "A display name from GET /v1/voices. Omit for the engine's voice-less mode." },
                     response_format: { type: "string", description: "Engine-dependent; `wav` unless the deployment says otherwise." },
@@ -819,6 +820,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
         },
         post: {
           summary: "Register a clone voice from a reference recording",
+          description: "With no target, registration uses the configured clone-capable default. Repeat the multipart `engine` field to send the one uploaded reference to several explicitly selected clone-capable TTS instances. Each target is a separate quota operation and the response reports every replica independently.",
           security: secured,
           parameters: [{ name: "engine", in: "query", required: false, schema: { type: "string" } }],
           requestBody: {
@@ -831,6 +833,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
                     id: { type: "string", pattern: "^(?!u[0-9a-f]{12}\\.)[A-Za-z0-9._-]{1,64}$", description: "Your display name for the voice." },
                     text: { type: "string", description: "Verbatim transcript of the reference audio." },
                     audio: { type: "string", format: "binary" },
+                    engine: { type: "array", items: { type: "string" }, description: "Explicit clone-capable TTS targets. Encode as repeated multipart fields; do not combine with the query parameter." },
                   },
                   required: ["id", "text", "audio"],
                 },
@@ -838,12 +841,13 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
             },
           },
           responses: {
-            "201": { description: "Registered.", content: { "application/json": { schema: { $ref: "#/components/schemas/Voice" } } } },
-            "400": errorResponse("`bad_voice_id`."),
+            "201": { description: "Registered. Repeated multipart targets return replica results; the compatible single-target form returns the engine's Voice object.", content: { "application/json": { schema: { oneOf: [{ $ref: "#/components/schemas/Voice" }, { $ref: "#/components/schemas/VoiceRegistration" }] } } } },
+            "207": { description: "Some replicas succeeded and some failed; retry only the failed engine names.", content: { "application/json": { schema: { $ref: "#/components/schemas/VoiceRegistration" } } } },
+            "400": errorResponse("`bad_voice_id`, `unknown_engine`, `ambiguous_engine`, or `engine_capability_missing`."),
             "401": errorResponse("Missing or invalid key."),
             "403": errorResponse("Demo mode refuses registry writes (`demo_mode`)."),
             "429": quota429,
-            "502": errorResponse("The clone engine is unreachable (`engine_unreachable`)."),
+            "502": { description: "The single clone engine is unreachable, or every explicitly targeted replica failed.", content: { "application/json": { schema: { oneOf: [{ $ref: "#/components/schemas/Error" }, { $ref: "#/components/schemas/VoiceRegistration" }] } } } },
           },
         },
       },
@@ -969,6 +973,32 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
             prompt_text: { type: "string", description: "Reference transcript, for clone voices." },
           },
           required: ["id"],
+        },
+        VoiceRegistration: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "Display name registered in each target's owner namespace." },
+            registered: { type: "array", items: { type: "string" }, description: "Engine replicas that succeeded." },
+            failed: { type: "array", items: { type: "string" }, description: "Engine replicas safe to retry." },
+            results: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  engine: { type: "string" },
+                  ok: { type: "boolean" },
+                  status: { type: "integer" },
+                  error: {
+                    type: "object",
+                    properties: { code: { type: "string" }, message: { type: "string" } },
+                    required: ["code", "message"],
+                  },
+                },
+                required: ["engine", "ok", "status"],
+              },
+            },
+          },
+          required: ["id", "registered", "failed", "results"],
         },
         Capture: capture,
       },

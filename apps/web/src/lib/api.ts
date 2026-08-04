@@ -313,13 +313,38 @@ export async function listEngines(): Promise<EngineEntry[]> {
   return (await listRuntimeCatalog()).engines;
 }
 
-export async function registerVoice(id: string, text: string, audio: File): Promise<void> {
+export interface VoiceRegistrationEngineResult {
+  engine: string;
+  ok: boolean;
+  status: number;
+  error?: { code: string; message: string };
+}
+
+export interface VoiceRegistrationResult {
+  id: string;
+  registered: string[];
+  failed: string[];
+  results: VoiceRegistrationEngineResult[];
+}
+
+export async function registerVoice(id: string, text: string, audio: File, engines: string[]): Promise<VoiceRegistrationResult> {
   const form = new FormData();
   form.set("id", id);
   form.set("text", text);
   form.set("audio", audio);
+  for (const engine of engines) form.append("engine", engine);
   const response = await gatewayFetch("/v1/voices", { method: "POST", body: form });
-  if (!response.ok) await fail(response, "注册音色");
+  const parsed = await response.clone().json().catch(() => null) as Partial<VoiceRegistrationResult> | null;
+  const structured = parsed !== null
+    && typeof parsed.id === "string"
+    && Array.isArray(parsed.registered)
+    && Array.isArray(parsed.failed)
+    && Array.isArray(parsed.results);
+  if (!structured) {
+    if (!response.ok) await fail(response, "注册音色");
+    throw new TypeError("注册音色失败：网关返回了无效结果");
+  }
+  return parsed as VoiceRegistrationResult;
 }
 
 export async function deleteVoice(id: string, engine?: string): Promise<void> {

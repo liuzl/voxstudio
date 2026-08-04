@@ -37,9 +37,12 @@ dialect accepts `?agent=`, demo deployments pin an immutable version, and the
 Deployment section provides native/compatible integration examples. Conversation
 history now uses an optional owner-scoped Trace Store: every record pins the exact
 draft revision or immutable published version/hash, metadata retention is explicit,
-content retention is a second opt-in, and audio is never stored there. Statistics,
-audio replay/byte-bounded trace retention, and the remaining preview controls described
-in [agent-builder-ui.md](./agent-builder-ui.md) remain next.
+content retention is a second opt-in, and the current implementation does not
+store trace audio. The accepted Conversation/Media/Library boundary, directional
+audio opt-ins, byte retention, replay semantics, and deletion contract are in
+[conversation-retention.md](./conversation-retention.md). Their implementation,
+Statistics, and the remaining preview controls described in
+[agent-builder-ui.md](./agent-builder-ui.md) remain next.
 
 ## The question
 
@@ -162,7 +165,9 @@ sharing, and knowledge attachments (RAG hangs off `AgentSpec` later).
    history to the exact Agent revision/version that served it. Trace persistence is off
    by default (`--traces DIR`); `--trace-content` independently enables transcript and
    tool payload retention, demo mode forces that content off, and audio remains out of
-   the Trace Store. Measured statistics and retained-audio replay remain pending.
+   the current Trace Store. The next storage slice implements the accepted
+   [conversation retention and media architecture](./conversation-retention.md),
+   followed by replay UI and measured statistics.
 4. **Later — conditional.** Organizations and multi-principal sharing;
    knowledge attachments per agent; agent switching mid-call as a session tool,
    if real usage asks for it.

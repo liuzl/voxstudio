@@ -254,7 +254,9 @@ duplicate/export/audit actions, runtime-dependency validation, advanced
 route/tool/speech controls, exact draft/published Try it live, and copyable native/OpenAI
 integration examples, plus optional owner-scoped conversation traces with exact Agent
 revision/version identity; `--traces DIR` enables metadata, `--trace-content` separately
-enables transcripts/tool payloads, and audio is never stored there), live conversation
+enables transcripts/tool payloads, and the current implementation stores no trace audio;
+the accepted [conversation retention design](docs/conversation-retention.md) adds
+independently gated input/output replay), live conversation
 (worklet microphone capture, gapless streamed playback, captions with turn
 state and per-turn timing, the negotiated AEC capability snapshot), generation with takes,
 the voice bank (file upload or in-browser recording, plus design-profile create / audit /
@@ -263,8 +265,9 @@ explicit retention opt-in: every finalized utterance archived with its raw trans
 play, re-transcribe, correct inline into a `.ref.txt` the ASR reference workflow scores
 directly, promote to a clone voice sample; `--library-max-bytes 512M` bounds retained
 audio by evicting the oldest uncorrected, unpromoted captures — curated work is never
-auto-deleted), and engine settings with live health. Statistics, retained-audio trace
-replay, VoiceStage, remaining preview controls, and Portal reuse remain planned;
+auto-deleted), and engine settings with live health. Retained-audio trace replay now has
+an accepted storage/privacy design but remains unimplemented; Statistics, VoiceStage,
+remaining preview controls, and Portal reuse remain planned;
 its real-browser
 double-talk/barge-in gate and route-change handling remain separate measured delivery
 phases.

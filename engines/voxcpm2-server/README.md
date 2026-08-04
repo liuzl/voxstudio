@@ -19,7 +19,7 @@ FastAPI HTTP wrapper over **OpenBMB VoxCPM2** (48kHz high-fidelity Chinese TTS).
 
 ### Named voices
 
-`voice` accepts `clone` (default reference), `design` (zero-shot — prefix `input` with an `(English description)`), or **a registered voice id**. Register once with `POST /v1/voices` (uploads a reference sample, transcoded to 16k mono), then synthesize with `voice="<id>"` — the caller no longer manages reference-audio files. Mirrors the [VoxCPM.cpp `voxcpm-server`](https://github.com/liuzl/VoxCPM.cpp) contract so the two TTS backends are drop-in interchangeable. Registry dir is `VOXCPM2_VOICES` (default `$VOXCPM2_BASE/voices`), one `<id>/{ref.wav,meta.json}` per voice.
+`voice` accepts `clone` (default reference), `design` (zero-shot — prefix `input` with an `(English description)`), or **a registered voice id**. Register once with `POST /v1/voices` (uploads a reference sample, transcoded to 16k mono), then synthesize with `voice="<id>"` — the caller no longer manages reference-audio files. Mirrors the [VoxCPM.cpp `voxcpm-server`](https://github.com/liuzl/VoxCPM.cpp) contract so the two TTS backends are drop-in interchangeable. Registry dir is `VOXCPM2_VOICES` (default `$VOXCPM2_BASE/voices`), one `<id>/{ref.wav,meta.json,prompt_cache.*.pt}` per voice. `ref.wav` is the portable source of truth; prompt-cache files are model-bound derived data and can always be rebuilt.
 
 For `design`, pass an integer `seed` to reproduce the same request on the same locked
 model/runtime. The service serializes generation while applying that seed, because VoxCPM
@@ -52,6 +52,7 @@ curl http://<host>:8880/v1/audio/speech -H 'Content-Type: application/json' \
 | `VOXCPM2_REF` | `$VOXCPM2_BASE/voice.wav` (default clone voice) |
 | `VOXCPM2_VOICES` | `$VOXCPM2_BASE/voices` |
 | `VOXCPM2_MODEL_MANIFEST_SHA256` | unset; deployment-pinned SHA-256 of the full model directory manifest |
+| `VOXCPM2_PROMPT_CACHE_CAPACITY` | `16` in-memory prompt-cache entries |
 | `VOXCPM2_LOCK_TIMEOUT` | `120` seconds before a busy generation pipeline returns 503 |
 | `VOXCPM2_OPUS_BITRATE` | `96k` |
 
@@ -92,11 +93,12 @@ Notes:
   the unit sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` so a long generation does
   not ratchet the reserved pool up and keep it there. Without both, one long generation
   raises the pool ~10x and never gives it back. See `docs/chunking.md`.
-- Continuation sessions reuse a per-voice **prompt cache** (`prompt_caches.py`): building
-  one encodes the reference audio through the VAE — measured at ~3s of fixed latency per
-  request — and is deterministic per reference, so it is built once per voice and shared
-  across sessions. Content-addressed keys mean re-registered voices and identical uploads
-  behave correctly. Restart the service after deploying to pick this up.
+- Ordinary and continuation synthesis reuse a per-voice **prompt cache**
+  (`prompt_caches.py`): building one encodes the reference audio through the VAE — measured
+  at ~3s of fixed latency per request. Registration prewarms a memory + disk snapshot, so
+  later requests and service restarts avoid that cost. Content-addressed keys plus the
+  model id and deployment manifest hash invalidate caches after re-registration or a model
+  change. Invalid/corrupt caches rebuild from `ref.wav` and never make a voice unusable.
 - Streaming uses upstream `generate_with_prompt_cache_streaming`, so first audio leaves
   before the reply is complete. The server can send raw float32 PCM or encode Ogg/Opus for
   lower-bandwidth links; continuation caches preserve the acoustic context across chunks.

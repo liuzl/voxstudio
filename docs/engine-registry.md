@@ -42,6 +42,9 @@ already runs more than one of everything:
 5. **Voice ids are qualified by engine at the facade.** `GET /v1/voices` returns the
    union across TTS instances with an `engine` attribution per entry; mutations on a
    specific voice carry `?engine=`. Voice ids remain engine-local — no global rename.
+   Registration may repeat the multipart `engine` field to create explicitly selected
+   replicas from one upload. This is gateway fan-out, not a shared engine registry:
+   every result and quota charge remains per engine, and partial success is reported.
 6. **`/v1/engines` exposes the registry, sanitized.** Name, kind, model, capabilities,
    roles served, live health — never a base URL or key. It powers the Settings table
    and pickers; the privacy boundary (duplex doc) is unchanged.
@@ -94,7 +97,7 @@ legacy role-named instances (`tts`, `asr`, `asr_longform`, `llm`).
 | `POST /v1/audio/transcriptions` | `?engine=` else role `asr` |
 | `POST /v1/chat/completions` | `?engine=` else role `llm` |
 | `GET /v1/voices` | union of every `tts` instance, entries tagged `engine` |
-| `POST /v1/voices` | `?engine=` else first `tts` with `clone` |
+| `POST /v1/voices` | repeated multipart `engine` targets; else `?engine=`; else first `tts` with `clone` |
 | `GET/DELETE /v1/voices/{id}` | `?engine=` else first `tts` with `clone` |
 | `GET /v1/engines` | registry, sanitized, with live health |
 | `session.start` | `asrEngine` / `llmEngine` / `ttsEngine` else roles |
@@ -123,6 +126,10 @@ legacy role-named instances (`tts`, `asr`, `asr_longform`, `llm`).
    LLM, and TTS; Generate exposes a TTS picker. “Automatic” keeps the gateway role
    default, while an explicit choice is persisted locally and remains kind-checked by
    the gateway.
+   **Replica registration delivered 2026-08-04.** The Voices form exposes explicit
+   multi-selection over clone-capable TTS instances, uploads the reference once, and
+   shows per-engine results with failed-only retry. The bank groups engine-local entries
+   under one display voice while preserving per-replica audition/use/delete controls.
 3. **Capability polish**: per-voice capability surfacing (clone voices vs bank
    presets), longform ASR routing in the Library panel, engine hints in `turn.timing`
    telemetry.
