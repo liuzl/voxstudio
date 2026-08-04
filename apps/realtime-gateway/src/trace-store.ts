@@ -255,6 +255,12 @@ export class ConversationTraceStore {
     }
   }
 
+  /** Coalesce a gateway tick's observer writes into one SQLite transaction. */
+  batch(operation: () => void): void {
+    this.requireOpen();
+    this.db.transaction(operation)();
+  }
+
   finish(owner: string, sessionId: string, endedAt = this.now()): void {
     this.requireOpen();
     this.db.run(`UPDATE conversations SET

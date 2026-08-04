@@ -2,8 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { writeWav } from "@voxstudio/audio";
 import { parseConfig } from "@voxstudio/config";
 import type { Fetch } from "@voxstudio/clients";
-import { protocolVersion, type GatewayEvent } from "./protocol";
+import { protocolVersion, type GatewayEvent, type SessionStartOptions } from "./protocol";
 import { startGateway, type GatewayServer } from "./server";
+import { GatewaySession, type EventSink } from "./session";
 import { CaptureLibrary } from "./library";
 import { voicePrefix } from "./voice-namespace";
 import type { AuthContext } from "./auth/auth-context";
@@ -102,7 +103,7 @@ const startOptions = {
   silenceMs: 20,
   turnTaking: "conservative",
   bargeIn: true,
-};
+} satisfies SessionStartOptions;
 
 let gateway: GatewayServer | undefined;
 
@@ -169,6 +170,80 @@ describe("realtime gateway", () => {
     expect(timing && "offsetsMs" in timing ? Object.keys(timing.offsetsMs) : []).toContain("asr_done");
 
     client.close();
+  });
+
+  test("media pong brackets server residence time at the receive and socket-submit boundaries", async () => {
+    let delayAccepted = false;
+    gateway = startGateway({
+      config,
+      fetch: engineFetch(),
+      port: 0,
+      log: line => {
+        if (!delayAccepted || !line.includes("command.accepted")) return;
+        const deadline = performance.now() + 15;
+        while (performance.now() < deadline) { /* deliberate synthetic server pause */ }
+      },
+    });
+    const client = new TestClient(gateway.url);
+    await client.ready();
+    client.command({ type: "session.start", idempotencyKey: "start-1", options: startOptions });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "session.snapshot");
+
+    delayAccepted = true;
+    client.command({ type: "media.ping", idempotencyKey: "ping-1", clientSentAtMs: performance.timeOrigin + performance.now() });
+    await client.until(events => events.some(event => event.type === "media.pong"), "media.pong");
+
+    const pong = client.events.find((event): event is Extract<GatewayEvent, { type: "media.pong" }> => event.type === "media.pong");
+    expect(pong).toBeDefined();
+    expect((pong?.serverSentAtMs ?? 0) - (pong?.serverReceivedAtMs ?? 0)).toBeGreaterThanOrEqual(14);
+    client.close();
+  });
+
+  test("media telemetry marks detached audio dropped and does not carry pressure onto a replacement socket", async () => {
+    const events: GatewayEvent[] = [];
+    let session: GatewaySession;
+    let binaryFrames = 0;
+    const firstSink: EventSink = {
+      send: data => {
+        if (typeof data === "string") return { sendResult: data.length, bufferedBytes: 0 };
+        binaryFrames += 1;
+        if (binaryFrames === 1) {
+          queueMicrotask(() => session.detach(firstSink));
+          return { sendResult: -1, bufferedBytes: data.byteLength };
+        }
+        return { sendResult: data.byteLength, bufferedBytes: 0 };
+      },
+    };
+    session = new GatewaySession({
+      config,
+      fetch: engineFetch({
+        "/v1/audio/speech": async () => new Response(new Uint8Array(writeWav(new Float32Array(2_400).fill(0.1), 24_000))),
+      }),
+      reconnectGraceMs: 2_000,
+      onEvent: event => { events.push(event); },
+    });
+    await session.start({
+      ...startOptions,
+      mediaTelemetry: true,
+      welcome: "第一句欢迎您。第二句介绍能力。第三句说明用法。第四句邀请体验。",
+    }, firstSink);
+    const deadline = Date.now() + 2_000;
+    while (!events.some(event => event.type === "media.rendition")) {
+      if (Date.now() > deadline) throw new Error("timed out waiting for welcome rendition");
+      await Bun.sleep(5);
+    }
+
+    const sockets = events.filter((event): event is Extract<GatewayEvent, { type: "media.socket" }> => event.type === "media.socket");
+    expect(sockets.some(event => event.backpressured)).toBe(true);
+    expect(sockets.some(event => event.dropped)).toBe(true);
+
+    const replacement: EventSink = { send: data => ({ sendResult: typeof data === "string" ? data.length : data.byteLength, bufferedBytes: 0 }) };
+    session.attach(replacement);
+    const drainsBefore = events.filter(event => event.type === "media.socket.drain").length;
+    session.socketDrained(replacement);
+    expect(events.filter(event => event.type === "media.socket.drain")).toHaveLength(drainsBefore);
+    session.stop();
+    await session.done;
   });
 
   test("a tool call executes mid-turn and retargets the next reply's voice", async () => {

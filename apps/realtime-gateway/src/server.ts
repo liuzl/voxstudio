@@ -434,6 +434,8 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     | { type: "error"; owner: string; sessionId: string; code: string }
     | { type: "finish"; owner: string; sessionId: string; endedAt: number };
   const traceQueue: TraceOperation[] = [];
+  const maxTraceQueue = 5_000;
+  let droppedTraceOperations = 0;
   let traceFlushTimer: ReturnType<typeof setTimeout> | undefined;
   const flushTraces = (): void => {
     if (traceFlushTimer !== undefined) {
@@ -445,21 +447,50 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       return;
     }
     const pending = traceQueue.splice(0);
-    for (const operation of pending) {
-      try {
-        if (operation.type === "begin") traces.begin(operation.owner, operation.sessionId, operation.agent, operation.startedAt);
-        else if (operation.type === "event") traces.append(operation.owner, operation.event);
-        else if (operation.type === "error") traces.markError(operation.owner, operation.sessionId, operation.code);
-        else traces.finish(operation.owner, operation.sessionId, operation.endedAt);
-      } catch (error) {
-        // Retention is intentionally lossy under storage failure. One broken write must
-        // not reject, slow down, or terminate the realtime conversation it observes.
-        log(`traces: ${operation.type} failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
+    const dropped = droppedTraceOperations;
+    droppedTraceOperations = 0;
+    try {
+      traces.batch(() => {
+        for (const operation of pending) {
+          try {
+            if (operation.type === "begin") traces.begin(operation.owner, operation.sessionId, operation.agent, operation.startedAt);
+            else if (operation.type === "event") traces.append(operation.owner, operation.event);
+            else if (operation.type === "error") traces.markError(operation.owner, operation.sessionId, operation.code);
+            else traces.finish(operation.owner, operation.sessionId, operation.endedAt);
+          } catch (error) {
+            // Retention is intentionally lossy under storage failure. One broken write must
+            // not reject, slow down, or terminate the realtime conversation it observes.
+            log(`traces: ${operation.type} failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+        }
+      });
+    } catch (error) {
+      log(`traces: batch failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    if (dropped > 0) {
+      log(`traces: dropped ${dropped} observer operations at the ${maxTraceQueue}-entry queue ceiling`);
     }
   };
   const enqueueTrace = (operation: TraceOperation): void => {
     if (traces === undefined || traces.isClosed) return;
+    if (traceQueue.length >= maxTraceQueue) {
+      const isMediaEvent = operation.type === "event" && operation.event.type.startsWith("media.");
+      if (isMediaEvent) {
+        droppedTraceOperations += 1;
+        return;
+      }
+      // Lifecycle/control markers are more valuable than sampled media. Prefer evicting
+      // media, then the oldest ordinary event, so begin/error/finish remain consistent.
+      let eventIndex = traceQueue.findIndex(entry => entry.type === "event" && entry.event.type.startsWith("media."));
+      if (eventIndex < 0) eventIndex = traceQueue.findIndex(entry => entry.type === "event");
+      if (eventIndex >= 0) {
+        traceQueue.splice(eventIndex, 1);
+        droppedTraceOperations += 1;
+      } else {
+        droppedTraceOperations += 1;
+        return;
+      }
+    }
     traceQueue.push(operation);
     // Keep synchronous SQLite work out of GatewaySession.emit. A single scheduled flush
     // coalesces a burst of state/timing events and runs only after the client event has

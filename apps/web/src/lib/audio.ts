@@ -85,6 +85,11 @@ export class PlaybackTimeline {
   reset(): void {
     this.playheadSec = 0;
   }
+
+  /** A normally completed rendition is a boundary, not an underrun before the next one. */
+  completeRendition(): void {
+    this.reset();
+  }
 }
 
 const captureWorklet = `
@@ -533,7 +538,11 @@ export class SpeakerOutput {
   notifyWhenDrained(callback: () => void): void {
     if (this.drainTimer !== undefined) clearTimeout(this.drainTimer);
     const delayMs = this.timeline.remainingSec(this.context.currentTime) * 1_000 + 60;
-    this.drainTimer = setTimeout(callback, delayMs);
+    this.drainTimer = setTimeout(() => {
+      this.drainTimer = undefined;
+      this.timeline.completeRendition();
+      callback();
+    }, delayMs);
   }
 
   stop(reason: "interrupted" | "closed" = "closed"): void {

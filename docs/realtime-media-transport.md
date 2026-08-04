@@ -404,15 +404,26 @@ Delivered 2026-08-04. Protocol-v1 sessions can opt in with `mediaTelemetry`; the
 Studio does so for ordinary and Agent-preview conversations. Metadata control events
 associate every unchanged PCM binary frame with production/enqueue timing, codec/rate,
 duration, bytes, socket result, buffered high-water mark, drain timing, and rendition
-outcome. A monotonic application ping/pong estimates RTT and server/client clock offset.
+outcome. A monotonic application ping/pong brackets server residence at receive and
+socket-submit boundaries, then estimates RTT and server/client clock offset. Disconnect
+gaps are explicit local drops, and backpressure state is scoped to the socket that created
+it rather than leaking across reattach.
 The browser adds receive/decode/enqueue timing, target and actual queue depth, underruns,
 AudioContext state/rate/output latency, input-route changes, scheduled-render callbacks,
-and interruption stop cost to one bounded metadata-only export. Because protocol v1 still
-renders with `AudioBufferSourceNode`, its render event is explicitly marked estimated;
-Phase 2's output worklet will replace that estimate with a render-thread observation.
-Synthetic attribution tests cover production, server-send, network, decode,
-browser-enqueue, and render pauses independently. The real-device shaped-network matrix
-remains a promotion gate for Phase 1/3 rather than being claimed by unit tests.
+and interruption stop cost to one bounded metadata-only export. Export schema
+`voxstudio.media-trace.v2` retains every clock-sync receive sample, projects production,
+enqueue, socket, receive, decode, browser-enqueue, and render points onto the client
+monotonic clock, and emits a real attribution record for every complete frame. Normal
+rendition boundaries reset the playback timeline, so inter-turn silence is not counted as
+an underrun. Because protocol v1 still renders with `AudioBufferSourceNode`, its render
+event is explicitly marked estimated; Phase 2's output worklet will replace that estimate
+with a render-thread observation. Synthetic attribution tests cover production,
+server-send, network, decode, browser-enqueue, and render pauses independently, while an
+integrated export test proves that a real correlated frame is clock-aligned and attributed.
+Gateway trace retention batches SQLite writes and caps its observer queue at 5,000
+operations, dropping sampled events with an operational warning before observability can
+grow without bound. The real-device shaped-network matrix remains a promotion gate for
+Phase 1/3 rather than being claimed by unit tests.
 
 ### Phase 1 — Legacy PCM hardening
 

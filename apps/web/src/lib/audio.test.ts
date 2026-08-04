@@ -31,6 +31,16 @@ describe("PlaybackTimeline", () => {
     expect(timeline.remainingSec(0)).toBe(0);
     expect(timeline.schedule(1, 0)).toBeCloseTo(0.05);
   });
+
+  test("a normally completed rendition does not turn inter-turn silence into an underrun", () => {
+    const timeline = new PlaybackTimeline(0.05, 0.35);
+    timeline.schedule(0.1, 0);
+    timeline.completeRendition();
+
+    const next = timeline.scheduleWithMetrics(0.1, 5);
+    expect(next.startAtSec).toBeCloseTo(5.05);
+    expect(next.underrunSec).toBe(0);
+  });
 });
 
 describe("microphoneConstraints", () => {

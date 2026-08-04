@@ -28,6 +28,27 @@ function event(sessionId: string, sequence: number, payload: Record<string, unkn
 }
 
 describe("ConversationTraceStore", () => {
+  test("commits a burst of observer writes as one batch", async () => {
+    const store = new ConversationTraceStore(await root());
+    store.batch(() => {
+      store.begin("owner", "batched", { agentId: "support", source: "draft", revision: 1 }, 10);
+      for (let sequence = 1; sequence <= 20; sequence += 1) {
+        store.append("owner", event("batched", sequence, {
+          type: "media.socket",
+          frameId: sequence,
+          submittedAtMs: sequence,
+          highWaterBytes: 0,
+          backpressured: false,
+          dropped: false,
+        }));
+      }
+      store.finish("owner", "batched", 20);
+    });
+
+    expect(store.get("owner", "support", "batched")?.events).toHaveLength(20);
+    store.close();
+  });
+
   test("keeps metadata by default while removing conversational content", async () => {
     const store = new ConversationTraceStore(await root(), { now: () => 2_000 });
     store.begin("alice", "session-1", {

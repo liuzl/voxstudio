@@ -209,7 +209,7 @@ export class GatewaySession {
   private mediaTelemetry = false;
   private mediaFrameSequence = 0;
   private mediaHighWaterBytes = 0;
-  private mediaBackpressureStartedAtMs: number | undefined;
+  private mediaBackpressure: { sink: EventSink; startedAtMs: number } | undefined;
   private playbackWaiter: { turnId: string; resolve: () => void } | undefined;
   private lastAckedTurnId: string | undefined;
   private readonly sawDelta = new Set<string>();
@@ -479,12 +479,16 @@ export class GatewaySession {
     // object referenced for 30s per start/stop/close cycle (adversarial review 2026-07-19).
     if (this.stopped) return;
     if (this.sink !== sink) return;
+    if (this.mediaBackpressure?.sink === sink) this.mediaBackpressure = undefined;
     this.sink = undefined;
     const grace = this.options.reconnectGraceMs ?? 30_000;
     this.graceTimer = setTimeout(() => { this.stop(); }, grace);
   }
 
   handleCommand(command: GatewayCommand): void {
+    // Capture ping receipt before idempotency bookkeeping or any response event. JSON
+    // parsing happened in the adapter; from this boundary onward all work is server time.
+    const mediaPingReceivedAtMs = command.type === "media.ping" ? monotonicEpochMs() : undefined;
     const seen = this.seenCommands.get(command.idempotencyKey);
     if (seen !== undefined) {
       this.emit({ type: "command.duplicate", commandType: command.type, idempotencyKey: command.idempotencyKey });
@@ -525,12 +529,15 @@ export class GatewaySession {
         return;
       case "media.ping": {
         this.accept(command);
-        const serverReceivedAtMs = monotonicEpochMs();
         this.emit({
           type: "media.pong",
           clientSentAtMs: command.clientSentAtMs,
-          serverReceivedAtMs,
-          serverSentAtMs: monotonicEpochMs(),
+          serverReceivedAtMs: mediaPingReceivedAtMs ?? monotonicEpochMs(),
+          serverSentAtMs: 0,
+        }, event => {
+          // NTP's t2 belongs at the socket-submit boundary. Logging, envelope construction,
+          // and command.accepted are server residence time, not network transit.
+          if (event.type === "media.pong") event.serverSentAtMs = monotonicEpochMs();
         });
         return;
       }
@@ -565,20 +572,20 @@ export class GatewaySession {
   /** Bun calls this after a backpressured socket becomes writable again. */
   socketDrained(sink: EventSink): void {
     if (!this.mediaTelemetry || this.sink !== sink) return;
-    const startedAtMs = this.mediaBackpressureStartedAtMs;
-    if (startedAtMs === undefined) return;
+    const backpressure = this.mediaBackpressure;
+    if (backpressure === undefined || backpressure.sink !== sink) return;
     const drainedAtMs = monotonicEpochMs();
-    this.mediaBackpressureStartedAtMs = undefined;
+    this.mediaBackpressure = undefined;
     this.emit({
       type: "media.socket.drain",
-      startedAtMs,
+      startedAtMs: backpressure.startedAtMs,
       drainedAtMs,
-      durationMs: Math.max(0, drainedAtMs - startedAtMs),
+      durationMs: Math.max(0, drainedAtMs - backpressure.startedAtMs),
       highWaterBytes: this.mediaHighWaterBytes,
     });
   }
 
-  emit(payload: GatewayEventPayload): void {
+  emit(payload: GatewayEventPayload, beforeSocketSend?: (event: GatewayEvent) => void): void {
     const event: GatewayEvent = {
       ...payload,
       v: protocolVersion,
@@ -597,6 +604,7 @@ export class GatewaySession {
         this.options.log(`session ${this.id.slice(0, 8)} #${event.sequence} ${payload.type}${turn}${state}`);
       }
     }
+    beforeSocketSend?.(event);
     // A detached session keeps running; events during the gap are not buffered because the
     // reconnecting client resynchronizes from the snapshot, not from a replay.
     this.sink?.send(JSON.stringify(event));
@@ -699,13 +707,17 @@ export class GatewaySession {
           });
         }
         const submittedAtMs = monotonicEpochMs();
-        const observation = this.sink?.send(bytes);
+        const sink = this.sink;
+        const observation = sink?.send(bytes);
         if (this.mediaTelemetry) {
           const sendResult = observation?.sendResult;
           const bufferedBytes = observation?.bufferedBytes;
           if (bufferedBytes !== undefined) this.mediaHighWaterBytes = Math.max(this.mediaHighWaterBytes, bufferedBytes);
           const backpressured = sendResult === -1;
-          if (backpressured) this.mediaBackpressureStartedAtMs ??= submittedAtMs;
+          if (backpressured && sink !== undefined
+            && (this.mediaBackpressure === undefined || this.mediaBackpressure.sink !== sink)) {
+            this.mediaBackpressure = { sink, startedAtMs: submittedAtMs };
+          }
           this.emit({
             type: "media.socket",
             frameId,
@@ -714,7 +726,9 @@ export class GatewaySession {
             ...(bufferedBytes === undefined ? {} : { bufferedBytes }),
             highWaterBytes: this.mediaHighWaterBytes,
             backpressured,
-            dropped: sendResult === 0,
+            // No attached endpoint is an actual local drop: reconnect snapshots do not
+            // replay binary media produced during the gap.
+            dropped: sink === undefined || sendResult === 0,
           });
         }
       },
