@@ -1,0 +1,508 @@
+# Realtime media transport
+
+Status: Proposed implementation plan, 2026-08-04. Research and current-state
+measurement complete; implementation has not started.
+
+This document turns the remote/mobile audio investigation into an implementation
+contract. It refines the transport portion of
+[duplex-audio-architecture.md](./duplex-audio-architecture.md); that document remains
+authoritative for endpoint ownership, AEC, turns, cancellation, and playback
+acknowledgement. This document owns wire codecs, packetization, browser rendering,
+network backpressure, media telemetry, and the migration from the current browser
+WebSocket path to WebRTC/LiveKit.
+
+## Executive decision
+
+VoxStudio adopts two realtime media paths behind the same `DuplexAudioEndpoint` and
+conversation-session contracts:
+
+1. **Remote browsers and mobile clients use WebRTC through LiveKit.** Microphone and
+   Agent audio travel as media tracks; session state, captions, tools, and control
+   events travel as data messages. This is the production remote path.
+2. **Local and single-binary deployments retain a WebSocket path, upgraded to Media
+   Protocol v2.** It negotiates Opus first, bounded PCM16 as a compatibility fallback,
+   and float PCM only for loopback/debugging. It never accumulates unbounded audio.
+3. **The current float32-PCM WebSocket path is legacy compatibility, not the remote
+   architecture.** Before Media v2 lands, it receives only a bounded-chunk and
+   backpressure hardening pass.
+
+Increasing the fixed playback cushion is not the solution. It can conceal one network
+profile by adding conversational delay, but it does not reduce bandwidth, TCP
+head-of-line blocking, stale playback after interruption, or unbounded sender queues.
+
+## Scope
+
+This document covers:
+
+- browser microphone and Agent-audio transport;
+- wire codec selection and packet duration;
+- client decoding and continuous playback;
+- jitter-buffer and sender-backpressure policy;
+- interruption and revision semantics at the media boundary;
+- observability and real-device/network acceptance gates;
+- migration that preserves local `vox studio` operation.
+
+It does not change ASR, LLM, TTS, VAD, turn-taking, voice registration, retained-media
+policy, or the OpenAI Realtime dialect. It does not require LiveKit for the macOS CLI
+or a loopback Studio session.
+
+## Current state and evidence
+
+### Browser wire path
+
+The delivered native VoxStudio WebSocket dialect uses JSON text frames for events and
+commands and unframed binary float32 PCM for media:
+
+| Direction | Current payload | Rate | Sustained payload rate |
+|---|---|---:|---:|
+| Browser microphone to gateway | mono f32 PCM | 16 kHz | 64,000 B/s (512 kbps) |
+| Gateway TTS to browser | mono f32 PCM | commonly 48 kHz | 192,000 B/s (1.536 Mbps) |
+| Full duplex, excluding framing | f32 PCM | mixed | 256,000 B/s (2.048 Mbps) |
+
+The microphone is already framed at 320 samples, or 20 ms at 16 kHz. TTS pieces are
+handed to the socket in the sizes produced downstream, without media sequence numbers,
+timestamps, a stream identity, or sender backpressure. The browser receives a complete
+WebSocket binary message, turns it into a `Float32Array`, and creates one
+`AudioBufferSourceNode` for that message. Playback starts or re-buffers with a fixed
+700 ms lead.
+
+The implementation points are
+[protocol.ts](../apps/realtime-gateway/src/protocol.ts),
+[session.ts](../apps/realtime-gateway/src/session.ts),
+[server.ts](../apps/realtime-gateway/src/server.ts), and
+[audio.ts](../apps/web/src/lib/audio.ts).
+
+An engine-to-gateway stream may already use Ogg/Opus when the selected TTS engine and
+gateway decoder negotiate it. That optimization ends at the gateway: the decoded
+audio is still sent from gateway to the native browser client as float32 PCM. Engine
+wire compression therefore does not solve the browser downlink.
+
+### 2026-08-04 mobile investigation
+
+The investigation observed all of the following:
+
+- A local VoxCPM2 stream produced 9.12 s of audio in 4.61 s, with first audio at
+  882 ms and a maximum observed producer-delivery gap of 744 ms. Inference supplied
+  audio at roughly twice realtime overall, so sustained TTS generation was not the
+  primary mobile stall.
+- A common downstream PCM piece was 184,320 bytes: 960 ms of 48 kHz mono f32 audio.
+  Transferring one complete message takes approximately 737 ms at 2 Mbps, 1.47 s at
+  1 Mbps, or 2.95 s at 512 kbps, before browser code can schedule it.
+- The tested iPhone had recent direct Tailscale UDP endpoint activity. A DERP-only path
+  was therefore not required to reproduce the risk; ordinary mobile bandwidth,
+  contention, retransmission, and route variation are sufficient.
+- The repository's earlier remote-engine incident measured only 30–65 KB/s over a
+  private overlay while 48 kHz f32 needed 187.5 KB/s. Opus removed the bandwidth
+  deficit; re-buffering and decoded-PCM coalescing then fixed two independent playback
+  artifacts. See [technical-report.md §9.5](./technical-report.md#95-case-5-three-layer-degradation-behind-remote-audio-noise-v11).
+
+The diagnosis is consequently:
+
+> Mobile network conditions trigger the symptom, but large uncompressed application
+> messages over a reliable ordered WebSocket make the system unnecessarily fragile.
+
+TCP retransmission delays every later byte on the connection. The browser WebSocket
+API also delivers the application message as a completed `Blob` or `ArrayBuffer`, not
+as independently playable fragments. A near-one-second PCM message can therefore
+consume the entire current lead before it becomes schedulable.
+
+### Playback granularity is a separate constraint
+
+Smaller network packets alone are insufficient. The earlier Opus investigation found
+that passing decoded 20 ms pieces directly to Web Audio created about 50
+`AudioBufferSourceNode`s per second and produced continuous boundary artifacts.
+Coalescing decoded PCM to at least 240 ms (260 ms median in that gate) removed the
+artifact.
+
+Media should therefore be small on the wire and continuous at the renderer:
+
+- 20 ms codec packets for latency, loss recovery, and network scheduling;
+- a ring buffer consumed by the audio render clock, not one source node per packet.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph clients[Client endpoints]
+    REMOTE[Remote/mobile browser]
+    LOCAL[Local/single-binary browser]
+    CLI[Native CLI]
+  end
+
+  LK[LiveKit room<br/>WebRTC media + data]
+  WSV2[Gateway Media v2<br/>WebSocket]
+  IPC[Native endpoint IPC]
+  ADAPTER[Endpoint adapters]
+  SESSION[DuplexSession + conversation loop]
+  ENGINES[ASR · LLM · TTS]
+
+  REMOTE <-->|Opus media tracks| LK
+  REMOTE <-->|state/captions/control| LK
+  LK <--> ADAPTER
+  LOCAL <-->|Opus or bounded PCM16| WSV2
+  WSV2 <--> ADAPTER
+  CLI <--> IPC <--> ADAPTER
+  ADAPTER <--> SESSION <--> ENGINES
+```
+
+The core session continues to consume and produce timestamped PCM. Codec, transport,
+jitter, browser device state, and audible-render completion stay in endpoint adapters.
+ASR, TTS, turn policy, and tools never import LiveKit or browser APIs.
+
+## Decisions
+
+### 1. WebRTC/LiveKit is the remote default
+
+WebRTC endpoints are required to implement Opus, and WebRTC supplies the media
+facilities that a voice product otherwise has to rebuild: RTP timestamps, adaptive
+jitter buffering, congestion response, packet-loss concealment, and standardized
+statistics. LiveKit adds authenticated room lifecycle and a server-side media adapter
+without moving turn policy out of VoxStudio.
+
+The mapping is:
+
+| VoxStudio concern | LiveKit/WebRTC surface |
+|---|---|
+| Browser microphone | published WebRTC audio track |
+| Agent speech | subscribed WebRTC audio track |
+| Captions and turn events | reliable data/text messages |
+| Interrupt, mute, session control | small data messages / RPC |
+| AEC/NS/AGC | browser capture/render endpoint |
+| Network health | `RTCPeerConnection.getStats()` plus application events |
+
+Opus bitrate, packet-loss resilience, and jitter target should be treated as transport
+hints, not hard cross-browser guarantees. The initial speech-quality target is mono
+Opus around 32–48 kbps; the browser/WebRTC congestion controller remains free to
+adapt. In-band FEC belongs here, where later RTP packets can arrive despite an earlier
+loss. It provides no head-of-line benefit inside a reliable ordered WebSocket.
+
+Room credentials are short-lived and owner/session scoped. The client may join only
+the intended room with the required publish/subscribe permissions. Engine addresses,
+service credentials, and long-lived API keys never enter the browser.
+
+### 2. WebSocket Media v2 is a first-class local fallback
+
+WebSocket v2 exists for the self-contained product shape, deployments that do not run
+LiveKit, compatibility clients, and measurement. Its codec preference is:
+
+1. `opus` — mono, 20 ms packets, 48 kHz decode rate, VBR, initial target 48 kbps;
+2. `pcm_s16le/24000` — 384 kbps, after a voice-quality gate;
+3. `pcm_s16le/48000` — 768 kbps when exact downlink bandwidth permits it;
+4. `pcm_f32le` — loopback, diagnostics, and protocol-v1 compatibility only.
+
+The list above describes Agent-audio downlink quality. Microphone uplink also prefers
+20 ms mono Opus, at a lower speech bitrate; the gateway decodes and resamples it to the
+conversation kernel's canonical 16 kHz ASR frames. Codec clock rate, decoded sample
+rate, and core sample rate are represented separately rather than inferred from one
+field.
+
+The initial Opus mode uses raw Opus packets inside the VoxStudio binary envelope. It
+does not add base64 or an Ogg container per frame. One WebSocket message carries one
+20 ms packet or, when measurement shows the syscall/framing overhead matters, at most
+40 ms. Longer aggregation requires a new measured gate.
+
+Codec negotiation is double-gated: the gateway advertises only codecs it can produce,
+and the client selects only codecs it can decode. Unsupported combinations fail or
+fall back explicitly; they never reinterpret compressed bytes as PCM.
+
+### 3. Media v2 has explicit stream identity and time
+
+Control remains JSON. `session.start` advertises supported media configurations and
+the gateway confirms one. Each Agent rendition begins with a control event resembling:
+
+```json
+{
+  "type": "playback.start",
+  "turnId": "turn_123",
+  "revision": 2,
+  "streamId": "media_456",
+  "codec": "opus",
+  "sampleRate": 48000,
+  "channels": 1,
+  "packetDurationMs": 20
+}
+```
+
+Every binary media envelope carries, at minimum:
+
+| Field | Purpose |
+|---|---|
+| protocol version and media kind | reject incompatible frames |
+| stream id | isolate playback renditions and discard stale media |
+| monotonically increasing sequence | expose gaps, duplicates, and ordering defects |
+| media timestamp | place frames on the rendition's audio timeline |
+| duration in samples | buffer accounting without decoding guesses |
+| flags | start/end/discontinuity or future codec information |
+| payload | Opus packet or negotiated PCM bytes |
+
+The exact byte layout is fixed with golden-vector tests before implementation. It must
+be bounded, allocation-safe, and parseable without inspecting codec bytes.
+
+`playback.end` means the producer has emitted its final packet. It does not mean audio
+was heard. The client emits `playback.complete` only after its render worklet has
+consumed the stream through the final sample. Timeout behavior remains derived from
+media duration plus bounded slack, as defined by the duplex architecture.
+
+On interruption, retry, or speculative reopen, the new `(turnId, revision, streamId)`
+supersedes the old stream. Every layer discards queued frames from the stale stream;
+late network frames cannot re-arm playback.
+
+### 4. Each browser path has one continuous renderer
+
+The WebSocket v2 downlink pipeline is:
+
+```text
+WebSocket media frame
+  -> Worker-hosted codec decoder / AudioData
+  -> decoded PCM queue
+  -> bounded SharedArrayBuffer ring when available
+     or transferable-buffer queue fallback
+  -> AudioWorkletProcessor
+  -> destination
+```
+
+For this path, the worklet owns the render cursor and reports consumed samples,
+underruns, buffer depth, discontinuities, and the final rendered sample. Main-thread
+timers do not own the audible clock.
+
+WebRTC does not pass its 20 ms packets through this custom decoder. A subscribed Agent
+track is attached to one persistent browser media renderer, leaving Opus decoding,
+packet-loss concealment, jitter buffering, playout timing, and the capture/render
+relationship in the browser's WebRTC implementation. Extracting every WebRTC frame
+into JavaScript would discard the main reason for choosing WebRTC and is forbidden
+unless a later measured requirement proves it necessary.
+
+For WebSocket Opus, the browser feature-detects WebCodecs with
+`AudioDecoder.isConfigSupported()`. A tested WASM libopus decoder is the fallback for
+older or incomplete engines; PCM16 is the final interoperability fallback. Browser
+brand/version checks are forbidden because engine support can change independently.
+
+Neither path creates one `AudioBufferSourceNode` per 20 ms media packet. Legacy PCM may
+keep the current scheduled-source implementation during migration, but WebSocket v2
+codecs terminate in the worklet ring buffer and WebRTC remains one continuous native
+track.
+
+### 5. Buffering is adaptive and bounded
+
+The current fixed 700 ms lead is replaced in v2 by a target based on observed arrival
+jitter and underruns. Initial tuning ranges, to be promoted only by the acceptance
+gate, are:
+
+| Condition | Initial target |
+|---|---:|
+| stable LAN/loopback | 120–200 ms |
+| ordinary remote route | 200–350 ms |
+| temporary recovery after underrun | increase gradually, capped near 600 ms |
+
+The target rises after lateness or underrun and decays slowly after a stable window.
+The renderer favors one explicit re-buffering pause over burst-gap-burst playback. An
+interruption always empties the superseded stream immediately, regardless of the
+current target.
+
+These values are hypotheses, not product guarantees. The device/network matrix below
+decides their final defaults.
+
+### 6. Sender backpressure is measured in media time
+
+Every transport adapter has an asynchronous bounded media writer. For Bun WebSockets:
+
+- inspect the result of every `ServerWebSocket.send()`;
+- stop feeding the socket when data is queued under backpressure;
+- resume from the socket `drain` callback;
+- expose queued bytes **and queued audio milliseconds**;
+- cap queued unsent media initially at 1,000 ms;
+- abort the rendition with a structured `network_congested` event when the cap cannot
+  recover, rather than delivering speech several seconds late.
+
+Control and media have separate application queues. A bounded compressed media queue
+keeps control responsive in normal operation; no design claims that two queues can
+prioritize bytes already blocked inside one ordered TCP connection. If measurement
+still shows control starvation, a separate control channel is evaluated explicitly.
+
+Client microphone submission receives equivalent limits. Old capture frames are not
+valuable after their realtime window; on overflow the endpoint records a discontinuity
+and applies the gateway's documented oldest-first policy rather than growing memory.
+
+### 7. Observability precedes codec rollout
+
+Every session has opt-in, privacy-bounded media telemetry. It contains metadata and
+durations, never audio bytes unless the independent retained-media policy authorizes
+them.
+
+Gateway telemetry records:
+
+- codec, rate, channels, encoded bytes, and represented audio duration;
+- production, enqueue, socket-submit, and drain timestamps;
+- `send()` result, backpressure duration, and high-water marks;
+- media sequence gaps or drops introduced locally;
+- rendition abort reason and stale-frame discard counts.
+
+Browser telemetry records:
+
+- frame receive, decode, enqueue, and render timestamps;
+- decoder errors and fallback choice;
+- target/actual buffer depth, underrun count, and underrun duration;
+- AudioContext state/rate, output route changes where exposed, and worklet health;
+- time to first audible sample and interruption-to-silence latency;
+- an application ping/pong RTT for WebSocket, because browser WebSocket exposes no
+  transport statistics.
+
+WebRTC additionally records standardized inbound/outbound bitrate, packet loss,
+jitter-buffer delay/target/minimum, concealed samples, and concealment events where
+the browser exposes them. Missing fields stay missing; they are not reported as zero.
+
+Conversation traces and retained media remain separate. Enabling transport telemetry
+does not enable transcript, microphone, or Agent-audio retention; see
+[conversation-retention.md](./conversation-retention.md).
+
+## Delivery plan
+
+### Phase 0 — Observability
+
+Deliver the telemetry above for the existing protocol, including ordinary
+`/conversation` sessions. Provide a trace export or debug panel that aligns production,
+socket delivery, browser queue depth, and audible rendering on one monotonic timeline.
+
+Gate: a synthetic pause injected independently at TTS production, server send, network
+arrival, decode, and rendering is attributed to the correct layer.
+
+### Phase 1 — Legacy PCM hardening
+
+- cap gateway-to-browser f32 messages to approximately 240 ms;
+- honor Bun send backpressure and bound the media queue;
+- report browser buffer depth and underruns;
+- preserve current wire compatibility and playback acknowledgement;
+- rerun the iPhone/Tailnet scenario.
+
+The 240 ms value follows the earlier measured Web Audio coalescing gate. This phase
+reduces message-level blocking and makes failures explainable, but does not claim to
+solve the 1.536 Mbps downlink.
+
+### Phase 2 — WebSocket Media v2
+
+- freeze the binary envelope with parser and golden-vector tests;
+- add codec capability negotiation;
+- deliver PCM16 and AudioWorklet rendering first to separate protocol/rendering risk
+  from codec risk;
+- add 20 ms Opus encode/decode, WebCodecs detection, and WASM fallback;
+- add adaptive jitter buffering, stale-stream discard, and congestion aborts;
+- keep protocol v1 behind explicit negotiation during migration.
+
+Gate: all required browsers complete the shaped-network matrix below, and a v1 client
+still receives an explicit compatible response rather than malformed media.
+
+### Phase 3 — LiveKit/WebRTC remote adapter
+
+- map authenticated LiveKit rooms and media tracks to `DuplexAudioEndpoint`;
+- map captions, lifecycle, tools, interruption, and playback state to data messages;
+- issue short-lived, least-privilege room tokens;
+- make remote/mobile Studio choose LiveKit by deployment capability;
+- retain Media v2 as local/self-hosted fallback;
+- expose WebRTC media statistics in the same trace timeline.
+
+Gate: remote/mobile WebRTC passes audio continuity, double-talk, interruption, route
+change, reconnect, and authorization tests without changing the shared conversation
+loop.
+
+## Acceptance matrix
+
+Use deterministic 30–60 s seeded TTS so codec, transport, and rendering runs are
+comparable. Test at least:
+
+| Dimension | Required points |
+|---|---|
+| Downlink | 256, 512, 1,024, 2,048 kbps and unshaped |
+| RTT | 20, 100, 300 ms |
+| Jitter | 0, 20, 50, 100 ms |
+| Packet loss for WebRTC | 0%, 1%, 3% |
+| Devices | iPhone Safari, Android Chrome, macOS Chrome and Safari |
+| Routes | same-Wi-Fi direct, cellular/direct overlay, relayed/DERP where available |
+| Interaction | uninterrupted reply, barge-in, rapid revision, mute/unmute, route change |
+
+Initial promotion thresholds, subject to measured calibration:
+
+- zero underruns in ten minutes on the declared healthy-network profile;
+- Opus Agent-audio downlink at or below 80 kbps including protocol overhead, with a
+  48 kbps codec target in WebSocket v2;
+- ordinary target buffer 200–350 ms and p95 no greater than 600 ms;
+- p95 interruption-to-silence no greater than 150 ms;
+- no audible stale audio after a stream is interrupted or superseded;
+- no unbounded queue; a session fails loudly if queued audio exceeds its ceiling;
+- no `AudioBufferSourceNode`-per-packet rendering path;
+- codec quality passes deterministic reference comparison and user listening tests,
+  including cloned-voice identity, sibilants, Mandarin/English switching, and long
+  replies;
+- control events remain responsive while Agent audio is flowing.
+
+The gate report records browser/OS, route, selected devices, codec, effective bitrate,
+network shaping, and raw metric distributions. “Sounds fine” is useful final validation
+but not sufficient evidence for promotion.
+
+## Alternatives not selected
+
+### Keep f32 PCM and increase the lead
+
+Rejected as a remote solution. It preserves excessive bandwidth and TCP blocking and
+trades natural turn-taking for a buffer large enough to mask only the tested route.
+
+### Use `permessage-deflate` for PCM
+
+Rejected. Audio PCM is not predictably compressed enough by a generic message
+compressor, compression cost and message blocking remain, and it supplies none of the
+media timing or loss behavior of a codec transport.
+
+### Send 20 ms PCM/Opus packets into `AudioBufferSourceNode`
+
+Rejected by prior measurement. Network packet granularity and render scheduling
+granularity are different concerns; the worklet ring buffer bridges them.
+
+### Make WebTransport the next remote transport
+
+Deferred, not rejected forever. WebTransport offers reliable streams and unreliable
+datagrams over HTTP/3, but VoxStudio would still own codec negotiation, jitter logic,
+loss concealment, media clocks, congestion policy, and a new server/proxy deployment
+surface. WebRTC/LiveKit already solves the media problem and is the accepted remote
+direction. WebTransport may be reconsidered for a future non-WebRTC data or custom
+media requirement after the WebRTC gate establishes a baseline.
+
+### Use Opus FEC over the reliable WebSocket
+
+Rejected. Ordered TCP does not deliver the later redundancy-bearing packet ahead of
+the missing earlier bytes, so in-band FEC cannot remove the WebSocket head-of-line
+wait. FEC remains useful on the WebRTC/RTP path.
+
+## Open implementation questions
+
+These are resolved by Phase 0 measurements and targeted prototypes, not assumptions:
+
+1. Whether WebSocket v2 should fix 48 kbps or expose a small 32/48/64 kbps quality
+   profile set for Agent speech.
+2. Whether PCM16 at 24 kHz passes cloned-voice quality gates on every supported TTS
+   source or requires a 48 kHz fallback for specific voices.
+3. Whether cross-origin isolation can be guaranteed in all Studio deployments for a
+   `SharedArrayBuffer`; the worklet must also have a transferable-buffer fallback.
+4. Whether LiveKit playback completion needs a client-render acknowledgement in
+   addition to track publication and server-side duration accounting.
+5. Whether the local browser should prefer Media v2 even when a co-located LiveKit
+   service exists; the default should minimize deployment cost until measurement shows
+   an experience benefit.
+
+## Standards and primary references
+
+- [RFC 7874 — WebRTC audio codec requirements](https://www.rfc-editor.org/rfc/rfc7874.html)
+- [RFC 6716 — Opus codec, frame durations and realtime guidance](https://www.rfc-editor.org/rfc/rfc6716.html)
+- [RFC 7587 — RTP payload format and Opus bitrate guidance](https://www.rfc-editor.org/rfc/rfc7587.html)
+- [RFC 8854 — Opus in-band FEC for WebRTC](https://www.rfc-editor.org/rfc/rfc8854.html)
+- [RFC 8451 — conversational jitter-buffer tradeoffs](https://www.rfc-editor.org/rfc/rfc8451.html)
+- [WHATWG WebSockets](https://websockets.spec.whatwg.org/)
+- [Bun WebSocket server API](https://bun.sh/docs/runtime/http/websockets)
+- [W3C WebRTC](https://www.w3.org/TR/webrtc/)
+- [W3C WebRTC Statistics](https://www.w3.org/TR/webrtc-stats/)
+- [Chromium NetEq design](https://webrtc.googlesource.com/src/+/1856b2ce71700faceb9f3dd8dfe7f24e17987e57/modules/audio_coding/neteq/g3doc/index.md)
+- [W3C Web Audio API](https://www.w3.org/TR/webaudio-1.0/)
+- [W3C WebCodecs Opus registration](https://www.w3.org/TR/webcodecs-opus-codec-registration/)
+- [WebKit: WebCodecs audio in Safari 26](https://webkit.org/blog/16993/news-from-wwdc25-web-technology-coming-this-fall-in-safari-26-beta/)
+- [WebKit: WebTransport and TCP head-of-line blocking](https://webkit.org/blog/17862/webkit-features-for-safari-26-4/)
+- [W3C WebTransport](https://www.w3.org/TR/webtransport/)
+- [LiveKit media and data for frontends](https://docs.livekit.io/frontends/build/media-data/)
+- [LiveKit media transport overview](https://docs.livekit.io/transport/media/)

@@ -4,7 +4,9 @@ Status: Accepted, 2026-07-12; a living architecture document since. Delivered so
 the session kernel, the shared conversation loop, the realtime gateway and Web Studio
 realtime, the OpenAI Realtime dialect ([openai-realtime-adapter.md](./openai-realtime-adapter.md)),
 and the first-chunk clause fast path (§Turn timing). LiveKit remote transport stays
-planned.
+planned. The codec, packetization, buffering, backpressure, and remote-transport
+migration plan is specified in
+[realtime-media-transport.md](./realtime-media-transport.md).
 
 ## Scope
 
@@ -176,6 +178,12 @@ processed in an `AudioWorklet` only when a measured requirement cannot be met
 by the standard WebRTC path.
 
 ### Transport choice
+
+The detailed wire-media and migration contract lives in
+[realtime-media-transport.md](./realtime-media-transport.md). This section establishes
+endpoint ownership and the selected remote transport; the companion document owns
+codec negotiation, browser rendering, buffering, backpressure, telemetry, phases, and
+network acceptance gates.
 
 The browser uses LiveKit for authenticated WebRTC media rooms when it connects
 to a remote product service. LiveKit carries continuous microphone and agent
