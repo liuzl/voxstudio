@@ -110,8 +110,12 @@ export type GatewayEventPayload =
       sendResult?: number;
       bufferedBytes?: number;
       highWaterBytes: number;
+      /** Application media still waiting behind this submission, excluding Bun's buffer. */
+      queuedBytes: number;
+      queuedAudioMs: number;
       backpressured: boolean;
       dropped: boolean;
+      discardReason?: "stale_rendition" | "network_congested" | "detached";
     }
   | {
       type: "media.socket.drain";

@@ -1,7 +1,8 @@
 # Realtime media transport
 
 Status: Accepted implementation plan, 2026-08-04. Research, current-state
-measurement, and Phase 0 observability are delivered; Phase 1 has not started.
+measurement, Phase 0 observability, and Phase 1 legacy PCM hardening are delivered.
+The Phase 1 iPhone/Tailnet device gate passed on 2026-08-04.
 
 This document turns the remote/mobile audio investigation into an implementation
 contract. It refines the transport portion of
@@ -436,6 +437,20 @@ Phase 1/3 rather than being claimed by unit tests.
 The 240 ms value follows the earlier measured Web Audio coalescing gate. This phase
 reduces message-level blocking and makes failures explainable, but does not claim to
 solve the 1.536 Mbps downlink.
+
+Implemented and device-gated 2026-08-04. The gateway slices arbitrary TTS
+pieces into at most 240 ms mono f32 frames while preserving the protocol-v1 binary shape
+and playback acknowledgement. A rendition-local asynchronous writer submits its first
+frame immediately, holds at most 1,000 ms of later audio, stops feeding Bun after `send()`
+reports backpressure, and resumes only from the matching socket's `drain` callback. Queue
+depth is reported in bytes and represented audio milliseconds. A socket that stays blocked
+for 2,000 ms emits `network_congested`, interrupts the rendition, and explicitly marks
+every unsent frame dropped so the browser's frame correlation cannot leak into the next
+reply. Interruption applies the same discard rule to stale application-queued frames;
+normal output, drain recovery, congestion abort, detach, and rendition accounting have
+gateway regression coverage. The iPhone/Tailnet run completed without observed socket
+backpressure or `network_congested` events, and the listener reported a materially smoother
+experience than the unbounded legacy transport.
 
 ### Phase 2 — WebSocket Media v2
 

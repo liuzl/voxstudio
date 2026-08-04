@@ -82,6 +82,8 @@ describe("media delay attribution", () => {
       sendResult: 9_600,
       bufferedBytes: 0,
       highWaterBytes: 0,
+      queuedBytes: 0,
+      queuedAudioMs: 0,
       backpressured: false,
       dropped: false,
     });

@@ -38,6 +38,8 @@ describe("ConversationTraceStore", () => {
           frameId: sequence,
           submittedAtMs: sequence,
           highWaterBytes: 0,
+          queuedBytes: 0,
+          queuedAudioMs: 0,
           backpressured: false,
           dropped: false,
         }));

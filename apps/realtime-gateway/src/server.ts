@@ -694,6 +694,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         sendResult: ws.send(payload),
         bufferedBytes: ws.getBufferedAmount(),
       }),
+      terminate: () => { ws.terminate(); },
     };
     return ws.data.sink;
   };

@@ -153,9 +153,15 @@ describe("realtime gateway", () => {
     expect(format && "sampleRate" in format ? format.sampleRate : 0).toBe(24_000);
     expect(client.audio.length).toBeGreaterThan(0);
     expect((client.audio[0] as Uint8Array).byteLength % 4).toBe(0);
+    expect(client.audio.every(frame => frame.byteLength <= 24_000 * 0.24 * 4)).toBe(true);
     const media = client.events.find(event => event.type === "media.frame");
     expect(media && "codec" in media ? media.codec : "").toBe("pcm_f32le");
     expect(media && "bytes" in media ? media.bytes : 0).toBe((client.audio[0] as Uint8Array).byteLength);
+    const mediaFrames = client.events.filter((event): event is Extract<GatewayEvent, { type: "media.frame" }> => event.type === "media.frame");
+    expect(Math.max(...mediaFrames.map(frame => frame.audioMs))).toBeLessThanOrEqual(240);
+    const socketFrames = client.events.filter((event): event is Extract<GatewayEvent, { type: "media.socket" }> => event.type === "media.socket");
+    expect(socketFrames[0]?.queuedAudioMs).toBe(0);
+    expect(Math.max(...socketFrames.map(frame => frame.queuedAudioMs))).toBeLessThanOrEqual(1_000);
 
     // The envelope contract: one session, one schema version, strictly monotonic sequence.
     const sessionIds = new Set(client.events.map(event => event.sessionId));
@@ -225,7 +231,7 @@ describe("realtime gateway", () => {
     await session.start({
       ...startOptions,
       mediaTelemetry: true,
-      welcome: "第一句欢迎您。第二句介绍能力。第三句说明用法。第四句邀请体验。",
+      welcome: "欢迎。",
     }, firstSink);
     const deadline = Date.now() + 2_000;
     while (!events.some(event => event.type === "media.rendition")) {
@@ -236,12 +242,102 @@ describe("realtime gateway", () => {
     const sockets = events.filter((event): event is Extract<GatewayEvent, { type: "media.socket" }> => event.type === "media.socket");
     expect(sockets.some(event => event.backpressured)).toBe(true);
     expect(sockets.some(event => event.dropped)).toBe(true);
+    expect(sockets.filter(event => event.dropped).every(event => event.discardReason === "detached")).toBe(true);
+    expect(events.some(event => event.type === "error" && event.code === "media_disconnected")).toBe(true);
+    expect(binaryFrames).toBe(1);
+    expect(events.find(event => event.type === "media.rendition")).toMatchObject({
+      status: "interrupted",
+      staleFramesDiscarded: 0,
+    });
 
     const replacement: EventSink = { send: data => ({ sendResult: typeof data === "string" ? data.length : data.byteLength, bufferedBytes: 0 }) };
     session.attach(replacement);
     const drainsBefore = events.filter(event => event.type === "media.socket.drain").length;
     session.socketDrained(replacement);
     expect(events.filter(event => event.type === "media.socket.drain")).toHaveLength(drainsBefore);
+    session.stop();
+    await session.done;
+  });
+
+  test("legacy PCM bounds its queue and aborts a rendition when socket pressure cannot recover", async () => {
+    const events: GatewayEvent[] = [];
+    const binaryBytes: number[] = [];
+    let terminated = 0;
+    const blockedSink: EventSink = {
+      send: data => {
+        if (typeof data === "string") return { sendResult: data.length, bufferedBytes: 0 };
+        binaryBytes.push(data.byteLength);
+        return { sendResult: -1, bufferedBytes: data.byteLength };
+      },
+      terminate: () => { terminated += 1; },
+    };
+    const session = new GatewaySession({
+      config,
+      fetch: engineFetch({
+        "/v1/audio/speech": async () => new Response(new Uint8Array(writeWav(new Float32Array(48_000).fill(0.1), 24_000))),
+      }),
+      mediaBackpressureTimeoutMs: 25,
+      onEvent: event => { events.push(event); },
+    });
+    await session.start({ ...startOptions, mediaTelemetry: true, welcome: "欢迎体验实时语音助手。" }, blockedSink);
+    const deadline = Date.now() + 1_000;
+    while (!events.some(event => event.type === "error" && event.code === "network_congested")) {
+      if (Date.now() > deadline) throw new Error("timed out waiting for congestion abort");
+      await Bun.sleep(5);
+    }
+
+    expect(binaryBytes).toHaveLength(1);
+    expect(binaryBytes[0]).toBeLessThanOrEqual(24_000 * 0.24 * 4);
+    const sockets = events.filter((event): event is Extract<GatewayEvent, { type: "media.socket" }> => event.type === "media.socket");
+    expect(Math.max(...sockets.map(event => event.queuedAudioMs))).toBeLessThanOrEqual(1_000);
+    expect(sockets.some(event => event.discardReason === "network_congested")).toBe(true);
+    const rendition = events.find((event): event is Extract<GatewayEvent, { type: "media.rendition" }> => event.type === "media.rendition");
+    expect(rendition).toMatchObject({ status: "interrupted" });
+    expect(rendition?.staleFramesDiscarded).toBe(0);
+    expect(terminated).toBe(1);
+    session.stop();
+    await session.done;
+  });
+
+  test("legacy PCM resumes its bounded queue from Bun's drain callback", async () => {
+    const events: GatewayEvent[] = [];
+    const binaryBytes: number[] = [];
+    let session: GatewaySession;
+    let blocked = true;
+    const sink: EventSink = {
+      send: data => {
+        if (typeof data === "string") return { sendResult: data.length, bufferedBytes: 0 };
+        binaryBytes.push(data.byteLength);
+        if (blocked) {
+          blocked = false;
+          setTimeout(() => session.socketDrained(sink), 10);
+          return { sendResult: -1, bufferedBytes: data.byteLength };
+        }
+        return { sendResult: data.byteLength, bufferedBytes: 0 };
+      },
+    };
+    session = new GatewaySession({
+      config,
+      fetch: engineFetch({
+        "/v1/audio/speech": async () => new Response(new Uint8Array(writeWav(new Float32Array(48_000).fill(0.1), 24_000))),
+      }),
+      mediaBackpressureTimeoutMs: 100,
+      onEvent: event => { events.push(event); },
+    });
+    await session.start({ ...startOptions, mediaTelemetry: true, welcome: "欢迎体验实时语音助手。" }, sink);
+    const deadline = Date.now() + 1_000;
+    while (!events.some(event => event.type === "media.rendition" && event.status === "completed")) {
+      if (Date.now() > deadline) throw new Error("timed out waiting for drained rendition");
+      await Bun.sleep(5);
+    }
+
+    expect(binaryBytes.length).toBeGreaterThan(1);
+    expect(binaryBytes.every(bytes => bytes <= 24_000 * 0.24 * 4)).toBe(true);
+    expect(events.some(event => event.type === "media.socket.drain")).toBe(true);
+    expect(events.some(event => event.type === "error" && event.code === "network_congested")).toBe(false);
+    const socketEvents = events.filter((event): event is Extract<GatewayEvent, { type: "media.socket" }> => event.type === "media.socket");
+    expect(Math.max(...socketEvents.map(event => event.queuedAudioMs))).toBeGreaterThan(0);
+    expect(Math.max(...socketEvents.map(event => event.queuedAudioMs))).toBeLessThanOrEqual(1_000);
     session.stop();
     await session.done;
   });

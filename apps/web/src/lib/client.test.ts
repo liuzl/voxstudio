@@ -142,7 +142,7 @@ describe("GatewayClient", () => {
     });
     socket.serverEvent({
       type: "media.socket", frameId: 8, submittedAtMs: 14, sendResult: 0,
-      highWaterBytes: 0, backpressured: false, dropped: true,
+      highWaterBytes: 0, queuedBytes: 0, queuedAudioMs: 0, backpressured: false, dropped: true,
     });
     socket.serverEvent({
       type: "media.frame", frameId: 9, turnId: "t-1", revision: 0, codec: "pcm_f32le",

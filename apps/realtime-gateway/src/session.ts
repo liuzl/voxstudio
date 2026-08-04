@@ -38,6 +38,8 @@ export interface SinkSendObservation {
 
 export interface EventSink {
   send(data: string | Uint8Array): SinkSendObservation | void;
+  /** Abruptly drops bytes already buffered by the transport after a congestion timeout. */
+  terminate?(): void;
 }
 
 export interface GatewaySessionOptions {
@@ -106,6 +108,8 @@ export interface GatewaySessionOptions {
   loadSileroVad?: (() => Promise<SpeechProbabilityModel>) | undefined;
   /** How long a detached session survives waiting for a reconnect. */
   reconnectGraceMs?: number;
+  /** Test/deployment ceiling before a blocked media socket aborts its current rendition. */
+  mediaBackpressureTimeoutMs?: number;
   /** Demo guardrail (docs/public-demo.md): the session notices and stops at this ceiling. */
   maxSessionSeconds?: number;
   /** Called when the session ends for any reason, so the registry can forget it. */
@@ -123,6 +127,22 @@ const inputSampleRate = 16_000;
 /** Buffered microphone audio beyond this is dropped oldest-first; the VAD sees a gap, not unbounded memory. */
 const maxBufferedInputMs = 30_000;
 const maxIdempotencyKeys = 512;
+const legacyPcmFrameMs = 240;
+const maxQueuedOutputMs = 1_000;
+const defaultMediaBackpressureTimeoutMs = 2_000;
+
+type MediaBackpressureOutcome = "drained" | "detached" | "cancelled" | "timeout";
+
+class MediaTransportError extends Error {
+  constructor(
+    readonly code: "network_congested" | "media_disconnected",
+    readonly discardReason: "network_congested" | "detached",
+    message: string,
+  ) {
+    super(message);
+    this.name = "MediaTransportError";
+  }
+}
 
 /** Epoch-shaped but monotonic within this process, so browser clock alignment is stable. */
 function monotonicEpochMs(): number {
@@ -209,7 +229,13 @@ export class GatewaySession {
   private mediaTelemetry = false;
   private mediaFrameSequence = 0;
   private mediaHighWaterBytes = 0;
-  private mediaBackpressure: { sink: EventSink; startedAtMs: number } | undefined;
+  private mediaBackpressure: {
+    sink: EventSink;
+    frameId: number;
+    startedAtMs: number;
+    settled: Promise<MediaBackpressureOutcome>;
+    resolve: (outcome: MediaBackpressureOutcome) => void;
+  } | undefined;
   private playbackWaiter: { turnId: string; resolve: () => void } | undefined;
   private lastAckedTurnId: string | undefined;
   private readonly sawDelta = new Set<string>();
@@ -468,6 +494,15 @@ export class GatewaySession {
       clearTimeout(this.graceTimer);
       this.graceTimer = undefined;
     }
+    if (this.sink !== undefined && this.sink !== sink && this.mediaBackpressure?.sink === this.sink) {
+      const pressure = this.mediaBackpressure;
+      this.mediaBackpressure = undefined;
+      pressure.resolve("detached");
+      this.reportBackpressuredFrameDiscarded(pressure, "detached");
+      // A second attach supersedes the old route. Do not let bytes already accepted by
+      // Bun on that route arrive as stale speech in the old tab after the new one resumes.
+      pressure.sink.terminate?.();
+    }
     this.sink = sink;
     // The reconnect contract: the client resynchronizes from a snapshot rather than
     // replaying history, so the snapshot is pushed rather than waited for.
@@ -479,8 +514,13 @@ export class GatewaySession {
     // object referenced for 30s per start/stop/close cycle (adversarial review 2026-07-19).
     if (this.stopped) return;
     if (this.sink !== sink) return;
-    if (this.mediaBackpressure?.sink === sink) this.mediaBackpressure = undefined;
     this.sink = undefined;
+    if (this.mediaBackpressure?.sink === sink) {
+      const pressure = this.mediaBackpressure;
+      this.mediaBackpressure = undefined;
+      pressure.resolve("detached");
+      this.reportBackpressuredFrameDiscarded(pressure, "detached");
+    }
     const grace = this.options.reconnectGraceMs ?? 30_000;
     this.graceTimer = setTimeout(() => { this.stop(); }, grace);
   }
@@ -571,18 +611,90 @@ export class GatewaySession {
 
   /** Bun calls this after a backpressured socket becomes writable again. */
   socketDrained(sink: EventSink): void {
-    if (!this.mediaTelemetry || this.sink !== sink) return;
+    if (this.sink !== sink) return;
     const backpressure = this.mediaBackpressure;
     if (backpressure === undefined || backpressure.sink !== sink) return;
     const drainedAtMs = monotonicEpochMs();
     this.mediaBackpressure = undefined;
+    backpressure.resolve("drained");
+    if (this.mediaTelemetry) {
+      this.emit({
+        type: "media.socket.drain",
+        startedAtMs: backpressure.startedAtMs,
+        drainedAtMs,
+        durationMs: Math.max(0, drainedAtMs - backpressure.startedAtMs),
+        highWaterBytes: this.mediaHighWaterBytes,
+      });
+    }
+  }
+
+  private beginMediaBackpressure(sink: EventSink, frameId: number, startedAtMs: number): void {
+    if (this.mediaBackpressure?.sink === sink) return;
+    // A replaced sink cannot drain the previous socket. Wake its waiter so it observes the
+    // route change instead of inheriting pressure from a dead connection.
+    this.mediaBackpressure?.resolve("detached");
+    let resolve = (_outcome: MediaBackpressureOutcome): void => {};
+    const settled = new Promise<MediaBackpressureOutcome>(done => { resolve = done; });
+    this.mediaBackpressure = { sink, frameId, startedAtMs, settled, resolve };
+  }
+
+  private reportBackpressuredFrameDiscarded(
+    pressure: NonNullable<GatewaySession["mediaBackpressure"]>,
+    reason: "network_congested" | "detached",
+  ): void {
+    if (!this.mediaTelemetry) return;
     this.emit({
-      type: "media.socket.drain",
-      startedAtMs: backpressure.startedAtMs,
-      drainedAtMs,
-      durationMs: Math.max(0, drainedAtMs - backpressure.startedAtMs),
+      type: "media.socket",
+      frameId: pressure.frameId,
+      submittedAtMs: pressure.startedAtMs,
       highWaterBytes: this.mediaHighWaterBytes,
+      queuedBytes: 0,
+      queuedAudioMs: 0,
+      backpressured: false,
+      dropped: true,
+      discardReason: reason,
     });
+  }
+
+  private async waitForMediaWritable(cancelled: Promise<void>): Promise<boolean> {
+    while (true) {
+      const pressure = this.mediaBackpressure;
+      if (pressure === undefined) return true;
+      const timeoutMs = this.options.mediaBackpressureTimeoutMs ?? defaultMediaBackpressureTimeoutMs;
+      const remainingMs = Math.max(0, timeoutMs - (monotonicEpochMs() - pressure.startedAtMs));
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const outcome = await Promise.race([
+        pressure.settled,
+        cancelled.then(() => "cancelled" as const),
+        new Promise<"timeout">(resolve => { timer = setTimeout(() => resolve("timeout"), remainingMs); }),
+      ]);
+      if (timer !== undefined) clearTimeout(timer);
+      if (outcome === "cancelled") return false;
+      if (outcome === "detached") {
+        throw new MediaTransportError(
+          "media_disconnected",
+          "detached",
+          "media endpoint detached while an outbound PCM frame was backpressured",
+        );
+      }
+      if (outcome === "timeout") {
+        if (this.mediaBackpressure === pressure) {
+          this.mediaBackpressure = undefined;
+          pressure.resolve("timeout");
+          this.reportBackpressuredFrameDiscarded(pressure, "network_congested");
+          // Bun already accepted the backpressured frame. An abrupt close is the only way
+          // to prevent that stale audio from arriving after this rendition is aborted.
+          pressure.sink.terminate?.();
+        }
+        throw new MediaTransportError(
+          "network_congested",
+          "network_congested",
+          `media socket stayed backpressured for ${timeoutMs}ms`,
+        );
+      }
+      // A drain, detach, or socket replacement may expose another pressure episode. Check
+      // again before handing the caller permission to feed the ordered TCP connection.
+    }
   }
 
   emit(payload: GatewayEventPayload, beforeSocketSend?: (event: GatewayEvent) => void): void {
@@ -633,6 +745,11 @@ export class GatewaySession {
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
+    if (this.mediaBackpressure !== undefined) {
+      const pressure = this.mediaBackpressure;
+      this.mediaBackpressure = undefined;
+      pressure.resolve("cancelled");
+    }
     if (this.graceTimer !== undefined) {
       clearTimeout(this.graceTimer);
       this.graceTimer = undefined;
@@ -660,10 +777,34 @@ export class GatewaySession {
   }
 
   private createPlayer(turnId: string, revision: number): ConversationPlayer {
-    let announcedRate: number | undefined;
+    type QueuedFrame = {
+      frameId: number;
+      samples: Float32Array;
+      sampleRate: number;
+      audioMs: number;
+    };
+    const queue: QueuedFrame[] = [];
+    const capacityWaiters = new Set<() => void>();
+    let submittedRate: number | undefined;
+    let queuedMs = 0;
+    let queuedBytes = 0;
     let sentMs = 0;
     let sentFrames = 0;
+    let staleFramesDiscarded = 0;
     let renditionReported = false;
+    let playbackTerminated = false;
+    let pumping: Promise<void> | undefined;
+    let failure: Error | undefined;
+    let aborted = false;
+    let closed = false;
+    let cancelWriter = (): void => {};
+    const cancelled = new Promise<void>(resolve => { cancelWriter = resolve; });
+
+    const wakeCapacity = (): void => {
+      for (const wake of capacityWaiters) wake();
+      capacityWaiters.clear();
+    };
+
     const reportRendition = (status: "completed" | "interrupted"): void => {
       if (!this.mediaTelemetry || renditionReported) return;
       renditionReported = true;
@@ -674,62 +815,166 @@ export class GatewaySession {
         status,
         frames: sentFrames,
         audioMs: sentMs,
-        // Protocol v1 has no post-enqueue media queue. Phase 1 will increment this when
-        // it adds bounded queued pieces and discards a superseded rendition.
-        staleFramesDiscarded: 0,
+        staleFramesDiscarded,
         endedAtMs: monotonicEpochMs(),
       });
     };
-    return {
-      write: async audio => {
-        const producedAtMs = monotonicEpochMs();
-        if (audio.sampleRate !== announcedRate) {
-          announcedRate = audio.sampleRate;
-          this.emit({ type: "playback.format", turnId, revision, sampleRate: audio.sampleRate });
+
+    const dropQueued = (reason: "stale_rendition" | "network_congested" | "detached"): void => {
+      const dropped = queue.splice(0);
+      if (dropped.length === 0) return;
+      if (reason === "stale_rendition") staleFramesDiscarded += dropped.length;
+      queuedMs = 0;
+      queuedBytes = 0;
+      wakeCapacity();
+      if (!this.mediaTelemetry) return;
+      const discardedAtMs = monotonicEpochMs();
+      for (const frame of dropped) {
+        this.emit({
+          type: "media.socket",
+          frameId: frame.frameId,
+          submittedAtMs: discardedAtMs,
+          highWaterBytes: this.mediaHighWaterBytes,
+          queuedBytes: 0,
+          queuedAudioMs: 0,
+          backpressured: false,
+          dropped: true,
+          discardReason: reason,
+        });
+      }
+    };
+
+    const failTransport = (error: unknown): void => {
+      if (failure !== undefined || aborted) return;
+      const transport = error instanceof MediaTransportError
+        ? error
+        : new MediaTransportError("network_congested", "network_congested", error instanceof Error ? error.message : String(error));
+      failure = transport;
+      this.emit({
+        type: "error",
+        code: transport.code,
+        message: failure.message,
+        recoverable: true,
+        turnId,
+      });
+      wakeCapacity();
+      // Make the shared conversation loop treat the transport failure as an interrupted
+      // rendition, not add a second generic turn_failed event.
+      this.duplex.interrupt("cancel");
+    };
+
+    const pump = async (): Promise<void> => {
+      while (!aborted && queue.length > 0) {
+        // The no-pressure fast path must stay synchronous: yielding here lets write() fill
+        // the whole 1s ceiling before the first 240ms frame reaches the socket.
+        if (this.mediaBackpressure !== undefined
+          && (!(await this.waitForMediaWritable(cancelled)) || aborted)) return;
+        const frame = queue[0] as QueuedFrame;
+        if (frame.sampleRate !== submittedRate) {
+          submittedRate = frame.sampleRate;
+          this.emit({ type: "playback.format", turnId, revision, sampleRate: frame.sampleRate });
         }
-        sentMs += audio.samples.length * 1_000 / audio.sampleRate;
-        sentFrames += 1;
-        const bytes = new Uint8Array(audio.samples.buffer, audio.samples.byteOffset, audio.samples.byteLength);
-        const frameId = ++this.mediaFrameSequence;
-        if (this.mediaTelemetry) {
-          this.emit({
-            type: "media.frame",
-            frameId,
-            turnId,
-            revision,
-            codec: "pcm_f32le",
-            sampleRate: audio.sampleRate,
-            channels: 1,
-            bytes: bytes.byteLength,
-            audioMs: audio.samples.length * 1_000 / audio.sampleRate,
-            producedAtMs,
-            enqueuedAtMs: monotonicEpochMs(),
-          });
-        }
+        const bytes = new Uint8Array(frame.samples.buffer, frame.samples.byteOffset, frame.samples.byteLength);
         const submittedAtMs = monotonicEpochMs();
         const sink = this.sink;
         const observation = sink?.send(bytes);
+        const sendResult = observation?.sendResult;
+        const bufferedBytes = observation?.bufferedBytes;
+        if (bufferedBytes !== undefined) this.mediaHighWaterBytes = Math.max(this.mediaHighWaterBytes, bufferedBytes);
+        const backpressured = sendResult === -1;
+        if (backpressured && sink !== undefined) this.beginMediaBackpressure(sink, frame.frameId, submittedAtMs);
+        const dropped = sink === undefined || sendResult === 0;
+        queue.shift();
+        queuedMs = Math.max(0, queuedMs - frame.audioMs);
+        queuedBytes = Math.max(0, queuedBytes - bytes.byteLength);
+        wakeCapacity();
         if (this.mediaTelemetry) {
-          const sendResult = observation?.sendResult;
-          const bufferedBytes = observation?.bufferedBytes;
-          if (bufferedBytes !== undefined) this.mediaHighWaterBytes = Math.max(this.mediaHighWaterBytes, bufferedBytes);
-          const backpressured = sendResult === -1;
-          if (backpressured && sink !== undefined
-            && (this.mediaBackpressure === undefined || this.mediaBackpressure.sink !== sink)) {
-            this.mediaBackpressure = { sink, startedAtMs: submittedAtMs };
-          }
           this.emit({
             type: "media.socket",
-            frameId,
+            frameId: frame.frameId,
             submittedAtMs,
             ...(sendResult === undefined ? {} : { sendResult }),
             ...(bufferedBytes === undefined ? {} : { bufferedBytes }),
             highWaterBytes: this.mediaHighWaterBytes,
+            queuedBytes,
+            queuedAudioMs: queuedMs,
             backpressured,
-            // No attached endpoint is an actual local drop: reconnect snapshots do not
-            // replay binary media produced during the gap.
-            dropped: sink === undefined || sendResult === 0,
+            dropped,
+            ...(dropped ? { discardReason: sink === undefined ? "detached" as const : "network_congested" as const } : {}),
           });
+        }
+        if (dropped) throw sink === undefined
+          ? new MediaTransportError("media_disconnected", "detached", "media endpoint detached before queued audio could be submitted")
+          : new MediaTransportError("network_congested", "network_congested", "media socket dropped an outbound PCM frame");
+        // Keep the pump alive even when this was the last application-queued frame. The
+        // congestion deadline belongs to the socket episode, not to a future TTS write or
+        // close(), which may arrive several seconds later.
+        if (backpressured && (!(await this.waitForMediaWritable(cancelled)) || aborted)) return;
+      }
+    };
+
+    const ensurePump = (): void => {
+      if (pumping !== undefined || aborted || failure !== undefined || queue.length === 0) return;
+      pumping = pump()
+        .catch(error => { failTransport(error); })
+        .finally(() => {
+          pumping = undefined;
+          wakeCapacity();
+          if (queue.length > 0 && !aborted && failure === undefined) ensurePump();
+        });
+    };
+
+    const waitForCapacity = async (audioMs: number): Promise<boolean> => {
+      while (!aborted && failure === undefined && queuedMs + audioMs > maxQueuedOutputMs + 0.001) {
+        ensurePump();
+        let wake = (): void => {};
+        const available = new Promise<void>(resolve => { wake = resolve; });
+        capacityWaiters.add(wake);
+        await Promise.race([available, cancelled]);
+        capacityWaiters.delete(wake);
+      }
+      if (failure !== undefined) throw failure;
+      return !aborted;
+    };
+
+    return {
+      write: async audio => {
+        if (closed) throw new Error("cannot write after the media rendition closed");
+        if (failure !== undefined) throw failure;
+        if (aborted || audio.samples.length === 0) return;
+        if (!Number.isFinite(audio.sampleRate) || audio.sampleRate < 1) {
+          throw new TypeError("PCM sample rate must be a positive finite number");
+        }
+        const producedAtMs = monotonicEpochMs();
+        const frameSamples = Math.max(1, Math.floor(audio.sampleRate * legacyPcmFrameMs / 1_000));
+        for (let offset = 0; offset < audio.samples.length; offset += frameSamples) {
+          const end = Math.min(audio.samples.length, offset + frameSamples);
+          const audioMs = (end - offset) * 1_000 / audio.sampleRate;
+          if (!(await waitForCapacity(audioMs))) return;
+          const samples = audio.samples.slice(offset, end);
+          const frameId = ++this.mediaFrameSequence;
+          const frame: QueuedFrame = { frameId, samples, sampleRate: audio.sampleRate, audioMs };
+          queue.push(frame);
+          queuedMs += audioMs;
+          queuedBytes += samples.byteLength;
+          sentMs += audioMs;
+          sentFrames += 1;
+          if (this.mediaTelemetry) {
+            this.emit({
+              type: "media.frame",
+              frameId,
+              turnId,
+              revision,
+              codec: "pcm_f32le",
+              sampleRate: audio.sampleRate,
+              channels: 1,
+              bytes: samples.byteLength,
+              audioMs,
+              producedAtMs,
+              enqueuedAtMs: monotonicEpochMs(),
+            });
+          }
+          ensurePump();
         }
       },
       // The gateway cannot hear the client's speaker, so the audible clock belongs to the
@@ -738,6 +983,18 @@ export class GatewaySession {
       // silent client cannot wedge the session. Without it, close resolves when the last
       // piece has been sent.
       close: async () => {
+        closed = true;
+        ensurePump();
+        while (pumping !== undefined) await pumping;
+        if (failure !== undefined) throw failure;
+        if (aborted) return;
+        try {
+          if (!(await this.waitForMediaWritable(cancelled))) return;
+        } catch (error) {
+          failTransport(error);
+          throw failure ?? error;
+        }
+        if (failure !== undefined || aborted) return;
         reportRendition("completed");
         this.emit({ type: "playback.ended", turnId });
         if (!this.playbackAck || this.stopped) return;
@@ -755,6 +1012,13 @@ export class GatewaySession {
         if (this.playbackWaiter?.turnId === turnId) this.playbackWaiter = undefined;
       },
       abort: async () => {
+        if (playbackTerminated) return;
+        playbackTerminated = true;
+        aborted = true;
+        cancelWriter();
+        dropQueued(failure instanceof MediaTransportError ? failure.discardReason
+          : failure === undefined ? "stale_rendition" : "network_congested");
+        if (pumping !== undefined) await pumping;
         // Interruption or shutdown while waiting for the ack must release the wait: the
         // reply is dead either way.
         if (this.playbackWaiter?.turnId === turnId) {
