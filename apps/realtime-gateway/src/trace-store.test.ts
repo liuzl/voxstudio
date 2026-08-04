@@ -70,16 +70,21 @@ describe("ConversationTraceStore", () => {
   test("retains content only under the independent content policy", async () => {
     const dir = await root();
     const store = new ConversationTraceStore(dir, { retainContent: true });
-    store.begin("owner", "session-2", { agentId: "draft", source: "draft", revision: 7 }, 10);
-    store.append("owner", event("session-2", 1, {
-      type: "response.text.final", turnId: "turn-1", revision: 0, text: "retained reply",
-    }));
-    store.finish("owner", "session-2", 20);
-    expect(store.get("owner", "draft", "session-2")?.events[0]).toMatchObject({ text: "retained reply" });
-    expect(store.policy).toMatchObject({ enabled: true, content: true, audio: false });
-    expect((await stat(dir)).mode & 0o777).toBe(0o700);
-    expect((await stat(join(dir, "traces.db"))).mode & 0o777).toBe(0o600);
-    store.close();
+    try {
+      store.begin("owner", "session-2", { agentId: "draft", source: "draft", revision: 7 }, 10);
+      store.append("owner", event("session-2", 1, {
+        type: "response.text.final", turnId: "turn-1", revision: 0, text: "retained reply",
+      }));
+      store.finish("owner", "session-2", 20);
+      expect(store.get("owner", "draft", "session-2")?.events[0]).toMatchObject({ text: "retained reply" });
+      expect(store.policy).toMatchObject({ enabled: true, content: true, audio: false });
+      if (process.platform !== "win32") {
+        expect((await stat(dir)).mode & 0o777).toBe(0o700);
+        expect((await stat(join(dir, "traces.db"))).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      store.close();
+    }
   });
 
   test("enforces age retention before a stale record can be read", async () => {
