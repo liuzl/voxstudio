@@ -162,15 +162,16 @@ function TurnCard({ turn }: { turn: TurnView }) {
           <div className="rounded-2xl rounded-br-sm bg-ink-800 px-4 py-2.5 text-sm text-ink-300">…</div>
         </div>
       ) : null}
-      {(turn.reply || turn.status === "thinking") && (
+      {(turn.reply || turn.status === "thinking" || turn.status === "failed") && (
         <div className="flex justify-start">
           <div
             className={`max-w-[85%] rounded-2xl rounded-bl-sm bg-ink-800 px-4 py-2.5 text-sm leading-relaxed md:max-w-[75%] ${
-              turn.status === "interrupted" ? "opacity-60" : ""
+              turn.status === "interrupted" ? "opacity-60" : turn.status === "failed" ? "ring-1 ring-red-500/30" : ""
             }`}
           >
-            {turn.reply || <ThinkingBubble turn={turn} />}
+            {turn.reply || (turn.status === "failed" ? null : <ThinkingBubble turn={turn} />)}
             {turn.status === "interrupted" && <span className="ml-2 text-xs text-amber-300">{t("（被打断）")}</span>}
+            {turn.status === "failed" && <span className="ml-2 text-xs text-red-300" title={turn.failure}>({t("失败")})</span>}
           </div>
         </div>
       )}

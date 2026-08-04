@@ -11,7 +11,7 @@ export interface TurnView {
   revision: number;
   transcript: string | undefined;
   reply: string;
-  status: "capturing" | "thinking" | "speaking" | "completed" | "interrupted";
+  status: "capturing" | "thinking" | "speaking" | "completed" | "interrupted" | "failed";
   /** Client clock at the last status change — drives the "已等待 Ns" escape hatch. */
   statusAt: number;
   reopens: number;
@@ -20,6 +20,8 @@ export interface TurnView {
   tools: { name: string; detail?: string; ok?: boolean; pending?: boolean }[];
   timing: Record<string, number> | undefined;
   endReason: string | undefined;
+  /** Turn-scoped runtime failure. Kept separate from interruption semantics. */
+  failure: string | undefined;
 }
 
 export interface NoticeView {
@@ -173,6 +175,7 @@ export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sess
         tools: [],
         timing: undefined,
         endReason: undefined,
+        failure: undefined,
       };
       return { turns: [...state.turns, turn].slice(-maxTurns) };
     }
@@ -189,6 +192,7 @@ export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sess
           status: "capturing",
           statusAt: Date.now(),
           reopens: turn.reopens + 1,
+          failure: undefined,
         })),
       };
     case "transcript.final":
@@ -212,7 +216,7 @@ export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sess
       return { turns: updateTurn(state.turns, event.turnId, turn => ({ ...turn, status: "completed", statusAt: Date.now() })) };
     case "turn.interrupted":
       return {
-        turns: updateTurn(state.turns, event.turnId, turn => ({
+        turns: updateTurn(state.turns, event.turnId, turn => turn.status === "failed" ? turn : ({
           ...turn,
           status: "interrupted",
           statusAt: Date.now(),
@@ -266,13 +270,26 @@ export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sess
         turns: updateTurn(state.turns, event.turnId, turn => ({
           ...turn,
           timing: { ...event.offsetsMs } as Record<string, number>,
-          endReason: event.endReason,
+          // A runtime failure is followed by the kernel's ordinary cancel timing event.
+          // Preserve the causal error instead of relabelling it as a user cancellation.
+          endReason: turn.status === "failed" ? turn.endReason : event.endReason,
         })),
       };
     case "session.notice":
       return withNotice("info", event.message);
     case "error":
-      return withNotice("error", `${event.code}: ${event.message}`);
+      return {
+        ...withNotice("error", `${event.code}: ${event.message}`),
+        ...(event.turnId === undefined ? {} : {
+          turns: updateTurn(state.turns, event.turnId, turn => ({
+            ...turn,
+            status: "failed",
+            statusAt: Date.now(),
+            endReason: "error",
+            failure: `${event.code}: ${event.message}`,
+          })),
+        }),
+      };
     case "command.rejected":
       return event.reason === "stale_turn" ? {} : withNotice("error", `command rejected: ${event.reason}`);
     default:
