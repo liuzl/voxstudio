@@ -153,7 +153,7 @@ export async function runSay(
       ...(options.timesteps === undefined ? {} : { timesteps: options.timesteps }),
       ...(options.seed === undefined ? {} : { seed: options.seed }),
       ...(promptPrefix === undefined ? {} : { promptPrefix }),
-      ...(effectiveVoice === "clone" || effectiveVoice === "design"
+      ...(!effectiveVoice || effectiveVoice === "clone" || effectiveVoice === "design"
         ? {}
         : { prosodyPrompt: true }),
       continuationId: crypto.randomUUID(),

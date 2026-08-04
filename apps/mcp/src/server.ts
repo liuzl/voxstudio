@@ -61,7 +61,7 @@ export function createAgentVoiceServer(config: VoxConfig, options: AgentVoiceOpt
           chunking: config.chunking,
           ttsDefaults: config.ttsDefaults,
           voice: requested,
-          ...(requested === "clone" || requested === "design" ? {} : { prosodyPrompt: true }),
+          ...(!requested || requested === "clone" || requested === "design" ? {} : { prosodyPrompt: true }),
           continuationId: crypto.randomUUID(),
         })) {
           firstAudioMs ??= Math.round(performance.now() - started);
@@ -153,7 +153,7 @@ export function createAgentVoiceServer(config: VoxConfig, options: AgentVoiceOpt
         chunking: config.chunking,
         ttsDefaults: config.ttsDefaults,
         voice: requested,
-        ...(requested === "clone" || requested === "design" ? {} : { prosodyPrompt: true }),
+        ...(!requested || requested === "clone" || requested === "design" ? {} : { prosodyPrompt: true }),
         continuationId: crypto.randomUUID(),
       });
       const path = output_path ?? `take-${new Date().toISOString().replace(/[:.]/g, "-")}.wav`;

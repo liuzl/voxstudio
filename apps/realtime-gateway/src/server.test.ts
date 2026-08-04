@@ -1227,7 +1227,7 @@ describe("voice namespace enforcement on every synthesis path (adversarial revie
     expect(bodies).toHaveLength(2);
   });
 
-  test("an account's realtime default stays engine-owned instead of entering the user's namespace", async () => {
+  test("an omitted realtime default stays omitted instead of becoming a magic or namespaced voice id", async () => {
     const bodies: { voice?: string }[] = [];
     gateway = startGateway({
       config,
@@ -1255,7 +1255,8 @@ describe("voice namespace enforcement on every synthesis path (adversarial revie
     client.sendPcm(2, 0);
     await client.until(events => events.some(event => event.type === "turn.completed"), "turn");
     expect(bodies.length).toBeGreaterThan(1);
-    expect(bodies.every(body => body.voice === config.ttsDefaults.voice)).toBe(true);
+    expect(config.ttsDefaults.voice).toBe("");
+    expect(bodies.every(body => body.voice === undefined)).toBe(true);
     client.close();
   });
 

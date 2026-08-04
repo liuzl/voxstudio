@@ -1537,7 +1537,8 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
           ) : turns.map(turn => (
             <div key={turn.id} className="space-y-2.5">
               {turn.transcript && <div className="ml-auto w-fit max-w-[86%] rounded-2xl rounded-br-md bg-ink px-3.5 py-2 text-[11px] leading-5 text-on-ink">{turn.transcript}</div>}
-              {(turn.reply || turn.status === "failed") && <div className={`w-fit max-w-[92%] rounded-2xl rounded-bl-md bg-canvas px-3.5 py-2.5 text-[11px] leading-[1.65] text-fg ring-1 ${turn.status === "interrupted" ? "opacity-60 ring-edge-faint" : turn.status === "failed" ? "ring-red-300/60" : "ring-edge-faint"}`}>{turn.reply}{turn.status === "failed" && <span className="ml-1.5 text-[10px] text-red-500" title={turn.failure}>({t("失败")})</span>}</div>}
+              {turn.reply && <div className={`w-fit max-w-[92%] rounded-2xl rounded-bl-md bg-canvas px-3.5 py-2.5 text-[11px] leading-[1.65] text-fg ring-1 ${turn.status === "interrupted" ? "opacity-60 ring-edge-faint" : turn.status === "failed" ? "ring-red-300/60" : "ring-edge-faint"}`}>{turn.reply}</div>}
+              {turn.status === "failed" && <div role="alert" className="flex max-w-[92%] items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-[10px] leading-5 text-red-700 dark:border-red-500/25 dark:bg-red-500/10 dark:text-red-300"><AlertTriangle className="mt-0.5 size-3 shrink-0" /><span>{turn.failure ?? t("失败")}</span></div>}
             </div>
           ))}
         </div>

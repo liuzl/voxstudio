@@ -42,7 +42,9 @@ engines:
                                   # truncate the model's reasoning leaves content empty
 
 tts_defaults:
-  voice: clone                    # clone | design | <registered voice id>
+  # Empty delegates to the selected engine's native default. For a stable production
+  # persona, set a registered voice id that exists on that engine.
+  voice: ""
   cfg_value: 2.0
   timesteps: 10
   response_format: wav

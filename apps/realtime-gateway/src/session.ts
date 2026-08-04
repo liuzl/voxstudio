@@ -53,8 +53,8 @@ export interface GatewaySessionOptions {
   mapVoiceId?: (displayName: string) => string | null;
   /**
    * Deployment-owned voice that account sessions may use without a user namespace.
-   * This is the configured `tts_defaults.voice`, not an omitted engine voice: some
-   * engines interpret omission as reference-less design mode and re-roll every request.
+   * When `tts_defaults.voice` is empty this stays absent and the selected engine applies
+   * its own native default; a configured registered id remains shared deployment state.
    */
   deploymentDefaultVoice?: string;
   /** Resolved Agent behavior for overlays that are not direct realtime wire fields. */

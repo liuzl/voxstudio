@@ -99,7 +99,7 @@ async function completeChat(
       chunking: config.chunking,
       ttsDefaults: config.ttsDefaults,
       voice,
-      ...(voice === "clone" || voice === "design" ? {} : { prosodyPrompt: true }),
+      ...(!voice || voice === "clone" || voice === "design" ? {} : { prosodyPrompt: true }),
       continuationId: crypto.randomUUID(),
     };
     if (options.play) {

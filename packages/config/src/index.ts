@@ -19,7 +19,10 @@ const defaultEngines: Record<string, ResolvedEngineConfig> = {
 };
 
 const defaultTts: TtsDefaults = {
-  voice: "clone",
+  // There is no cross-engine magic voice id: Python VoxCPM historically treats
+  // `clone` as its bundled reference, while the C++ server treats it as an ordinary
+  // registered id. Omission is the only portable way to ask for the engine default.
+  voice: "",
   cfgValue: 2,
   timesteps: 10,
   responseFormat: "wav",

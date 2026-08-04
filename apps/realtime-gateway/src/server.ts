@@ -709,7 +709,8 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // A deployment default such as `laok` is shared engine configuration, not a
       // user-created voice. Keep that exact registered voice for account holders instead
       // of rewriting it to `u<owner>.laok`; omission would put VoxCPM in design mode.
-      ...(owner === OWNER_USER_ID ? {} : { deploymentDefaultVoice: options.config.ttsDefaults.voice }),
+      ...(owner === OWNER_USER_ID || !options.config.ttsDefaults.voice
+        ? {} : { deploymentDefaultVoice: options.config.ttsDefaults.voice }),
       ...(agentSpec === undefined ? {} : { agentSpec }),
       // A conversation is metered per turn: one charge at start bought the session, and
       // each turn's model work costs one more (adversarial review 2026-07-26 — a single
