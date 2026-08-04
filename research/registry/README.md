@@ -1,6 +1,6 @@
 # Research registry
 
-Status: initial historical backfill, 2026-07-30; last updated 2026-08-02. This
+Status: initial historical backfill, 2026-07-30; last updated 2026-08-04. This
 registry is incomplete by design: it records only investigations for which the
 repository contains substantive evidence or for which a new measured summary
 was produced during the current research session. A project being mentioned
@@ -141,6 +141,7 @@ judgment about a project.
 | Multi-engine registry and explicit route selection | E5 | adopted | Separates engine instances, role defaults, capability routing, and explicit user choice. Invalid explicit selections fail rather than silently falling back. | [`engine-registry.md`](../../docs/engine-registry.md), [`technical-report.md`](../../docs/technical-report.md) |
 | Long-text TTS chunking and continuation | E4 | adopted | Uses predicted speech duration, language-aware seams, bounded chunk size, trimmed edges, loudness matching, and continuation state. Measurements explicitly account for stochastic duration and timbre drift. | [`chunking.md`](../../docs/chunking.md), [`tools/README.md`](../../tools/README.md) |
 | StreamCore Server as a WebRTC/WHIP media-edge reference | E1 | candidate | Source and implementation survey found a useful Pion/WHIP/RTP/Opus reference for browser media ingress. The upstream project family also reports telephony and embedded clients, but those paths were not reproduced. It is a candidate for a controlled, independently implemented Vox-owned transport-adapter experiment, not a replacement for Vox turn policy or engine orchestration. Direct interoperability needs adapters, and the surveyed revision has no session resume, horizontal scaling, metrics export, or Go tests. | [`2026-08-01-streamcore-server-survey.md`](../reports/2026-08-01-streamcore-server-survey.md), [pinned upstream](https://github.com/streamcoreai/streamcore-server/tree/a5cac73895ebcf61dd1ec5f91671d6c189c61b8a) |
+| Managed WebRTC media provider baseline | E1 | candidate | Official architecture, deployment, quota, and pricing sources support LiveKit Cloud Build as the first remote-device gate and self-hosted LiveKit as the private deployment candidate. Cloudflare RealtimeKit/SFU, Daily, and Twilio remain alternatives. No provider has yet passed the Vox server-media, interruption, playback-clock, iPhone, or cost-reconciliation gates. | [`2026-08-04-realtime-media-provider-evaluation.md`](../reports/2026-08-04-realtime-media-provider-evaluation.md), [`realtime-media-transport.md`](../../docs/realtime-media-transport.md) |
 
 ## Trust, safety, and governance
 

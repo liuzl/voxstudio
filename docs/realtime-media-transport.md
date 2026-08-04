@@ -9,7 +9,9 @@ contract. It refines the transport portion of
 authoritative for endpoint ownership, AEC, turns, cancellation, and playback
 acknowledgement. This document owns wire codecs, packetization, browser rendering,
 network backpressure, media telemetry, and the migration from the current browser
-WebSocket path to WebRTC/LiveKit.
+WebSocket path to WebRTC/LiveKit. Hosting/vendor selection, dated pricing, and
+deployment economics live in
+[the dated provider evaluation](../research/reports/2026-08-04-realtime-media-provider-evaluation.md).
 
 ## Executive decision
 
@@ -25,6 +27,12 @@ conversation-session contracts:
 3. **The current float32-PCM WebSocket path is legacy compatibility, not the remote
    architecture.** Before Media v2 lands, it receives only a bounded-chunk and
    backpressure hardening pass.
+
+“LiveKit” here names the initial room/media adapter contract, not a permanent mandate
+to buy LiveKit Cloud. The first device gate uses LiveKit Cloud Build; private
+deployments use self-hosted LiveKit; alternatives must pass the same endpoint contract
+before replacing either. The dated provider decision and cost model are recorded in
+[the provider evaluation](../research/reports/2026-08-04-realtime-media-provider-evaluation.md).
 
 Increasing the fixed playback cushion is not the solution. It can conceal one network
 profile by adding conversational delay, but it does not reduce bandwidth, TCP
@@ -179,6 +187,27 @@ loss. It provides no head-of-line benefit inside a reliable ordered WebSocket.
 Room credentials are short-lived and owner/session scoped. The client may join only
 the intended room with the required publish/subscribe permissions. Engine addresses,
 service credentials, and long-lived API keys never enter the browser.
+
+### Deployment profiles and billing boundary
+
+| Product/deployment context | Default media path |
+|---|---|
+| local CLI or loopback Studio | native IPC or WebSocket Media v2; no RTC service |
+| remote/mobile development gate | LiveKit Cloud Build |
+| private/on-premises deployment | single-node self-hosted LiveKit initially |
+| Portal initial production | LiveKit Cloud, after privacy and cost approval |
+| high-volume optimization | re-evaluate self-hosting and Cloudflare after measured triggers |
+
+In the managed baseline, VoxStudio runs its Agent adapter and every inference engine
+itself. LiveKit Cloud supplies room, WebRTC media/data, SFU/TURN, and transport
+statistics only. That consumes WebRTC participant minutes and downstream transfer; it
+does not inherently consume LiveKit-hosted Agent sessions, LiveKit Inference,
+observability recordings, telephony, or egress. Those products require separate,
+deliberate decisions.
+
+Prices and quotas are deliberately excluded here because they change. The current
+snapshot, calculation assumptions, provider comparison, and reconsideration triggers
+live in the provider evaluation document.
 
 ### 2. WebSocket Media v2 is a first-class local fallback
 
@@ -357,6 +386,11 @@ does not enable transcript, microphone, or Agent-audio retention; see
 
 ## Delivery plan
 
+Phase 0 is the prerequisite for every media change, and Phase 1 is the immediate
+compatibility hardening. Phase 2 and Phase 3A are independent branches rather than a
+strict sequence: prioritize Phase 3A for remote/mobile product use, and Phase 2 for
+single-binary/local transport. Neither branch waits for the other to finish.
+
 ### Phase 0 — Observability
 
 Deliver the telemetry above for the existing protocol, including ordinary
@@ -391,18 +425,44 @@ solve the 1.536 Mbps downlink.
 Gate: all required browsers complete the shaped-network matrix below, and a v1 client
 still receives an explicit compatible response rather than malformed media.
 
-### Phase 3 — LiveKit/WebRTC remote adapter
+### Phase 3A — LiveKit Cloud remote adapter and device gate
 
 - map authenticated LiveKit rooms and media tracks to `DuplexAudioEndpoint`;
 - map captions, lifecycle, tools, interruption, and playback state to data messages;
 - issue short-lived, least-privilege room tokens;
-- make remote/mobile Studio choose LiveKit by deployment capability;
+- connect the self-hosted VoxStudio adapter to LiveKit Cloud Build; do not deploy
+  Agent inference or enable provider observability/recording;
+- make remote/mobile Studio choose WebRTC by deployment capability;
 - retain Media v2 as local/self-hosted fallback;
 - expose WebRTC media statistics in the same trace timeline.
 
 Gate: remote/mobile WebRTC passes audio continuity, double-talk, interruption, route
 change, reconnect, and authorization tests without changing the shared conversation
-loop.
+loop. The test project also reconciles billed participant minutes and downstream bytes
+with trace measurements.
+
+### Phase 3B — Self-hosted LiveKit deployment gate
+
+- deploy one Linux node using the official VM/Docker Compose/Caddy shape;
+- validate trusted TLS, UDP media, TCP fallback, embedded TURN, advertised candidates,
+  firewall rules, metrics, upgrades, backup, and restart behavior;
+- switch the Phase 3A browser and adapter by URL/credentials only;
+- run public-network and private/Tailnet route matrices independently;
+- document the privacy boundary and operator responsibilities.
+
+Gate: the Phase 3A functional suite passes without conversation-loop changes, and the
+node survives restart, route fallback, certificate renewal, and the declared
+concurrency soak. Kubernetes and multi-region operation remain out of scope.
+
+### Phase 3C — Alternative-provider spike, conditional
+
+Run Cloudflare RealtimeKit or Realtime SFU only when a provider-evaluation revisit
+trigger fires. The spike must prove server-side raw audio, immediate stale-playback
+flush, reliable control/data mapping, iPhone behavior, telemetry, identity, and total
+engineering cost against the LiveKit baseline.
+
+Gate: the candidate passes the same endpoint and acceptance contracts without provider
+types entering `DuplexSession`. Lower list price alone is not a passing result.
 
 ## Acceptance matrix
 
@@ -486,6 +546,8 @@ These are resolved by Phase 0 measurements and targeted prototypes, not assumpti
 5. Whether the local browser should prefer Media v2 even when a co-located LiveKit
    service exists; the default should minimize deployment cost until measurement shows
    an experience benefit.
+6. Whether Portal's approved production profile is LiveKit Cloud, self-hosted LiveKit,
+   or a later provider that has passed the same behavioral gate.
 
 ## Standards and primary references
 
@@ -506,3 +568,4 @@ These are resolved by Phase 0 measurements and targeted prototypes, not assumpti
 - [W3C WebTransport](https://www.w3.org/TR/webtransport/)
 - [LiveKit media and data for frontends](https://docs.livekit.io/frontends/build/media-data/)
 - [LiveKit media transport overview](https://docs.livekit.io/transport/media/)
+- [Dated media-provider and cost evaluation](../research/reports/2026-08-04-realtime-media-provider-evaluation.md)

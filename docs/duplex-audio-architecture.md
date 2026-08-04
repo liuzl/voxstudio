@@ -6,7 +6,9 @@ realtime, the OpenAI Realtime dialect ([openai-realtime-adapter.md](./openai-rea
 and the first-chunk clause fast path (§Turn timing). LiveKit remote transport stays
 planned. The codec, packetization, buffering, backpressure, and remote-transport
 migration plan is specified in
-[realtime-media-transport.md](./realtime-media-transport.md).
+[realtime-media-transport.md](./realtime-media-transport.md); deployment/provider
+research is isolated in the dated
+[media-provider evaluation](../research/reports/2026-08-04-realtime-media-provider-evaluation.md).
 
 ## Scope
 
@@ -184,6 +186,10 @@ The detailed wire-media and migration contract lives in
 endpoint ownership and the selected remote transport; the companion document owns
 codec negotiation, browser rendering, buffering, backpressure, telemetry, phases, and
 network acceptance gates.
+
+Managed versus self-hosted deployment, provider alternatives, and pricing are not
+kernel architecture. Their dated evaluation lives in
+[the media-provider research report](../research/reports/2026-08-04-realtime-media-provider-evaluation.md).
 
 The browser uses LiveKit for authenticated WebRTC media rooms when it connects
 to a remote product service. LiveKit carries continuous microphone and agent
