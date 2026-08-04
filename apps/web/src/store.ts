@@ -62,6 +62,8 @@ interface StudioState {
   conversationAsrEngine: string;
   conversationLlmEngine: string;
   conversationTtsEngine: string;
+  /** Origin-scoped browser microphone id; empty follows Chrome's site default. */
+  micInputDeviceId: string;
   /** Etiquette (docs/conversation-etiquette.md): spoken once at session start when set. */
   welcome: string;
   /** Silence seconds before the one spoken follow-up; 0 disables. */
@@ -80,6 +82,7 @@ interface StudioState {
   setGenerateVoice(voice: string, engine?: string): void;
   setGenerateEngine(engine: string): void;
   setConversationEngine(kind: "asr" | "llm" | "tts", engine: string): void;
+  setMicInputDevice(id: string): void;
   resetConversationEngines(): void;
   addTake(take: TakeView): void;
   removeTake(id: string): void;
@@ -111,6 +114,7 @@ const conversationAsrEngineKey = "voxstudio.route.conversation.asr";
 const conversationLlmEngineKey = "voxstudio.route.conversation.llm";
 const conversationTtsEngineKey = "voxstudio.route.conversation.tts";
 const generateEngineKey = "voxstudio.route.generate.tts";
+const micInputDeviceKey = "voxstudio.audio.inputDevice";
 const storedWelcome = typeof localStorage !== "undefined" ? localStorage.getItem(welcomeKey) ?? "" : "";
 const storedNudge = typeof localStorage !== "undefined" ? Number(localStorage.getItem(nudgeKey)) || 0 : 0;
 const storedStudioTools = typeof localStorage !== "undefined" ? localStorage.getItem(studioToolsKey) === "1" : false;
@@ -118,6 +122,7 @@ const storedConversationAsrEngine = typeof localStorage !== "undefined" ? localS
 const storedConversationLlmEngine = typeof localStorage !== "undefined" ? localStorage.getItem(conversationLlmEngineKey) ?? "" : "";
 const storedConversationTtsEngine = typeof localStorage !== "undefined" ? localStorage.getItem(conversationTtsEngineKey) ?? "" : "";
 const storedGenerateEngine = typeof localStorage !== "undefined" ? localStorage.getItem(generateEngineKey) ?? "" : "";
+const storedMicInputDevice = typeof localStorage !== "undefined" ? localStorage.getItem(micInputDeviceKey) ?? "" : "";
 
 function persist(key: string, value: string): void {
   if (typeof localStorage === "undefined") return;
@@ -290,6 +295,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   conversationAsrEngine: storedConversationAsrEngine,
   conversationLlmEngine: storedConversationLlmEngine,
   conversationTtsEngine: storedConversationTtsEngine,
+  micInputDeviceId: storedMicInputDevice,
   welcome: storedWelcome,
   nudgeAfterSeconds: storedNudge,
   studioTools: storedStudioTools,
@@ -316,6 +322,10 @@ export const useStudio = create<StudioState>((set, get) => ({
     if (kind === "asr") set({ conversationAsrEngine: engine });
     else if (kind === "llm") set({ conversationLlmEngine: engine });
     else set({ conversationTtsEngine: engine, voice: "", voiceEngine: "" });
+  },
+  setMicInputDevice: micInputDeviceId => {
+    persist(micInputDeviceKey, micInputDeviceId);
+    set({ micInputDeviceId });
   },
   resetConversationEngines: () => {
     for (const key of [conversationAsrEngineKey, conversationLlmEngineKey, conversationTtsEngineKey]) persist(key, "");

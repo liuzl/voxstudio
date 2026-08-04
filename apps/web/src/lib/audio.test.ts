@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { PlaybackTimeline } from "./audio";
+import { microphoneConstraints, PlaybackTimeline } from "./audio";
 
 describe("PlaybackTimeline", () => {
   test("schedules gaplessly and reports the audible remainder", () => {
@@ -30,5 +30,29 @@ describe("PlaybackTimeline", () => {
     timeline.reset();
     expect(timeline.remainingSec(0)).toBe(0);
     expect(timeline.schedule(1, 0)).toBeCloseTo(0.05);
+  });
+});
+
+describe("microphoneConstraints", () => {
+  test("requests mono conversation processing without pinning a stale device", () => {
+    expect(microphoneConstraints()).toEqual({
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      channelCount: 1,
+    });
+    expect(microphoneConstraints()).not.toHaveProperty("deviceId");
+    expect(microphoneConstraints(true, "airpods-device")).toMatchObject({
+      deviceId: { exact: "airpods-device" },
+    });
+  });
+
+  test("reference recording can disable browser speech processing", () => {
+    expect(microphoneConstraints(false)).toEqual({
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      channelCount: 1,
+    });
   });
 });

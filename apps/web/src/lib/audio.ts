@@ -3,8 +3,13 @@ export interface EndpointCapability {
   echoCancellation: boolean | undefined;
   noiseSuppression: boolean | undefined;
   autoGainControl: boolean | undefined;
+  deviceId: string | undefined;
+  deviceLabel: string | undefined;
+  trackMuted: boolean;
+  trackState: MediaStreamTrackState | undefined;
   trackSampleRate: number | undefined;
   contextSampleRate: number;
+  recoveries: number;
 }
 
 // The streaming resampler now lives in @voxstudio/audio (the realtime gateway's OpenAI
@@ -82,22 +87,170 @@ export interface MicCaptureOptions {
    * sample wants the microphone's unprocessed signal, not one shaped for telephony.
    */
   processing?: boolean;
+  /** Explicit origin-scoped MediaDeviceInfo id. Empty follows Chrome's site default. */
+  deviceId?: string;
+  /** Follow the OS default input across headset/profile changes. Conversation enables
+   * this; reference recording stays pinned so one sample cannot mix microphones. */
+  autoRecover?: boolean;
+  onCapabilityChange?(capability: EndpointCapability): void;
+  onRecovered?(capability: EndpointCapability, reason: string): void;
+  onRecoveryError?(error: unknown): void;
+}
+
+export function microphoneConstraints(processing = true, deviceId = ""): MediaTrackConstraints {
+  return {
+    echoCancellation: processing,
+    noiseSuppression: processing,
+    autoGainControl: processing,
+    channelCount: 1,
+    ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+  };
+}
+
+export interface AudioInputDevice {
+  id: string;
+  label: string;
+}
+
+/** Enumerate origin-visible microphones. Labels become available after the first grant. */
+export async function listAudioInputDevices(): Promise<AudioInputDevice[]> {
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  let unnamed = 0;
+  return devices
+    .filter(device => device.kind === "audioinput" && device.deviceId !== "default")
+    .map(device => ({
+      id: device.deviceId,
+      label: device.label || `Microphone ${++unnamed}`,
+    }));
 }
 
 export class MicCapture {
   private readonly context: AudioContext;
-  private readonly stream: MediaStream;
-  private readonly node: AudioWorkletNode;
-  private readonly resampler: LinearResampler;
+  private stream: MediaStream;
+  private source: MediaStreamAudioSourceNode;
+  private node: AudioWorkletNode;
+  private resampler: LinearResampler;
+  private readonly onFrame: (samples: Float32Array) => void;
+  private readonly options: MicCaptureOptions;
   private buffered: Float32Array = new Float32Array(0);
   private muted = false;
+  private stopped = false;
+  private recoveries = 0;
+  private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  private recoveryReason = "device change";
+  private recoveryPromise: Promise<void> | undefined;
+  private recoverAgain = false;
+  private routeWatchdog: ReturnType<typeof setTimeout> | undefined;
+  private consecutiveFrameFailures = 0;
 
-  private constructor(context: AudioContext, stream: MediaStream, node: AudioWorkletNode, onFrame: (samples: Float32Array) => void) {
+  private constructor(
+    context: AudioContext,
+    stream: MediaStream,
+    source: MediaStreamAudioSourceNode,
+    node: AudioWorkletNode,
+    onFrame: (samples: Float32Array) => void,
+    options: MicCaptureOptions,
+  ) {
     this.context = context;
     this.stream = stream;
+    this.source = source;
     this.node = node;
+    this.onFrame = onFrame;
+    this.options = options;
     this.resampler = new LinearResampler(context.sampleRate, targetRate);
+    this.attachRoute(node, stream);
+    this.armRouteWatchdog(node);
+    if (options.autoRecover && typeof navigator.mediaDevices.addEventListener === "function") {
+      navigator.mediaDevices.addEventListener("devicechange", this.handleDeviceChange);
+    }
+  }
+
+  static async start(onFrame: (samples: Float32Array) => void, options: MicCaptureOptions = {}): Promise<MicCapture> {
+    const processing = options.processing ?? true;
+    // Acquire the default route before playback opens. On macOS this lets a Bluetooth
+    // headset finish its A2DP -> duplex profile transition before SpeakerOutput captures
+    // the output device and sample rate.
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: microphoneConstraints(processing, options.deviceId),
+    });
+    let context: AudioContext | undefined;
+    try {
+      context = new AudioContext({ sampleRate: targetRate });
+      await context.resume();
+      const workletUrl = URL.createObjectURL(new Blob([captureWorklet], { type: "text/javascript" }));
+      try {
+        await context.audioWorklet.addModule(workletUrl);
+      } finally {
+        URL.revokeObjectURL(workletUrl);
+      }
+      const source = context.createMediaStreamSource(stream);
+      const node = new AudioWorkletNode(context, "vox-capture", { numberOfInputs: 1, numberOfOutputs: 0 });
+      source.connect(node);
+      return new MicCapture(context, stream, source, node, onFrame, options);
+    } catch (error) {
+      for (const track of stream.getTracks()) track.stop();
+      await context?.close().catch(() => {});
+      throw error;
+    }
+  }
+
+  /** The negotiated constraints snapshot the duplex doc requires the endpoint to report. */
+  capability(): EndpointCapability {
+    const track = this.stream.getAudioTracks()[0];
+    const settings = track?.getSettings() ?? {};
+    return {
+      echoCancellation: settings.echoCancellation,
+      noiseSuppression: settings.noiseSuppression,
+      autoGainControl: settings.autoGainControl,
+      deviceId: settings.deviceId,
+      deviceLabel: track?.label || undefined,
+      trackMuted: track?.muted ?? false,
+      trackState: track?.readyState,
+      trackSampleRate: settings.sampleRate,
+      contextSampleRate: this.context.sampleRate,
+      recoveries: this.recoveries,
+    };
+  }
+
+  setMuted(muted: boolean): void {
+    this.muted = muted;
+    for (const track of this.stream.getAudioTracks()) track.enabled = !muted;
+    if (muted && this.routeWatchdog !== undefined) {
+      clearTimeout(this.routeWatchdog);
+      this.routeWatchdog = undefined;
+    } else if (!muted) {
+      this.armRouteWatchdog(this.node);
+    }
+  }
+
+  async stop(): Promise<void> {
+    if (this.stopped) return;
+    this.stopped = true;
+    if (typeof navigator.mediaDevices.removeEventListener === "function") {
+      navigator.mediaDevices.removeEventListener("devicechange", this.handleDeviceChange);
+    }
+    if (this.recoveryTimer !== undefined) clearTimeout(this.recoveryTimer);
+    if (this.routeWatchdog !== undefined) clearTimeout(this.routeWatchdog);
+    this.node.port.onmessage = null;
+    this.node.disconnect();
+    this.source.disconnect();
+    for (const track of this.stream.getTracks()) track.stop();
+    await this.recoveryPromise?.catch(() => {});
+    await this.context.close();
+  }
+
+  private readonly handleDeviceChange = (): void => {
+    this.queueRecovery("audio device changed", 350);
+  };
+
+  private attachRoute(node: AudioWorkletNode, stream: MediaStream): void {
     node.port.onmessage = event => {
+      if (this.stopped || this.node !== node) return;
+      if (this.routeWatchdog !== undefined) {
+        clearTimeout(this.routeWatchdog);
+        this.routeWatchdog = undefined;
+      }
+      this.consecutiveFrameFailures = 0;
       if (this.muted) return;
       const resampled = this.resampler.push(event.data as Float32Array);
       if (resampled.length === 0) return;
@@ -106,59 +259,125 @@ export class MicCapture {
       joined.set(resampled, this.buffered.length);
       let offset = 0;
       while (joined.length - offset >= frameSamples) {
-        onFrame(joined.slice(offset, offset + frameSamples));
+        this.onFrame(joined.slice(offset, offset + frameSamples));
         offset += frameSamples;
       }
       this.buffered = joined.slice(offset);
     };
-  }
-
-  static async start(onFrame: (samples: Float32Array) => void, options: MicCaptureOptions = {}): Promise<MicCapture> {
-    const processing = options.processing ?? true;
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: processing,
-        noiseSuppression: processing,
-        autoGainControl: processing,
-        channelCount: 1,
-      },
+    const track = stream.getAudioTracks()[0];
+    if (!track) return;
+    track.addEventListener("mute", () => {
+      if (this.currentTrack() !== track || this.stopped) return;
+      this.emitCapability();
+      // Bluetooth profile changes mute briefly. Only rebuild when it does not recover on
+      // its own, otherwise every harmless radio hiccup would churn the input stream.
+      this.queueRecovery("microphone stayed muted", 800);
     });
-    const context = new AudioContext({ sampleRate: targetRate });
-    await context.resume();
-    const workletUrl = URL.createObjectURL(new Blob([captureWorklet], { type: "text/javascript" }));
-    try {
-      await context.audioWorklet.addModule(workletUrl);
-    } finally {
-      URL.revokeObjectURL(workletUrl);
+    track.addEventListener("unmute", () => {
+      if (this.currentTrack() !== track || this.stopped) return;
+      if (this.recoveryTimer !== undefined && this.recoveryReason === "microphone stayed muted") {
+        clearTimeout(this.recoveryTimer);
+        this.recoveryTimer = undefined;
+      }
+      this.emitCapability();
+    });
+    track.addEventListener("ended", () => {
+      if (this.currentTrack() !== track || this.stopped) return;
+      this.emitCapability();
+      this.queueRecovery("microphone track ended", 0);
+    });
+  }
+
+  private currentTrack(): MediaStreamTrack | undefined {
+    return this.stream.getAudioTracks()[0];
+  }
+
+  private emitCapability(): void {
+    this.options.onCapabilityChange?.(this.capability());
+  }
+
+  private armRouteWatchdog(node: AudioWorkletNode): void {
+    if (!this.options.autoRecover || this.muted) return;
+    if (this.routeWatchdog !== undefined) clearTimeout(this.routeWatchdog);
+    this.routeWatchdog = setTimeout(() => {
+      this.routeWatchdog = undefined;
+      if (this.stopped || this.node !== node) return;
+      this.consecutiveFrameFailures += 1;
+      if (this.consecutiveFrameFailures <= 3) {
+        this.queueRecovery("microphone produced no audio frames", 0);
+      } else {
+        this.options.onRecoveryError?.(new Error("microphone route is live but produced no audio frames"));
+      }
+    }, 2_000);
+  }
+
+  private queueRecovery(reason: string, delayMs: number): void {
+    if (this.stopped || !this.options.autoRecover) return;
+    this.recoveryReason = reason;
+    if (this.recoveryTimer !== undefined) clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = setTimeout(() => {
+      this.recoveryTimer = undefined;
+      void this.recover(reason);
+    }, delayMs);
+  }
+
+  private async recover(reason: string): Promise<void> {
+    if (this.stopped) return;
+    if (this.recoveryPromise !== undefined) {
+      this.recoverAgain = true;
+      return this.recoveryPromise;
     }
-    const source = context.createMediaStreamSource(stream);
-    const node = new AudioWorkletNode(context, "vox-capture", { numberOfInputs: 1, numberOfOutputs: 0 });
-    source.connect(node);
-    return new MicCapture(context, stream, node, onFrame);
-  }
+    const run = async (): Promise<void> => {
+      do {
+        this.recoverAgain = false;
+        const processing = this.options.processing ?? true;
+        const replacement = await navigator.mediaDevices.getUserMedia({
+          audio: microphoneConstraints(processing, this.options.deviceId),
+        });
+        if (this.stopped) {
+          for (const track of replacement.getTracks()) track.stop();
+          return;
+        }
+        let source: MediaStreamAudioSourceNode | undefined;
+        let node: AudioWorkletNode | undefined;
+        try {
+          source = this.context.createMediaStreamSource(replacement);
+          node = new AudioWorkletNode(this.context, "vox-capture", { numberOfInputs: 1, numberOfOutputs: 0 });
+          source.connect(node);
+        } catch (error) {
+          for (const track of replacement.getTracks()) track.stop();
+          throw error;
+        }
 
-  /** The negotiated constraints snapshot the duplex doc requires the endpoint to report. */
-  capability(): EndpointCapability {
-    const settings = this.stream.getAudioTracks()[0]?.getSettings() ?? {};
-    return {
-      echoCancellation: settings.echoCancellation,
-      noiseSuppression: settings.noiseSuppression,
-      autoGainControl: settings.autoGainControl,
-      trackSampleRate: settings.sampleRate,
-      contextSampleRate: this.context.sampleRate,
+        const previousStream = this.stream;
+        const previousSource = this.source;
+        const previousNode = this.node;
+        previousNode.port.onmessage = null;
+        this.stream = replacement;
+        this.source = source;
+        this.node = node;
+        this.resampler = new LinearResampler(this.context.sampleRate, targetRate);
+        this.buffered = new Float32Array(0);
+        this.recoveries += 1;
+        for (const track of replacement.getAudioTracks()) track.enabled = !this.muted;
+        this.attachRoute(node, replacement);
+        this.armRouteWatchdog(node);
+        previousNode.disconnect();
+        previousSource.disconnect();
+        for (const track of previousStream.getTracks()) track.stop();
+        const capability = this.capability();
+        this.options.onCapabilityChange?.(capability);
+        this.options.onRecovered?.(capability, reason);
+      } while (this.recoverAgain && !this.stopped);
     };
-  }
-
-  setMuted(muted: boolean): void {
-    this.muted = muted;
-    for (const track of this.stream.getAudioTracks()) track.enabled = !muted;
-  }
-
-  async stop(): Promise<void> {
-    this.node.port.onmessage = null;
-    this.node.disconnect();
-    for (const track of this.stream.getTracks()) track.stop();
-    await this.context.close();
+    this.recoveryPromise = run();
+    try {
+      await this.recoveryPromise;
+    } catch (error) {
+      this.options.onRecoveryError?.(error);
+    } finally {
+      this.recoveryPromise = undefined;
+    }
   }
 }
 

@@ -18,16 +18,8 @@ export class ConversationController {
   private lastLevelAt = 0;
   private stopped = false;
 
-  async start(overrides?: SessionStartOptions): Promise<void> {
+  async start(overrides?: SessionStartOptions, inputDeviceId = ""): Promise<void> {
     const store = useStudio.getState();
-    const speaker = new SpeakerOutput();
-    this.speaker = speaker;
-    await speaker.resume();
-    if (this.stopped) {
-      if (this.speaker === speaker) this.speaker = undefined;
-      await speaker.close().catch(() => {});
-      throw new Error("conversation start cancelled");
-    }
     const client = new GatewayClient({
       url: gatewayRealtimeUrl(),
       startOptions: overrides?.agent ? {
@@ -63,6 +55,21 @@ export class ConversationController {
     const mic = await MicCapture.start(samples => {
       client.sendAudio(samples);
       this.tapLevel(samples);
+    }, {
+      autoRecover: true,
+      deviceId: inputDeviceId,
+      onCapabilityChange: capability => useStudio.getState().setCapability(capability),
+      onRecovered: capability => {
+        useStudio.getState().toast("info", t("麦克风已恢复：{device}", {
+          device: capability.deviceLabel ?? t("系统默认输入"),
+        }));
+      },
+      onRecoveryError: error => {
+        useStudio.getState().setMicLevel(0);
+        useStudio.getState().toast("error", t("麦克风恢复失败：{message}", {
+          message: error instanceof Error ? error.message : String(error),
+        }));
+      },
     });
     if (this.stopped) {
       await mic.stop().catch(() => {});
@@ -70,6 +77,19 @@ export class ConversationController {
     }
     this.mic = mic;
     useStudio.getState().setCapability(mic.capability());
+
+    // Open playback only after the microphone route is stable. AirPods and other
+    // Bluetooth headsets switch from A2DP playback to a duplex profile when capture
+    // starts; an AudioContext created before that switch can remain bound to the stale
+    // output route.
+    const speaker = new SpeakerOutput();
+    this.speaker = speaker;
+    await speaker.resume();
+    if (this.stopped) {
+      if (this.speaker === speaker) this.speaker = undefined;
+      await speaker.close().catch(() => {});
+      throw new Error("conversation start cancelled");
+    }
     client.connect();
     useStudio.getState().setActive(true);
   }
@@ -177,12 +197,12 @@ export class ConversationController {
  */
 let current: ConversationController | undefined;
 
-export async function startConversation(options?: SessionStartOptions): Promise<void> {
+export async function startConversation(options?: SessionStartOptions, inputDeviceId?: string): Promise<void> {
   if (current) throw new Error("conversation is already starting or active");
   const next = new ConversationController();
   current = next;
   try {
-    await next.start(options);
+    await next.start(options, inputDeviceId ?? useStudio.getState().micInputDeviceId);
   } catch (error) {
     // A cancelled start may finish after another caller has begun a replacement;
     // never let the stale controller clear ownership of that newer conversation.

@@ -255,7 +255,13 @@ export function SettingsPanel() {
         <h2 className="text-sm font-medium text-ink-300">{t("端点能力（本次会话协商结果）")}</h2>
         {!capability && <p className="mt-2 text-sm text-ink-500">{t("尚未开始对话；开始后展示 getUserMedia 协商到的 AEC/NS/AGC 与采样率。")}</p>}
         {capability && (
-          <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4 text-sm">
+          <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-5 text-sm">
+            <div className="min-w-0">
+              <dt className="text-xs text-ink-500">{t("输入设备")}</dt>
+              <dd className="mt-0.5 truncate" title={capability.deviceLabel ?? t("系统默认输入")}>
+                {capability.deviceLabel ?? t("系统默认输入")}
+              </dd>
+            </div>
             <div>
               <dt className="text-xs text-ink-500">{t("回声消除")}</dt>
               <dd className="mt-0.5">{capability.echoCancellation === false ? t("关") : t("开")}</dd>
@@ -270,7 +276,7 @@ export function SettingsPanel() {
             </div>
             <div>
               <dt className="text-xs text-ink-500">{t("采集采样率")}</dt>
-              <dd className="mt-0.5">{capability.contextSampleRate}Hz</dd>
+              <dd className="mt-0.5">{capability.trackSampleRate ?? "?"}Hz → {capability.contextSampleRate}Hz</dd>
             </div>
           </dl>
         )}
