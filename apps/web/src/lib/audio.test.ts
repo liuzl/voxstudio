@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { microphoneConstraints, PlaybackTimeline } from "./audio";
+import { microphoneConstraints, playbackWorkletSource, PlaybackTimeline } from "./audio";
 
 describe("PlaybackTimeline", () => {
   test("schedules gaplessly and reports the audible remainder", () => {
@@ -64,5 +64,64 @@ describe("microphoneConstraints", () => {
       autoGainControl: false,
       channelCount: 1,
     });
+  });
+});
+
+describe("continuous playback worklet", () => {
+  test("buffers before starting, renders one continuous queue, and drains only after end", () => {
+    const scope = globalThis as unknown as Record<string, unknown>;
+    const previous = new Map<string, unknown>();
+    const names = ["AudioWorkletProcessor", "registerProcessor", "sampleRate", "currentTime", "currentFrame"];
+    for (const name of names) previous.set(name, scope[name]);
+    const messages: Record<string, unknown>[] = [];
+    let Processor: (new () => {
+      port: { onmessage?: (event: { data: unknown }) => void };
+      process(inputs: unknown[], outputs: Float32Array[][]): boolean;
+    }) | undefined;
+    class FakeAudioWorkletProcessor {
+      readonly port = {
+        onmessage: undefined as ((event: { data: unknown }) => void) | undefined,
+        postMessage: (message: Record<string, unknown>) => messages.push(message),
+      };
+    }
+    scope.AudioWorkletProcessor = FakeAudioWorkletProcessor;
+    scope.registerProcessor = (_name: string, candidate: typeof Processor) => { Processor = candidate; };
+    scope.sampleRate = 48_000;
+    scope.currentTime = 0;
+    scope.currentFrame = 0;
+    try {
+      Function(playbackWorkletSource)();
+      expect(Processor).toBeDefined();
+      const processor = new (Processor as NonNullable<typeof Processor>)();
+      const send = (data: unknown) => processor.port.onmessage?.({ data });
+      send({ type: "start" });
+      for (let index = 0; index < 7; index += 1) {
+        send({ type: "enqueue", samples: new Float32Array(960).fill(0.25), frameId: index });
+      }
+      const beforeTarget = new Float32Array(128);
+      processor.process([], [[beforeTarget]]);
+      expect(beforeTarget.every(sample => sample === 0)).toBe(true);
+
+      send({ type: "enqueue", samples: new Float32Array(960).fill(0.25), frameId: 7 });
+      const started = new Float32Array(128);
+      processor.process([], [[started]]);
+      expect(started.every(sample => sample === 0.25)).toBe(true);
+      expect(messages.some(message => message.type === "render" && message.frameId === 0)).toBe(true);
+      expect(messages.some(message => message.type === "drained")).toBe(false);
+
+      send({ type: "end" });
+      for (let frame = 128; frame < 8 * 960 + 256; frame += 128) {
+        scope.currentFrame = frame;
+        scope.currentTime = frame / 48_000;
+        processor.process([], [[new Float32Array(128)]]);
+      }
+      expect(messages.filter(message => message.type === "drained")).toHaveLength(1);
+    } finally {
+      for (const name of names) {
+        const value = previous.get(name);
+        if (value === undefined) delete scope[name];
+        else scope[name] = value;
+      }
+    }
   });
 });

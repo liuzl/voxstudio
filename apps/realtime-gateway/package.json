@@ -8,7 +8,8 @@
   },
   "exports": {
     ".": "./src/index.ts",
-    "./protocol": "./src/protocol.ts"
+    "./protocol": "./src/protocol.ts",
+    "./media-v2": "./src/media-v2.ts"
   },
   "dependencies": {
     "@better-auth/api-key": "^1.6.25",

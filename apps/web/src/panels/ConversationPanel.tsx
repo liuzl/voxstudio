@@ -337,6 +337,11 @@ export function ConversationPanel() {
   const notices = useStudio(state => state.notices);
   const capability = useStudio(state => state.capability);
   const media = useStudio(state => state.mediaDiagnostics);
+  const mediaFormat = media.codec === "pcm_s16le"
+    ? `PCM16${media.sampleRate === undefined ? "" : ` ${Math.round(media.sampleRate / 1_000)}kHz`}`
+    : media.codec === "opus"
+      ? `Opus${media.sampleRate === undefined ? "" : ` ${Math.round(media.sampleRate / 1_000)}kHz`}`
+      : "PCM f32";
   const toast = useStudio(state => state.toast);
   const scroller = useRef<HTMLDivElement>(null);
 
@@ -491,7 +496,7 @@ export function ConversationPanel() {
           )}
           {media.frames > 0 && (
             <span className="ml-auto hidden shrink-0 md:inline">
-              PCM f32 · {Math.round(media.bufferDepthMs)}ms buffer · underrun {media.underruns}
+              {mediaFormat} · {Math.round(media.bufferDepthMs)}ms buffer · underrun {media.underruns}
               {media.rttMs === undefined ? "" : ` · RTT ${Math.round(media.rttMs)}ms`}
             </span>
           )}

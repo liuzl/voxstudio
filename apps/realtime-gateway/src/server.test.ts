@@ -8,6 +8,7 @@ import { GatewaySession, type EventSink } from "./session";
 import { CaptureLibrary } from "./library";
 import { voicePrefix } from "./voice-namespace";
 import type { AuthContext } from "./auth/auth-context";
+import { mediaV2FlagStart, parseMediaV2Frame } from "./media-v2";
 
 const config = parseConfig({
   engines: {
@@ -175,6 +176,87 @@ describe("realtime gateway", () => {
     const timing = client.events.find(event => event.type === "turn.timing");
     expect(timing && "offsetsMs" in timing ? Object.keys(timing.offsetsMs) : []).toContain("asr_done");
 
+    client.close();
+  });
+
+  test("negotiates framed 20ms PCM16 playback while an absent offer stays on v1", async () => {
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0 });
+    const client = new TestClient(gateway.url);
+    await client.ready();
+    client.command({
+      type: "session.start",
+      idempotencyKey: "media-v2-start",
+      options: {
+        ...startOptions,
+        mediaTelemetry: true,
+        welcome: "欢迎。",
+        media: {
+          version: 2,
+          playback: [{ codec: "pcm_s16le", sampleRate: 24_000, channels: 1, packetDurationMs: 20 }],
+        },
+      },
+    });
+    await client.until(events => events.some(event => event.type === "playback.end"), "Media v2 playback.end");
+
+    const selected = client.events.find(event => event.type === "media.config");
+    expect(selected).toMatchObject({
+      version: 2,
+      playback: { codec: "pcm_s16le", sampleRate: 24_000, channels: 1, packetDurationMs: 20 },
+    });
+    const started = client.events.find(event => event.type === "playback.start");
+    const ended = client.events.find(event => event.type === "playback.end");
+    expect(started).toMatchObject({ codec: "pcm_s16le", sampleRate: 24_000, packetDurationMs: 20 });
+    expect(ended && started && "streamId" in started ? ended.streamId === started.streamId : false).toBe(true);
+    expect(client.audio.length).toBeGreaterThan(1);
+
+    const frames = client.audio.map(frame => parseMediaV2Frame(frame));
+    expect(frames[0]).toMatchObject({
+      kind: "playback",
+      codec: "pcm_s16le",
+      flags: mediaV2FlagStart,
+      sequence: 0,
+      timestampSamples: 0n,
+      sampleRate: 24_000,
+      channels: 1,
+    });
+    expect(frames.every(frame => frame.durationSamples <= 480)).toBe(true);
+    expect(frames.every(frame => frame.payload.byteLength === frame.durationSamples * 2)).toBe(true);
+    for (let index = 1; index < frames.length; index += 1) {
+      const previous = frames[index - 1] as (typeof frames)[number];
+      const current = frames[index] as (typeof frames)[number];
+      expect(current.sequence).toBe(previous.sequence + 1);
+      expect(current.timestampSamples).toBe(previous.timestampSamples + BigInt(previous.durationSamples));
+      expect(current.streamId).toBe(previous.streamId);
+    }
+    const telemetry = client.events.filter((event): event is Extract<GatewayEvent, { type: "media.frame" }> => event.type === "media.frame");
+    expect(telemetry.every(event => event.codec === "pcm_s16le" && event.streamId === frames[0]?.streamId)).toBe(true);
+    const socketTelemetry = client.events.filter((event): event is Extract<GatewayEvent, { type: "media.socket" }> => event.type === "media.socket");
+    expect(socketTelemetry.length).toBe(frames.length);
+    expect((socketTelemetry.at(-1)?.submittedAtMs ?? 0) - (socketTelemetry[0]?.submittedAtMs ?? 0)).toBeGreaterThan(500);
+    client.close();
+  });
+
+  test("rejects an explicit Media v2 offer when no configuration is compatible", async () => {
+    gateway = startGateway({ config, fetch: engineFetch(), port: 0 });
+    const client = new TestClient(gateway.url);
+    await client.ready();
+    client.command({
+      type: "session.start",
+      idempotencyKey: "unsupported-media",
+      options: {
+        ...startOptions,
+        media: {
+          version: 2,
+          playback: [{ codec: "opus", sampleRate: 48_000, channels: 1, packetDurationMs: 20 }],
+        },
+      },
+    });
+    await client.until(events => events.some(event => event.type === "command.rejected"), "media rejection");
+    expect(client.events.find(event => event.type === "command.rejected")).toMatchObject({
+      commandType: "session.start",
+      reason: expect.stringContaining("no compatible Media v2"),
+    });
+    expect(client.audio).toHaveLength(0);
     client.close();
   });
 

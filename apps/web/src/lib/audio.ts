@@ -103,6 +103,126 @@ class VoxCapture extends AudioWorkletProcessor {
 registerProcessor("vox-capture", VoxCapture);
 `;
 
+export const playbackWorkletSource = `
+class VoxPlayback extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.queue = [];
+    this.queuedSamples = 0;
+    this.playing = false;
+    this.ended = false;
+    this.drained = false;
+    this.underrunFrame = undefined;
+    this.stableSamples = 0;
+    this.minimumTarget = Math.round(sampleRate * 0.12);
+    this.targetSamples = Math.round(sampleRate * 0.16);
+    this.maximumTarget = Math.round(sampleRate * 0.6);
+    this.port.onmessage = event => this.receive(event.data);
+  }
+
+  receive(message) {
+    if (message.type === "start") {
+      this.queue = [];
+      this.queuedSamples = 0;
+      this.playing = false;
+      this.ended = false;
+      this.drained = false;
+      this.underrunFrame = undefined;
+      this.stableSamples = 0;
+      return;
+    }
+    if (message.type === "enqueue") {
+      const samples = message.samples;
+      if (!(samples instanceof Float32Array) || samples.length === 0 || this.ended) return;
+      this.queue.push({ samples, offset: 0, frameId: message.frameId });
+      this.queuedSamples += samples.length;
+      return;
+    }
+    if (message.type === "end") {
+      this.ended = true;
+      this.reportDrainedIfReady();
+      return;
+    }
+    if (message.type === "stop") {
+      this.queue = [];
+      this.queuedSamples = 0;
+      this.playing = false;
+      this.ended = false;
+      this.drained = false;
+      this.underrunFrame = undefined;
+      this.stableSamples = 0;
+    }
+  }
+
+  reportDrainedIfReady() {
+    if (!this.ended || this.queuedSamples !== 0 || this.drained) return;
+    this.drained = true;
+    this.playing = false;
+    this.port.postMessage({ type: "drained", contextTimeSec: currentTime });
+  }
+
+  process(_inputs, outputs) {
+    const output = outputs[0] && outputs[0][0];
+    if (!output) return true;
+    output.fill(0);
+    if (!this.playing) {
+      if (this.queuedSamples >= this.targetSamples || (this.ended && this.queuedSamples > 0)) {
+        this.playing = true;
+        if (this.underrunFrame !== undefined) {
+          const durationSamples = Math.max(0, currentFrame - this.underrunFrame);
+          this.port.postMessage({ type: "underrun", durationSamples, targetSamples: this.targetSamples });
+          this.underrunFrame = undefined;
+        }
+      } else {
+        this.reportDrainedIfReady();
+        return true;
+      }
+    }
+
+    let written = 0;
+    while (written < output.length) {
+      const item = this.queue[0];
+      if (!item) {
+        if (!this.ended) {
+          this.playing = false;
+          this.underrunFrame = currentFrame + written;
+          this.stableSamples = 0;
+          this.targetSamples = Math.min(this.maximumTarget, this.targetSamples + Math.round(sampleRate * 0.04));
+        }
+        break;
+      }
+      if (item.offset === 0) {
+        this.port.postMessage({
+          type: "render",
+          frameId: item.frameId,
+          contextTimeSec: currentTime + written / sampleRate,
+          bufferSamples: this.queuedSamples,
+          targetSamples: this.targetSamples,
+        });
+      }
+      const available = item.samples.length - item.offset;
+      const count = Math.min(available, output.length - written);
+      output.set(item.samples.subarray(item.offset, item.offset + count), written);
+      item.offset += count;
+      written += count;
+      this.queuedSamples -= count;
+      if (item.offset === item.samples.length) this.queue.shift();
+    }
+
+    if (written > 0) {
+      this.stableSamples += written;
+      if (this.stableSamples >= sampleRate * 10 && this.targetSamples > this.minimumTarget) {
+        this.targetSamples = Math.max(this.minimumTarget, this.targetSamples - Math.round(sampleRate * 0.02));
+        this.stableSamples = 0;
+      }
+    }
+    this.reportDrainedIfReady();
+    return true;
+  }
+}
+registerProcessor("vox-playback", VoxPlayback);
+`;
+
 const targetRate = 16_000;
 const frameSamples = 320; // 20ms at 16kHz, the granularity the CLI capture uses
 
@@ -462,6 +582,13 @@ export class SpeakerOutput {
   private readonly timeline = new PlaybackTimeline();
   private readonly sources = new Set<AudioBufferSourceNode>();
   private sampleRate = 48_000;
+  private playbackNode: AudioWorkletNode | undefined;
+  private playbackResampler: LinearResampler | undefined;
+  private continuousInputRate: number | undefined;
+  private continuousBufferedSamples = 0;
+  private continuousTargetSamples = 0;
+  private continuousDrainCallback: (() => void) | undefined;
+  private continuousActive = false;
   private drainTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly renderTimers = new Map<AudioBufferSourceNode, ReturnType<typeof setTimeout>>();
   private readonly onTelemetry: ((event: BrowserMediaTelemetryEvent) => void) | undefined;
@@ -478,12 +605,46 @@ export class SpeakerOutput {
     this.reportContext();
   }
 
+  /** Prepare the single render-thread-owned Media v2 output before negotiation. */
+  async enableContinuousPlayback(): Promise<void> {
+    if (this.playbackNode !== undefined) return;
+    const workletUrl = URL.createObjectURL(new Blob([playbackWorkletSource], { type: "text/javascript" }));
+    try {
+      await this.context.audioWorklet.addModule(workletUrl);
+    } finally {
+      URL.revokeObjectURL(workletUrl);
+    }
+    const node = new AudioWorkletNode(this.context, "vox-playback", {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+    });
+    node.port.onmessage = event => this.handlePlaybackWorkletMessage(event.data as Record<string, unknown>);
+    node.connect(this.context.destination);
+    this.playbackNode = node;
+  }
+
   setFormat(sampleRate: number): void {
     this.sampleRate = sampleRate;
   }
 
+  beginContinuousRendition(sampleRate: number): void {
+    if (this.playbackNode === undefined) throw new Error("continuous playback was not initialized");
+    this.sampleRate = sampleRate;
+    this.continuousInputRate = sampleRate;
+    this.playbackResampler = new LinearResampler(sampleRate, this.context.sampleRate);
+    this.continuousBufferedSamples = 0;
+    this.continuousDrainCallback = undefined;
+    this.continuousActive = true;
+    this.playbackNode.port.postMessage({ type: "start" });
+  }
+
   enqueue(samples: Float32Array, delivery?: AudioFrameDelivery): void {
     if (samples.length === 0) return;
+    if (delivery?.media !== undefined && this.playbackNode !== undefined && this.continuousActive) {
+      this.enqueueContinuous(samples, delivery);
+      return;
+    }
     const buffer = this.context.createBuffer(1, samples.length, this.sampleRate);
     buffer.copyToChannel(samples as Float32Array<ArrayBuffer>, 0);
     const source = this.context.createBufferSource();
@@ -536,6 +697,11 @@ export class SpeakerOutput {
 
   /** All pieces are in; fire when the playhead passes the end of the scheduled audio. */
   notifyWhenDrained(callback: () => void): void {
+    if (this.continuousActive && this.playbackNode !== undefined) {
+      this.continuousDrainCallback = callback;
+      this.playbackNode.port.postMessage({ type: "end" });
+      return;
+    }
     if (this.drainTimer !== undefined) clearTimeout(this.drainTimer);
     const delayMs = this.timeline.remainingSec(this.context.currentTime) * 1_000 + 60;
     this.drainTimer = setTimeout(() => {
@@ -547,7 +713,7 @@ export class SpeakerOutput {
 
   stop(reason: "interrupted" | "closed" = "closed"): void {
     const startedAtMs = performance.timeOrigin + performance.now();
-    const sourceCount = this.sources.size;
+    const sourceCount = this.sources.size + (this.continuousActive && this.continuousBufferedSamples > 0 ? 1 : 0);
     if (this.drainTimer !== undefined) {
       clearTimeout(this.drainTimer);
       this.drainTimer = undefined;
@@ -564,6 +730,12 @@ export class SpeakerOutput {
     this.sources.clear();
     this.renderTimers.clear();
     this.timeline.reset();
+    if (this.playbackNode !== undefined) this.playbackNode.port.postMessage({ type: "stop" });
+    this.playbackResampler = undefined;
+    this.continuousInputRate = undefined;
+    this.continuousBufferedSamples = 0;
+    this.continuousDrainCallback = undefined;
+    this.continuousActive = false;
     const finishedAtMs = performance.timeOrigin + performance.now();
     if (sourceCount > 0) {
       this.onTelemetry?.({
@@ -578,8 +750,87 @@ export class SpeakerOutput {
 
   async close(): Promise<void> {
     this.stop("closed");
+    if (this.playbackNode !== undefined) {
+      this.playbackNode.port.onmessage = null;
+      this.playbackNode.disconnect();
+      this.playbackNode = undefined;
+    }
     this.context.removeEventListener("statechange", this.reportContext);
     await this.context.close();
+  }
+
+  private enqueueContinuous(samples: Float32Array, delivery: AudioFrameDelivery): void {
+    if (this.playbackNode === undefined || this.playbackResampler === undefined
+        || this.continuousInputRate !== this.sampleRate) {
+      throw new Error("Media v2 audio arrived outside its playback rendition");
+    }
+    const resampled = this.playbackResampler.push(samples);
+    if (resampled.length === 0) return;
+    const before = this.continuousBufferedSamples;
+    this.continuousBufferedSamples += resampled.length;
+    const atMs = performance.timeOrigin + performance.now();
+    const frameId = delivery.frame?.frameId;
+    this.onTelemetry?.({
+      stage: "browser.enqueue",
+      atMs,
+      ...(frameId === undefined ? {} : { frameId }),
+      bufferBeforeMs: before * 1_000 / this.context.sampleRate,
+      bufferAfterMs: this.continuousBufferedSamples * 1_000 / this.context.sampleRate,
+      targetBufferMs: (this.continuousTargetSamples || this.context.sampleRate * 0.16) * 1_000 / this.context.sampleRate,
+    });
+    const transferable = resampled.slice();
+    this.playbackNode.port.postMessage(
+      { type: "enqueue", samples: transferable, frameId },
+      [transferable.buffer],
+    );
+  }
+
+  private handlePlaybackWorkletMessage(message: Record<string, unknown>): void {
+    if (!this.continuousActive || typeof message.type !== "string") return;
+    const contextTimeSec = typeof message.contextTimeSec === "number" ? message.contextTimeSec : this.context.currentTime;
+    const atMs = this.contextTimeToEpoch(contextTimeSec);
+    if (message.type === "render") {
+      const bufferSamples = typeof message.bufferSamples === "number" ? message.bufferSamples : 0;
+      const targetSamples = typeof message.targetSamples === "number" ? message.targetSamples : 0;
+      this.continuousBufferedSamples = Math.max(0, bufferSamples);
+      this.continuousTargetSamples = Math.max(0, targetSamples);
+      const frameId = typeof message.frameId === "number" ? message.frameId : undefined;
+      this.onTelemetry?.({
+        stage: "browser.render",
+        atMs,
+        ...(frameId === undefined ? {} : { frameId }),
+        scheduledAtMs: atMs,
+        latenessMs: 0,
+        bufferDepthMs: this.continuousBufferedSamples * 1_000 / this.context.sampleRate,
+        estimated: false,
+      });
+      return;
+    }
+    if (message.type === "underrun") {
+      const durationSamples = typeof message.durationSamples === "number" ? message.durationSamples : 0;
+      const targetSamples = typeof message.targetSamples === "number" ? message.targetSamples : 0;
+      this.continuousTargetSamples = Math.max(0, targetSamples);
+      if (durationSamples > 0) {
+        this.onTelemetry?.({
+          stage: "browser.underrun",
+          atMs,
+          durationMs: durationSamples * 1_000 / this.context.sampleRate,
+        });
+      }
+      return;
+    }
+    if (message.type === "drained") {
+      this.continuousBufferedSamples = 0;
+      this.continuousActive = false;
+      const callback = this.continuousDrainCallback;
+      this.continuousDrainCallback = undefined;
+      callback?.();
+    }
+  }
+
+  private contextTimeToEpoch(contextTimeSec: number): number {
+    const nowMs = performance.timeOrigin + performance.now();
+    return nowMs + (contextTimeSec - this.context.currentTime) * 1_000;
   }
 
   private readonly reportContext = (): void => {

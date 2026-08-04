@@ -17,6 +17,21 @@ import type { DuplexEventPayload, DuplexSessionSnapshot, DuplexState } from "@vo
  */
 export const protocolVersion = 1;
 
+export type MediaPlaybackCodec = "pcm_s16le" | "opus" | "pcm_f32le";
+
+export interface MediaPlaybackConfiguration {
+  codec: MediaPlaybackCodec;
+  sampleRate: number;
+  channels: 1;
+  packetDurationMs: number;
+}
+
+export interface MediaV2Offer {
+  version: 2;
+  /** Ordered client decode capabilities; the gateway confirms one exact configuration. */
+  playback: readonly MediaPlaybackConfiguration[];
+}
+
 export interface SessionStartOptions {
   /** Saved Agent id. Ordinary callers resolve its latest immutable published version. */
   agent?: string;
@@ -64,6 +79,8 @@ export interface SessionStartOptions {
    * content are included; protocol-v1 PCM remains unchanged on the wire.
    */
   mediaTelemetry?: boolean;
+  /** Explicit opt-in to framed Media v2; absent keeps the legacy raw-f32 binary wire. */
+  media?: MediaV2Offer;
 }
 
 interface CommandBase {
@@ -90,19 +107,41 @@ export type GatewayEventPayload =
   | { type: "playback.format"; turnId: string; revision: number; sampleRate: number }
   | { type: "playback.ended"; turnId: string }
   | { type: "playback.interrupted"; turnId: string }
-  | {
+  | ({
       type: "media.frame";
       frameId: number;
       turnId: string;
       revision: number;
-      codec: "pcm_f32le";
+      codec: MediaPlaybackCodec;
       sampleRate: number;
       channels: 1;
       bytes: number;
       audioMs: number;
       producedAtMs: number;
       enqueuedAtMs: number;
+    } & ({
+      codec: "pcm_f32le";
+      streamId?: never;
+      mediaSequence?: never;
+      timestampSamples?: never;
+    } | {
+      codec: "pcm_s16le" | "opus";
+      streamId: string;
+      mediaSequence: number;
+      timestampSamples: number;
+    }))
+  | { type: "media.config"; version: 2; playback: MediaPlaybackConfiguration }
+  | {
+      type: "playback.start";
+      turnId: string;
+      revision: number;
+      streamId: string;
+      codec: MediaPlaybackCodec;
+      sampleRate: number;
+      channels: 1;
+      packetDurationMs: number;
     }
+  | { type: "playback.end"; turnId: string; revision: number; streamId: string; totalSamples: number }
   | {
       type: "media.socket";
       frameId: number;
@@ -208,6 +247,32 @@ function optionalChoice<T extends string>(record: Record<string, unknown>, key: 
   return value as T;
 }
 
+function parseMediaOffer(value: unknown): MediaV2Offer | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new ProtocolError("media must be an object");
+  if (value.version !== 2) throw new ProtocolError(`unsupported media version ${String(value.version)}`);
+  if (!Array.isArray(value.playback) || value.playback.length === 0 || value.playback.length > 8) {
+    throw new ProtocolError("media.playback must contain between 1 and 8 configurations");
+  }
+  const playback = value.playback.map((entry, index): MediaPlaybackConfiguration => {
+    if (!isRecord(entry)) throw new ProtocolError(`media.playback[${index}] must be an object`);
+    const codec = optionalChoice(entry, "codec", ["pcm_s16le", "opus", "pcm_f32le"] as const);
+    const sampleRate = optionalNumber(entry, "sampleRate");
+    const packetDurationMs = optionalNumber(entry, "packetDurationMs");
+    if (codec === undefined) throw new ProtocolError(`media.playback[${index}].codec is required`);
+    if (sampleRate === undefined || !Number.isInteger(sampleRate) || sampleRate === 0 || sampleRate > 192_000) {
+      throw new ProtocolError(`media.playback[${index}].sampleRate must be an integer between 1 and 192000`);
+    }
+    if (entry.channels !== 1) throw new ProtocolError(`media.playback[${index}].channels must be 1`);
+    if (packetDurationMs === undefined || !Number.isInteger(packetDurationMs)
+        || packetDurationMs === 0 || packetDurationMs > 240) {
+      throw new ProtocolError(`media.playback[${index}].packetDurationMs must be an integer between 1 and 240`);
+    }
+    return { codec, sampleRate, channels: 1, packetDurationMs };
+  });
+  return { version: 2, playback };
+}
+
 function parseStartOptions(value: unknown): SessionStartOptions {
   if (value === undefined) return {};
   if (!isRecord(value)) throw new ProtocolError("options must be an object");
@@ -217,6 +282,7 @@ function parseStartOptions(value: unknown): SessionStartOptions {
   if (playbackAck !== undefined && typeof playbackAck !== "boolean") throw new ProtocolError("playbackAck must be a boolean");
   const mediaTelemetry = value.mediaTelemetry;
   if (mediaTelemetry !== undefined && typeof mediaTelemetry !== "boolean") throw new ProtocolError("mediaTelemetry must be a boolean");
+  const media = parseMediaOffer(value.media);
   const studioTools = value.studioTools;
   if (studioTools !== undefined && typeof studioTools !== "boolean") throw new ProtocolError("studioTools must be a boolean");
   const maxTokens = optionalNumber(value, "maxTokens");
@@ -274,6 +340,7 @@ function parseStartOptions(value: unknown): SessionStartOptions {
   if (bargeIn !== undefined) options.bargeIn = bargeIn;
   if (playbackAck !== undefined) options.playbackAck = playbackAck;
   if (mediaTelemetry !== undefined) options.mediaTelemetry = mediaTelemetry;
+  if (media !== undefined) options.media = media;
   if (studioTools !== undefined) options.studioTools = studioTools;
   if (turnTaking !== undefined) options.turnTaking = turnTaking;
   if (reopenMs !== undefined) options.reopenMs = reopenMs;

@@ -6,9 +6,26 @@ export {
   type GatewayCommandType,
   type GatewayEvent,
   type GatewayEventPayload,
+  type MediaPlaybackCodec,
+  type MediaPlaybackConfiguration,
+  type MediaV2Offer,
   type SessionStartOptions,
 } from "./protocol";
 export { parseByteSize } from "./library";
+export {
+  encodeMediaV2Frame,
+  isMediaV2Frame,
+  mediaV2FlagDiscontinuity,
+  mediaV2FlagEnd,
+  mediaV2FlagStart,
+  mediaV2HeaderBytes,
+  mediaV2MaxPayloadBytes,
+  mediaV2Version,
+  parseMediaV2Frame,
+  type MediaV2Codec,
+  type MediaV2Frame,
+  type MediaV2Kind,
+} from "./media-v2";
 export {
   ConversationTraceStore,
   traceEventForRetention,

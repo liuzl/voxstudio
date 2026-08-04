@@ -9,6 +9,11 @@ import { useStudio } from "./store";
 
 let lastMediaTracePayload: Record<string, unknown> | undefined;
 
+const webMediaV2 = {
+  version: 2,
+  playback: [{ codec: "pcm_s16le", sampleRate: 24_000, channels: 1, packetDurationMs: 20 }],
+} as const satisfies NonNullable<SessionStartOptions["media"]>;
+
 function downloadTracePayload(payload: Record<string, unknown>): void {
   const json = JSON.stringify(payload, null, 2);
   const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
@@ -46,6 +51,7 @@ export class ConversationController {
         bargeIn: true,
         playbackAck: true,
         mediaTelemetry: true,
+        media: webMediaV2,
         ...overrides,
       } : {
         // The ASR hint stays "auto": measured identical to "zh" on the SenseVoice slot
@@ -61,6 +67,7 @@ export class ConversationController {
         bargeIn: true,
         playbackAck: true,
         mediaTelemetry: true,
+        media: webMediaV2,
         turnTaking: "speculative",
         ...(store.welcome.trim() ? { welcome: store.welcome.trim() } : {}),
         ...(store.nudgeAfterSeconds > 0 ? { nudgeAfterSeconds: store.nudgeAfterSeconds } : {}),
@@ -112,6 +119,7 @@ export class ConversationController {
     const speaker = new SpeakerOutput(event => this.recordBrowserMedia(event));
     this.speaker = speaker;
     await speaker.resume();
+    await speaker.enableContinuousPlayback();
     if (this.stopped) {
       if (this.speaker === speaker) this.speaker = undefined;
       await speaker.close().catch(() => {});
@@ -187,6 +195,10 @@ export class ConversationController {
       case "playback.format":
         this.playbackTurnId = event.turnId;
         this.speaker?.setFormat(event.sampleRate);
+        return;
+      case "playback.start":
+        this.playbackTurnId = event.turnId;
+        this.speaker?.beginContinuousRendition(event.sampleRate);
         return;
       case "studio.take":
         // A spoken generate_take: the event reaches the same browser whose Generate

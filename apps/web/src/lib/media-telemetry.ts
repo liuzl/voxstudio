@@ -1,10 +1,10 @@
-import type { GatewayEvent } from "@voxstudio/realtime-gateway/protocol";
+import type { GatewayEvent, MediaPlaybackCodec } from "@voxstudio/realtime-gateway/protocol";
 import { monotonicEpochMs, type AudioFrameDelivery } from "./client";
 
 export type BrowserMediaTelemetryEvent =
   | { stage: "browser.receive"; atMs: number; frameId?: number; bytes: number; decodedAtMs: number }
   | { stage: "browser.enqueue"; atMs: number; frameId?: number; bufferBeforeMs: number; bufferAfterMs: number; targetBufferMs: number }
-  | { stage: "browser.render"; atMs: number; frameId?: number; scheduledAtMs: number; latenessMs: number; bufferDepthMs: number; estimated: true }
+  | { stage: "browser.render"; atMs: number; frameId?: number; scheduledAtMs: number; latenessMs: number; bufferDepthMs: number; estimated: boolean }
   | { stage: "browser.underrun"; atMs: number; frameId?: number; durationMs: number }
   | { stage: "browser.stop"; atMs: number; reason: "interrupted" | "closed"; sourceCount: number; operationMs: number }
   | { stage: "browser.context"; atMs: number; state: AudioContextState; sampleRate: number; outputLatencyMs?: number }
@@ -20,6 +20,8 @@ export type BrowserMediaTelemetryEvent =
     };
 
 export interface MediaDiagnostics {
+  codec: MediaPlaybackCodec | undefined;
+  sampleRate: number | undefined;
   frames: number;
   bytes: number;
   audioMs: number;
@@ -126,6 +128,8 @@ export class MediaTraceRecorder {
     if (event.type === "media.frame") {
       this.diagnostics = {
         ...this.diagnostics,
+        codec: event.codec,
+        sampleRate: event.sampleRate,
         frames: this.diagnostics.frames + 1,
         bytes: this.diagnostics.bytes + event.bytes,
         audioMs: this.diagnostics.audioMs + event.audioMs,
@@ -363,6 +367,8 @@ export class MediaTraceRecorder {
 
 export function emptyMediaDiagnostics(): MediaDiagnostics {
   return {
+    codec: undefined,
+    sampleRate: undefined,
     frames: 0,
     bytes: 0,
     audioMs: 0,

@@ -1,8 +1,11 @@
 import {
   protocolVersion,
   type GatewayEvent,
+  type MediaPlaybackConfiguration,
   type SessionStartOptions,
 } from "@voxstudio/realtime-gateway/protocol";
+import { decodePcm16 } from "@voxstudio/audio";
+import { parseMediaV2Frame } from "@voxstudio/realtime-gateway/media-v2";
 
 export type MediaFrameEvent = Extract<GatewayEvent, { type: "media.frame" }>;
 
@@ -10,6 +13,12 @@ export interface AudioFrameDelivery {
   frame: MediaFrameEvent | undefined;
   receivedAtMs: number;
   decodedAtMs: number;
+  media?: {
+    streamId: string;
+    sequence: number;
+    timestampSamples: number;
+    durationSamples: number;
+  };
 }
 
 export function monotonicEpochMs(): number {
@@ -58,6 +67,10 @@ export class GatewayClient {
   private closed = false;
   private lastSequence = 0;
   private readonly pendingMediaFrames: MediaFrameEvent[] = [];
+  private mediaPlayback: MediaPlaybackConfiguration | undefined;
+  private playbackStreamId: string | undefined;
+  private expectedMediaSequence = 0;
+  private expectedTimestampSamples = 0;
   private pingTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(options: GatewayClientOptions) {
@@ -96,6 +109,23 @@ export class GatewayClient {
           const index = this.pendingMediaFrames.findIndex(frame => frame.frameId === parsed.frameId);
           if (index >= 0) this.pendingMediaFrames.splice(index, 1);
         }
+        if (parsed.type === "media.config") this.mediaPlayback = parsed.playback;
+        if (parsed.type === "playback.start") {
+          this.playbackStreamId = parsed.streamId;
+          this.expectedMediaSequence = 0;
+          this.expectedTimestampSamples = 0;
+          for (let index = this.pendingMediaFrames.length - 1; index >= 0; index -= 1) {
+            const frame = this.pendingMediaFrames[index];
+            if (frame?.streamId !== undefined && frame.streamId !== parsed.streamId) {
+              this.pendingMediaFrames.splice(index, 1);
+            }
+          }
+        } else if (parsed.type === "playback.interrupted" || parsed.type === "turn.interrupted") {
+          this.playbackStreamId = undefined;
+          for (let index = this.pendingMediaFrames.length - 1; index >= 0; index -= 1) {
+            if (this.pendingMediaFrames[index]?.streamId !== undefined) this.pendingMediaFrames.splice(index, 1);
+          }
+        }
         // A rejected attach means the session expired while we were gone: the next
         // connection starts fresh instead of retrying a dead id forever.
         if (parsed.type === "command.rejected" && parsed.reason === "unknown_session") {
@@ -103,18 +133,60 @@ export class GatewayClient {
           this.command({ type: "session.start", options: this.options.startOptions });
         }
         this.options.onEvent(parsed);
-        if (this.options.startOptions.mediaTelemetry === true && this.pingTimer === undefined && this.sessionId !== undefined) {
+        if (this.options.startOptions.mediaTelemetry === true && this.pingTimer === undefined
+            && parsed.type === "command.accepted"
+            && (parsed.commandType === "session.start" || parsed.commandType === "session.attach")) {
           this.sendMediaPing();
           this.pingTimer = setInterval(() => this.sendMediaPing(), 5_000);
         }
       } else if (event.data instanceof ArrayBuffer) {
         const receivedAtMs = monotonicEpochMs();
-        const samples = new Float32Array(event.data);
-        this.options.onAudio(samples, {
-          frame: this.pendingMediaFrames.shift(),
-          receivedAtMs,
-          decodedAtMs: monotonicEpochMs(),
-        });
+        if (this.mediaPlayback === undefined) {
+          const samples = new Float32Array(event.data);
+          this.options.onAudio(samples, {
+            frame: this.pendingMediaFrames.shift(),
+            receivedAtMs,
+            decodedAtMs: monotonicEpochMs(),
+          });
+          return;
+        }
+        try {
+          const media = parseMediaV2Frame(event.data);
+          if (media.kind !== "playback" || media.codec !== this.mediaPlayback.codec
+              || media.sampleRate !== this.mediaPlayback.sampleRate
+              || media.channels !== this.mediaPlayback.channels) {
+            throw new TypeError("Media v2 frame does not match the negotiated playback configuration");
+          }
+          const frameIndex = this.pendingMediaFrames.findIndex(frame => frame.streamId === media.streamId
+            && frame.mediaSequence === media.sequence);
+          const frame = frameIndex < 0 ? undefined : this.pendingMediaFrames.splice(frameIndex, 1)[0];
+          // A newer playback.start supersedes old bytes even if a transport adapter ever
+          // delivers them late. They must not re-arm the speaker after interruption.
+          if (media.streamId !== this.playbackStreamId) return;
+          if (media.sequence !== this.expectedMediaSequence
+              || media.timestampSamples !== BigInt(this.expectedTimestampSamples)) {
+            throw new TypeError("Media v2 sequence or timestamp discontinuity");
+          }
+          this.expectedMediaSequence += 1;
+          this.expectedTimestampSamples += media.durationSamples;
+          if (media.codec !== "pcm_s16le") throw new TypeError(`unsupported browser media codec ${media.codec}`);
+          const samples = decodePcm16(media.payload);
+          this.options.onAudio(samples, {
+            frame,
+            receivedAtMs,
+            decodedAtMs: monotonicEpochMs(),
+            media: {
+              streamId: media.streamId,
+              sequence: media.sequence,
+              timestampSamples: Number(media.timestampSamples),
+              durationSamples: media.durationSamples,
+            },
+          });
+        } catch {
+          // Never reinterpret a malformed negotiated envelope as raw float PCM. Closing
+          // forces the normal snapshot-based reconnect path and keeps noise off speakers.
+          socket.close();
+        }
       }
     });
     socket.addEventListener("close", () => {
@@ -122,6 +194,7 @@ export class GatewayClient {
       this.socket = undefined;
       this.stopMediaPing();
       this.pendingMediaFrames.length = 0;
+      this.playbackStreamId = undefined;
       if (this.closed) {
         this.options.onConnectionChange("disconnected");
         return;

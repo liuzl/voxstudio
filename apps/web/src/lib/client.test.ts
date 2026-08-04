@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { GatewayEvent } from "@voxstudio/realtime-gateway/protocol";
+import { encodePcm16 } from "@voxstudio/audio";
+import { encodeMediaV2Frame, mediaV2FlagStart } from "@voxstudio/realtime-gateway/media-v2";
 import { GatewayClient, type AudioFrameDelivery, type SocketLike } from "./client";
 
 /** A scripted WebSocket: the test plays the server. */
@@ -154,6 +156,107 @@ describe("GatewayClient", () => {
     expect(deliveries[1]?.frame?.frameId).toBe(9);
     expect(deliveries[0]?.decodedAtMs).toBeGreaterThanOrEqual(deliveries[0]?.receivedAtMs ?? Infinity);
     expect(socket.commands().some(command => command.type === "media.ping")).toBe(true);
+    client.close();
+  });
+
+  test("waits for session acceptance before starting media pings", () => {
+    const { client, sockets } = makeClient({
+      startOptions: {
+        language: "zh",
+        mediaTelemetry: true,
+        media: {
+          version: 2,
+          playback: [{ codec: "pcm_s16le", sampleRate: 24_000, channels: 1, packetDurationMs: 20 }],
+        },
+      },
+    });
+    client.connect();
+    const socket = sockets[0] as FakeSocket;
+    socket.emit("open", {});
+    // Media negotiation can finish before asynchronous VAD/session initialization. A
+    // ping in this window used to produce the visible session_starting rejection.
+    socket.serverEvent({
+      type: "media.config",
+      version: 2,
+      playback: { codec: "pcm_s16le", sampleRate: 24_000, channels: 1, packetDurationMs: 20 },
+    });
+    expect(socket.commands().some(command => command.type === "media.ping")).toBe(false);
+    socket.serverEvent({ type: "command.accepted", commandType: "session.start", idempotencyKey: "key-1" });
+    expect(socket.commands().some(command => command.type === "media.ping")).toBe(true);
+    client.close();
+  });
+
+  test("decodes negotiated Media v2 PCM16 and discards a superseded stream", () => {
+    const offer = {
+      version: 2,
+      playback: [{ codec: "pcm_s16le", sampleRate: 24_000, channels: 1, packetDurationMs: 20 }],
+    } as const;
+    const { client, sockets, audio, deliveries } = makeClient({
+      startOptions: { language: "zh", mediaTelemetry: true, media: offer },
+    });
+    client.connect();
+    const socket = sockets[0] as FakeSocket;
+    socket.emit("open", {});
+    const streamId = "00112233-4455-6677-8899-aabbccddeeff";
+    socket.serverEvent({ type: "media.config", version: 2, playback: offer.playback[0] });
+    socket.serverEvent({
+      type: "playback.start",
+      turnId: "turn-v2",
+      revision: 0,
+      streamId,
+      ...offer.playback[0],
+    });
+    socket.serverEvent({
+      type: "media.frame",
+      frameId: 20,
+      turnId: "turn-v2",
+      revision: 0,
+      codec: "pcm_s16le",
+      sampleRate: 24_000,
+      channels: 1,
+      bytes: 60,
+      audioMs: 2 / 24,
+      producedAtMs: 10,
+      enqueuedAtMs: 11,
+      streamId,
+      mediaSequence: 0,
+      timestampSamples: 0,
+    });
+    const expected = new Float32Array([0.25, -0.5]);
+    const encoded = encodeMediaV2Frame({
+      kind: "playback",
+      codec: "pcm_s16le",
+      flags: mediaV2FlagStart,
+      streamId,
+      sequence: 0,
+      timestampSamples: 0n,
+      durationSamples: expected.length,
+      sampleRate: 24_000,
+      channels: 1,
+      payload: encodePcm16(expected),
+    });
+    socket.emit("message", { data: encoded.buffer });
+
+    expect(audio).toHaveLength(1);
+    expect(audio[0]?.[0]).toBeCloseTo(0.25, 4);
+    expect(audio[0]?.[1]).toBeCloseTo(-0.5, 4);
+    expect(deliveries[0]?.frame?.frameId).toBe(20);
+    expect(deliveries[0]?.media).toEqual({
+      streamId,
+      sequence: 0,
+      timestampSamples: 0,
+      durationSamples: 2,
+    });
+
+    socket.serverEvent({
+      type: "playback.start",
+      turnId: "turn-new",
+      revision: 0,
+      streamId: "11112233-4455-6677-8899-aabbccddeeff",
+      ...offer.playback[0],
+    });
+    socket.emit("message", { data: encoded.buffer });
+    expect(audio).toHaveLength(1);
     client.close();
   });
 

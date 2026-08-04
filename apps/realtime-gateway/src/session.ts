@@ -1,4 +1,5 @@
 import { type PcmStreamDecoder, AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
+import { encodePcm16, LinearResampler } from "@voxstudio/audio";
 import type { AgentSpec } from "@voxstudio/agents";
 import { engine, enginesOfKind, roleInstance } from "@voxstudio/config";
 import {
@@ -26,8 +27,10 @@ import {
   type GatewayCommand,
   type GatewayEvent,
   type GatewayEventPayload,
+  type MediaPlaybackConfiguration,
   type SessionStartOptions,
 } from "./protocol";
+import { encodeMediaV2Frame, mediaV2FlagStart } from "./media-v2";
 
 /** Where a session's outbound traffic goes: the WebSocket currently attached to it. */
 export interface SinkSendObservation {
@@ -130,6 +133,13 @@ const maxIdempotencyKeys = 512;
 const legacyPcmFrameMs = 240;
 const maxQueuedOutputMs = 1_000;
 const defaultMediaBackpressureTimeoutMs = 2_000;
+const mediaV2InitialBurstMs = 200;
+const mediaV2Pcm16Playback = {
+  codec: "pcm_s16le",
+  sampleRate: 24_000,
+  channels: 1,
+  packetDurationMs: 20,
+} as const satisfies MediaPlaybackConfiguration;
 
 type MediaBackpressureOutcome = "drained" | "detached" | "cancelled" | "timeout";
 
@@ -227,6 +237,7 @@ export class GatewaySession {
   private terminalErrorCode: string | undefined;
   private playbackAck = false;
   private mediaTelemetry = false;
+  private mediaPlayback: typeof mediaV2Pcm16Playback | undefined;
   private mediaFrameSequence = 0;
   private mediaHighWaterBytes = 0;
   private mediaBackpressure: {
@@ -300,6 +311,17 @@ export class GatewaySession {
     this.sink = sink;
     this.playbackAck = start.playbackAck ?? false;
     this.mediaTelemetry = start.mediaTelemetry ?? false;
+    if (start.media !== undefined) {
+      const compatible = start.media.playback.some(candidate => candidate.codec === mediaV2Pcm16Playback.codec
+        && candidate.sampleRate === mediaV2Pcm16Playback.sampleRate
+        && candidate.channels === mediaV2Pcm16Playback.channels
+        && candidate.packetDurationMs === mediaV2Pcm16Playback.packetDurationMs);
+      if (!compatible) {
+        throw new TypeError("no compatible Media v2 playback configuration; gateway supports pcm_s16le/24000/mono/20ms");
+      }
+      this.mediaPlayback = { ...mediaV2Pcm16Playback };
+      this.emit({ type: "media.config", version: 2, playback: this.mediaPlayback });
+    }
     const vad = await this.createVad(start);
     // A socket that closed while the awaits above ran already stopped this session;
     // starting the kernel now would revive a session the registry has forgotten.
@@ -507,6 +529,9 @@ export class GatewaySession {
     // The reconnect contract: the client resynchronizes from a snapshot rather than
     // replaying history, so the snapshot is pushed rather than waited for.
     this.emit(snapshotEvent(this.duplex.snapshot(), this.sequence + 1));
+    if (this.mediaPlayback !== undefined) {
+      this.emit({ type: "media.config", version: 2, playback: this.mediaPlayback });
+    }
   }
 
   detach(sink: EventSink): void {
@@ -779,10 +804,15 @@ export class GatewaySession {
   private createPlayer(turnId: string, revision: number): ConversationPlayer {
     type QueuedFrame = {
       frameId: number;
-      samples: Float32Array;
+      bytes: Uint8Array;
       sampleRate: number;
       audioMs: number;
+      codec: "pcm_f32le" | "pcm_s16le";
+      mediaSequence?: number;
+      timestampSamples?: number;
     };
+    const mediaPlayback = this.mediaPlayback;
+    const streamId = mediaPlayback === undefined ? undefined : crypto.randomUUID();
     const queue: QueuedFrame[] = [];
     const capacityWaiters = new Set<() => void>();
     let submittedRate: number | undefined;
@@ -797,6 +827,13 @@ export class GatewaySession {
     let failure: Error | undefined;
     let aborted = false;
     let closed = false;
+    let playbackStarted = false;
+    let sourceSampleRate: number | undefined;
+    let resampler: LinearResampler | undefined;
+    let nextMediaSequence = 0;
+    let nextTimestampSamples = 0;
+    let mediaPaceStartedAtMs: number | undefined;
+    let pacedAudioMs = 0;
     let cancelWriter = (): void => {};
     const cancelled = new Promise<void>(resolve => { cancelWriter = resolve; });
 
@@ -874,7 +911,8 @@ export class GatewaySession {
           submittedRate = frame.sampleRate;
           this.emit({ type: "playback.format", turnId, revision, sampleRate: frame.sampleRate });
         }
-        const bytes = new Uint8Array(frame.samples.buffer, frame.samples.byteOffset, frame.samples.byteLength);
+        if (!(await waitForMediaPace())) return;
+        const bytes = frame.bytes;
         const submittedAtMs = monotonicEpochMs();
         const sink = this.sink;
         const observation = sink?.send(bytes);
@@ -884,6 +922,7 @@ export class GatewaySession {
         const backpressured = sendResult === -1;
         if (backpressured && sink !== undefined) this.beginMediaBackpressure(sink, frame.frameId, submittedAtMs);
         const dropped = sink === undefined || sendResult === 0;
+        if (!dropped && mediaPlayback !== undefined) pacedAudioMs += frame.audioMs;
         queue.shift();
         queuedMs = Math.max(0, queuedMs - frame.audioMs);
         queuedBytes = Math.max(0, queuedBytes - bytes.byteLength);
@@ -937,6 +976,21 @@ export class GatewaySession {
       return !aborted;
     };
 
+    const waitForMediaPace = async (): Promise<boolean> => {
+      if (mediaPlayback === undefined) return !aborted;
+      mediaPaceStartedAtMs ??= monotonicEpochMs();
+      const dueAtMs = mediaPaceStartedAtMs + Math.max(0, pacedAudioMs - mediaV2InitialBurstMs);
+      const delayMs = dueAtMs - monotonicEpochMs();
+      if (delayMs <= 0) return !aborted;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        new Promise<void>(resolve => { timer = setTimeout(resolve, delayMs); }),
+        cancelled,
+      ]);
+      if (timer !== undefined) clearTimeout(timer);
+      return !aborted;
+    };
+
     return {
       write: async audio => {
         if (closed) throw new Error("cannot write after the media rendition closed");
@@ -946,33 +1000,105 @@ export class GatewaySession {
           throw new TypeError("PCM sample rate must be a positive finite number");
         }
         const producedAtMs = monotonicEpochMs();
-        const frameSamples = Math.max(1, Math.floor(audio.sampleRate * legacyPcmFrameMs / 1_000));
-        for (let offset = 0; offset < audio.samples.length; offset += frameSamples) {
-          const end = Math.min(audio.samples.length, offset + frameSamples);
-          const audioMs = (end - offset) * 1_000 / audio.sampleRate;
+        let output = audio.samples;
+        let outputRate = audio.sampleRate;
+        if (mediaPlayback !== undefined) {
+          if (sourceSampleRate === undefined) {
+            sourceSampleRate = audio.sampleRate;
+            resampler = new LinearResampler(sourceSampleRate, mediaPlayback.sampleRate);
+          } else if (sourceSampleRate !== audio.sampleRate) {
+            throw new TypeError("Media v2 rendition cannot change source sample rate");
+          }
+          output = resampler?.push(audio.samples) ?? new Float32Array(0);
+          outputRate = mediaPlayback.sampleRate;
+          if (output.length > 0 && !playbackStarted && streamId !== undefined) {
+            playbackStarted = true;
+            this.emit({
+              type: "playback.start",
+              turnId,
+              revision,
+              streamId,
+              codec: mediaPlayback.codec,
+              sampleRate: mediaPlayback.sampleRate,
+              channels: mediaPlayback.channels,
+              packetDurationMs: mediaPlayback.packetDurationMs,
+            });
+          }
+        }
+        const frameMs = mediaPlayback?.packetDurationMs ?? legacyPcmFrameMs;
+        const frameSamples = Math.max(1, Math.floor(outputRate * frameMs / 1_000));
+        for (let offset = 0; offset < output.length; offset += frameSamples) {
+          const end = Math.min(output.length, offset + frameSamples);
+          const durationSamples = end - offset;
+          const audioMs = durationSamples * 1_000 / outputRate;
           if (!(await waitForCapacity(audioMs))) return;
-          const samples = audio.samples.slice(offset, end);
+          const samples = output.slice(offset, end);
           const frameId = ++this.mediaFrameSequence;
-          const frame: QueuedFrame = { frameId, samples, sampleRate: audio.sampleRate, audioMs };
+          let frame: QueuedFrame;
+          if (mediaPlayback !== undefined && streamId !== undefined) {
+            const mediaSequence = nextMediaSequence++;
+            const timestampSamples = nextTimestampSamples;
+            nextTimestampSamples += durationSamples;
+            const bytes = encodeMediaV2Frame({
+              kind: "playback",
+              codec: "pcm_s16le",
+              flags: mediaSequence === 0 ? mediaV2FlagStart : 0,
+              streamId,
+              sequence: mediaSequence,
+              timestampSamples: BigInt(timestampSamples),
+              durationSamples,
+              sampleRate: outputRate,
+              channels: 1,
+              payload: encodePcm16(samples),
+            });
+            frame = {
+              frameId,
+              bytes,
+              sampleRate: outputRate,
+              audioMs,
+              codec: "pcm_s16le",
+              mediaSequence,
+              timestampSamples,
+            };
+          } else {
+            frame = {
+              frameId,
+              bytes: new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength),
+              sampleRate: outputRate,
+              audioMs,
+              codec: "pcm_f32le",
+            };
+          }
           queue.push(frame);
           queuedMs += audioMs;
-          queuedBytes += samples.byteLength;
+          queuedBytes += frame.bytes.byteLength;
           sentMs += audioMs;
           sentFrames += 1;
           if (this.mediaTelemetry) {
-            this.emit({
-              type: "media.frame",
+            const common = {
+              type: "media.frame" as const,
               frameId,
               turnId,
               revision,
-              codec: "pcm_f32le",
-              sampleRate: audio.sampleRate,
-              channels: 1,
-              bytes: samples.byteLength,
+              sampleRate: outputRate,
+              channels: 1 as const,
+              bytes: frame.bytes.byteLength,
               audioMs,
               producedAtMs,
               enqueuedAtMs: monotonicEpochMs(),
-            });
+            };
+            if (frame.codec === "pcm_s16le" && streamId !== undefined
+                && frame.mediaSequence !== undefined && frame.timestampSamples !== undefined) {
+              this.emit({
+                ...common,
+                codec: "pcm_s16le",
+                streamId,
+                mediaSequence: frame.mediaSequence,
+                timestampSamples: frame.timestampSamples,
+              });
+            } else {
+              this.emit({ ...common, codec: "pcm_f32le" });
+            }
           }
           ensurePump();
         }
@@ -995,6 +1121,9 @@ export class GatewaySession {
           throw failure ?? error;
         }
         if (failure !== undefined || aborted) return;
+        if (mediaPlayback !== undefined && streamId !== undefined && playbackStarted) {
+          this.emit({ type: "playback.end", turnId, revision, streamId, totalSamples: nextTimestampSamples });
+        }
         reportRendition("completed");
         this.emit({ type: "playback.ended", turnId });
         if (!this.playbackAck || this.stopped) return;

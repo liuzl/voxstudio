@@ -2,7 +2,10 @@
 
 Status: Accepted implementation plan, 2026-08-04. Research, current-state
 measurement, Phase 0 observability, and Phase 1 legacy PCM hardening are delivered.
-The Phase 1 iPhone/Tailnet device gate passed on 2026-08-04.
+The Phase 1 iPhone/Tailnet device gate passed on 2026-08-04. The Phase 2 PCM16 slice is
+implemented behind explicit negotiation, including its continuous AudioWorklet
+renderer. Studio advertises it only after worklet initialization succeeds; desktop and
+iPhone promotion gates are still required before the slice is considered delivered.
 
 This document turns the remote/mobile audio investigation into an implementation
 contract. It refines the transport portion of
@@ -237,8 +240,12 @@ fall back explicitly; they never reinterpret compressed bytes as PCM.
 
 ### 3. Media v2 has explicit stream identity and time
 
-Control remains JSON. `session.start` advertises supported media configurations and
-the gateway confirms one. Each Agent rendition begins with a control event resembling:
+Control remains JSON protocol v1. `session.start.options.media` advertises supported
+media configurations and the gateway confirms one with `media.config`. Omitting the
+offer preserves the legacy unframed f32 path; an explicit unsupported offer is rejected
+instead of silently changing formats. The first exact configuration implemented is
+20 ms mono `pcm_s16le` at 24 kHz. Each Agent rendition begins with a control event
+resembling:
 
 ```json
 {
@@ -253,20 +260,32 @@ the gateway confirms one. Each Agent rendition begins with a control event resem
 }
 ```
 
-Every binary media envelope carries, at minimum:
+Every binary media message has a fixed 56-byte little-endian header followed by the
+codec payload. The frozen layout is:
 
-| Field | Purpose |
-|---|---|
-| protocol version and media kind | reject incompatible frames |
-| stream id | isolate playback renditions and discard stale media |
-| monotonically increasing sequence | expose gaps, duplicates, and ordering defects |
-| media timestamp | place frames on the rendition's audio timeline |
-| duration in samples | buffer accounting without decoding guesses |
-| flags | start/end/discontinuity or future codec information |
-| payload | Opus packet or negotiated PCM bytes |
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 4 | ASCII magic `VOX2` |
+| 4 | 1 | media version, currently `2` |
+| 5 | 1 | kind: playback `1`, capture `2` |
+| 6 | 1 | codec: PCM16 `1`, Opus `2`, float PCM `3` |
+| 7 | 1 | flags: start bit 0, end bit 1, discontinuity bit 2 |
+| 8 | 2 | header size, currently `56` |
+| 10 | 1 | channel count |
+| 11 | 1 | reserved, zero |
+| 12 | 4 | sample rate |
+| 16 | 4 | monotonically increasing stream sequence |
+| 20 | 4 | represented duration in samples per channel |
+| 24 | 8 | stream timestamp in samples |
+| 32 | 4 | payload byte count |
+| 36 | 4 | reserved, zero |
+| 40 | 16 | binary UUID stream identity |
+| 56 | variable | negotiated codec payload, capped at 1 MiB |
 
-The exact byte layout is fixed with golden-vector tests before implementation. It must
-be bounded, allocation-safe, and parseable without inspecting codec bytes.
+The parser rejects unknown versions, kinds, codecs, flags, nonzero reserved fields,
+oversized or truncated payload claims, and PCM lengths inconsistent with the declared
+duration. A byte-exact golden vector freezes the layout independently of encoder and
+decoder round trips.
 
 `playback.end` means the producer has emitted its final packet. It does not mean audio
 was heard. The client emits `playback.complete` only after its render worklet has
@@ -464,6 +483,27 @@ experience than the unbounded legacy transport.
 
 Gate: all required browsers complete the shaped-network matrix below, and a v1 client
 still receives an explicit compatible response rather than malformed media.
+
+PCM16 slice implemented 2026-08-04: the gateway and web client share the frozen
+allocation-safe envelope, explicit offer/confirmation, rendition stream identity,
+sequence and sample-clock validation, stale-stream rejection, and a 24 kHz mono PCM16
+20 ms path. Gateway tests cover byte-level golden vectors, unsupported negotiation,
+protocol-v1 fallback, framing bounds, and sequence/timestamp continuity; client tests
+cover strict decoding, telemetry correlation, and late frames from superseded streams.
+
+Studio initializes a single output AudioWorklet before making the offer. The gateway
+paces v2 delivery after a 200 ms initial burst, while its existing 1,000 ms producer
+queue and congestion deadline keep upstream work bounded. The worklet resamples once
+into the device clock, renders a continuous transferable-buffer queue, starts at 160 ms,
+raises its target by 40 ms after an underrun up to 600 ms, and decays toward 120 ms after
+stable playback. Render and drain observations now come from the audio render thread;
+interruption empties the queue without creating one source node per packet. A worklet
+harness verifies startup buffering, continuous rendering, and exactly-once drain.
+
+The PCM16 slice still needs the desktop and iPhone shaped-network/device matrix before
+it is promoted as delivered. Opus encode/decode, WebCodecs/WASM fallback, capture Media
+v2, and a direct browser-to-gateway credit mechanism remain later slices. Opus does not
+block validating the renderer and interruption behavior with PCM16.
 
 ### Phase 3A — LiveKit Cloud remote adapter and device gate
 
