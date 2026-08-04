@@ -658,7 +658,12 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   const sinkFor = (ws: ServerWebSocket<SocketData>): EventSink => {
     // One sink object per socket: attach/detach pair on its identity, so a stale socket's
     // close event can never detach the connection that replaced it.
-    ws.data.sink ??= { send: payload => { ws.send(payload); } };
+    ws.data.sink ??= {
+      send: payload => ({
+        sendResult: ws.send(payload),
+        bufferedBytes: ws.getBufferedAmount(),
+      }),
+    };
     return ws.data.sink;
   };
 
@@ -1705,6 +1710,11 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         const session = ws.data.session;
         if (session) session.handleCommand(command);
         else handleFirstCommand(ws, command);
+      },
+      drain(ws) {
+        if (ws.data.openai) return;
+        const sink = ws.data.sink;
+        if (sink !== undefined) ws.data.session?.socketDrained(sink);
       },
       close(ws) {
         ws.data.closed = true;

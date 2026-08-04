@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { GatewayEvent } from "@voxstudio/realtime-gateway/protocol";
-import { GatewayClient, type SocketLike } from "./client";
+import { GatewayClient, type AudioFrameDelivery, type SocketLike } from "./client";
 
 /** A scripted WebSocket: the test plays the server. */
 class FakeSocket implements SocketLike {
@@ -41,13 +41,17 @@ function makeClient(overrides: Partial<ConstructorParameters<typeof GatewayClien
   const sockets: FakeSocket[] = [];
   const events: GatewayEvent[] = [];
   const audio: Float32Array[] = [];
+  const deliveries: AudioFrameDelivery[] = [];
   const states: string[] = [];
   let keys = 0;
   const client = new GatewayClient({
     url: "ws://gateway.test/v1/realtime",
     startOptions: { language: "zh", bargeIn: true, playbackAck: true },
     onEvent: event => events.push(event),
-    onAudio: samples => audio.push(samples),
+    onAudio: (samples, delivery) => {
+      audio.push(samples);
+      deliveries.push(delivery);
+    },
     onConnectionChange: state => states.push(state),
     makeSocket: () => {
       const socket = new FakeSocket();
@@ -58,7 +62,7 @@ function makeClient(overrides: Partial<ConstructorParameters<typeof GatewayClien
     newIdempotencyKey: () => `key-${++keys}`,
     ...overrides,
   });
-  return { client, sockets, events, audio, states };
+  return { client, sockets, events, audio, deliveries, states };
 }
 
 describe("GatewayClient", () => {
@@ -107,6 +111,50 @@ describe("GatewayClient", () => {
     const commands = second.commands();
     expect(commands[0]).toMatchObject({ type: "session.attach", sessionId: "s-1", idempotencyKey: "key-2" });
     expect(states.at(-1)).toBe("connected");
+  });
+
+  test("correlates an announced media frame with binary PCM and starts RTT pings", () => {
+    const { client, sockets, deliveries } = makeClient({
+      startOptions: { language: "zh", mediaTelemetry: true },
+    });
+    client.connect();
+    const socket = sockets[0] as FakeSocket;
+    socket.emit("open", {});
+    socket.serverEvent({ type: "command.accepted", commandType: "session.start", idempotencyKey: "key-1" });
+    socket.serverEvent({
+      type: "media.frame",
+      frameId: 7,
+      turnId: "t-1",
+      revision: 0,
+      codec: "pcm_f32le",
+      sampleRate: 24_000,
+      channels: 1,
+      bytes: 8,
+      audioMs: 1,
+      producedAtMs: 10,
+      enqueuedAtMs: 11,
+    });
+    socket.emit("message", { data: new Float32Array([0.1, 0.2]).buffer });
+
+    socket.serverEvent({
+      type: "media.frame", frameId: 8, turnId: "t-1", revision: 0, codec: "pcm_f32le",
+      sampleRate: 24_000, channels: 1, bytes: 8, audioMs: 1, producedAtMs: 12, enqueuedAtMs: 13,
+    });
+    socket.serverEvent({
+      type: "media.socket", frameId: 8, submittedAtMs: 14, sendResult: 0,
+      highWaterBytes: 0, backpressured: false, dropped: true,
+    });
+    socket.serverEvent({
+      type: "media.frame", frameId: 9, turnId: "t-1", revision: 0, codec: "pcm_f32le",
+      sampleRate: 24_000, channels: 1, bytes: 8, audioMs: 1, producedAtMs: 15, enqueuedAtMs: 16,
+    });
+    socket.emit("message", { data: new Float32Array([0.3, 0.4]).buffer });
+
+    expect(deliveries[0]?.frame?.frameId).toBe(7);
+    expect(deliveries[1]?.frame?.frameId).toBe(9);
+    expect(deliveries[0]?.decodedAtMs).toBeGreaterThanOrEqual(deliveries[0]?.receivedAtMs ?? Infinity);
+    expect(socket.commands().some(command => command.type === "media.ping")).toBe(true);
+    client.close();
   });
 
   test("an expired session on reattach falls back to a fresh start", async () => {

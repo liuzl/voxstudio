@@ -30,8 +30,14 @@ import {
 } from "./protocol";
 
 /** Where a session's outbound traffic goes: the WebSocket currently attached to it. */
+export interface SinkSendObservation {
+  /** Bun: -1 enqueued with backpressure, 0 dropped, positive is bytes sent. */
+  sendResult?: number;
+  bufferedBytes?: number;
+}
+
 export interface EventSink {
-  send(data: string | Uint8Array): void;
+  send(data: string | Uint8Array): SinkSendObservation | void;
 }
 
 export interface GatewaySessionOptions {
@@ -118,6 +124,13 @@ const inputSampleRate = 16_000;
 const maxBufferedInputMs = 30_000;
 const maxIdempotencyKeys = 512;
 
+/** Epoch-shaped but monotonic within this process, so browser clock alignment is stable. */
+function monotonicEpochMs(): number {
+  return typeof performance !== "undefined"
+    ? performance.timeOrigin + performance.now()
+    : Date.now();
+}
+
 /**
  * Push-based frame source for the conversation loop. The gateway stamps timestamps from
  * the sample count anchored at arrival wall-clock time — the loop's suppression and reopen
@@ -193,6 +206,10 @@ export class GatewaySession {
   private stopped = false;
   private terminalErrorCode: string | undefined;
   private playbackAck = false;
+  private mediaTelemetry = false;
+  private mediaFrameSequence = 0;
+  private mediaHighWaterBytes = 0;
+  private mediaBackpressureStartedAtMs: number | undefined;
   private playbackWaiter: { turnId: string; resolve: () => void } | undefined;
   private lastAckedTurnId: string | undefined;
   private readonly sawDelta = new Set<string>();
@@ -256,6 +273,7 @@ export class GatewaySession {
   async start(start: SessionStartOptions, sink: EventSink): Promise<void> {
     this.sink = sink;
     this.playbackAck = start.playbackAck ?? false;
+    this.mediaTelemetry = start.mediaTelemetry ?? false;
     const vad = await this.createVad(start);
     // A socket that closed while the awaits above ran already stopped this session;
     // starting the kernel now would revive a session the registry has forgotten.
@@ -505,6 +523,17 @@ export class GatewaySession {
           this.playbackWaiter = undefined;
         }
         return;
+      case "media.ping": {
+        this.accept(command);
+        const serverReceivedAtMs = monotonicEpochMs();
+        this.emit({
+          type: "media.pong",
+          clientSentAtMs: command.clientSentAtMs,
+          serverReceivedAtMs,
+          serverSentAtMs: monotonicEpochMs(),
+        });
+        return;
+      }
       case "session.stop":
         this.accept(command);
         this.stop();
@@ -531,6 +560,22 @@ export class GatewaySession {
 
   snapshotPayload(): GatewayEventPayload {
     return snapshotEvent(this.duplex.snapshot(), this.sequence + 1);
+  }
+
+  /** Bun calls this after a backpressured socket becomes writable again. */
+  socketDrained(sink: EventSink): void {
+    if (!this.mediaTelemetry || this.sink !== sink) return;
+    const startedAtMs = this.mediaBackpressureStartedAtMs;
+    if (startedAtMs === undefined) return;
+    const drainedAtMs = monotonicEpochMs();
+    this.mediaBackpressureStartedAtMs = undefined;
+    this.emit({
+      type: "media.socket.drain",
+      startedAtMs,
+      drainedAtMs,
+      durationMs: Math.max(0, drainedAtMs - startedAtMs),
+      highWaterBytes: this.mediaHighWaterBytes,
+    });
   }
 
   emit(payload: GatewayEventPayload): void {
@@ -609,15 +654,69 @@ export class GatewaySession {
   private createPlayer(turnId: string, revision: number): ConversationPlayer {
     let announcedRate: number | undefined;
     let sentMs = 0;
+    let sentFrames = 0;
+    let renditionReported = false;
+    const reportRendition = (status: "completed" | "interrupted"): void => {
+      if (!this.mediaTelemetry || renditionReported) return;
+      renditionReported = true;
+      this.emit({
+        type: "media.rendition",
+        turnId,
+        revision,
+        status,
+        frames: sentFrames,
+        audioMs: sentMs,
+        // Protocol v1 has no post-enqueue media queue. Phase 1 will increment this when
+        // it adds bounded queued pieces and discards a superseded rendition.
+        staleFramesDiscarded: 0,
+        endedAtMs: monotonicEpochMs(),
+      });
+    };
     return {
       write: async audio => {
+        const producedAtMs = monotonicEpochMs();
         if (audio.sampleRate !== announcedRate) {
           announcedRate = audio.sampleRate;
           this.emit({ type: "playback.format", turnId, revision, sampleRate: audio.sampleRate });
         }
         sentMs += audio.samples.length * 1_000 / audio.sampleRate;
+        sentFrames += 1;
         const bytes = new Uint8Array(audio.samples.buffer, audio.samples.byteOffset, audio.samples.byteLength);
-        this.sink?.send(bytes);
+        const frameId = ++this.mediaFrameSequence;
+        if (this.mediaTelemetry) {
+          this.emit({
+            type: "media.frame",
+            frameId,
+            turnId,
+            revision,
+            codec: "pcm_f32le",
+            sampleRate: audio.sampleRate,
+            channels: 1,
+            bytes: bytes.byteLength,
+            audioMs: audio.samples.length * 1_000 / audio.sampleRate,
+            producedAtMs,
+            enqueuedAtMs: monotonicEpochMs(),
+          });
+        }
+        const submittedAtMs = monotonicEpochMs();
+        const observation = this.sink?.send(bytes);
+        if (this.mediaTelemetry) {
+          const sendResult = observation?.sendResult;
+          const bufferedBytes = observation?.bufferedBytes;
+          if (bufferedBytes !== undefined) this.mediaHighWaterBytes = Math.max(this.mediaHighWaterBytes, bufferedBytes);
+          const backpressured = sendResult === -1;
+          if (backpressured) this.mediaBackpressureStartedAtMs ??= submittedAtMs;
+          this.emit({
+            type: "media.socket",
+            frameId,
+            submittedAtMs,
+            ...(sendResult === undefined ? {} : { sendResult }),
+            ...(bufferedBytes === undefined ? {} : { bufferedBytes }),
+            highWaterBytes: this.mediaHighWaterBytes,
+            backpressured,
+            dropped: sendResult === 0,
+          });
+        }
       },
       // The gateway cannot hear the client's speaker, so the audible clock belongs to the
       // endpoint. With playbackAck the turn stays `speaking` until the client reports the
@@ -625,6 +724,7 @@ export class GatewaySession {
       // silent client cannot wedge the session. Without it, close resolves when the last
       // piece has been sent.
       close: async () => {
+        reportRendition("completed");
         this.emit({ type: "playback.ended", turnId });
         if (!this.playbackAck || this.stopped) return;
         if (this.lastAckedTurnId === turnId) return;
@@ -647,6 +747,7 @@ export class GatewaySession {
           this.playbackWaiter.resolve();
           this.playbackWaiter = undefined;
         }
+        reportRendition("interrupted");
         this.emit({ type: "playback.interrupted", turnId });
       },
     };

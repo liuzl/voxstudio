@@ -3,6 +3,7 @@ import type { EngineEntry, VoiceEntry } from "./lib/api";
 import { create } from "zustand";
 import type { EndpointCapability } from "./lib/audio";
 import type { ConnectionState } from "./lib/client";
+import { emptyMediaDiagnostics, type MediaDiagnostics } from "./lib/media-telemetry";
 
 export interface TurnView {
   id: string;
@@ -57,6 +58,8 @@ interface StudioState {
   turns: TurnView[];
   notices: NoticeView[];
   capability: EndpointCapability | undefined;
+  /** Metadata-only transport diagnostics for the current or most recent session. */
+  mediaDiagnostics: MediaDiagnostics;
   voice: string;
   /** The engine owning the conversation voice; routes the session's TTS when set. */
   voiceEngine: string;
@@ -97,6 +100,8 @@ interface StudioState {
   /** Clear the finished conversation's turns and notices — back to the start card. */
   clearHistory(): void;
   setCapability(capability: EndpointCapability): void;
+  setMediaDiagnostics(diagnostics: MediaDiagnostics): void;
+  resetMediaDiagnostics(): void;
   setVoice(voice: string, engine?: string): void;
   setWelcome(welcome: string): void;
   setNudgeAfterSeconds(seconds: number): void;
@@ -307,6 +312,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   turns: [],
   notices: [],
   capability: undefined,
+  mediaDiagnostics: emptyMediaDiagnostics(),
   voice: "",
   voiceEngine: "",
   conversationAsrEngine: storedConversationAsrEngine,
@@ -380,6 +386,8 @@ export const useStudio = create<StudioState>((set, get) => ({
   setMicLevel: micLevel => set({ micLevel }),
   clearHistory: () => set({ turns: [], notices: [] }),
   setCapability: capability => set({ capability }),
+  setMediaDiagnostics: mediaDiagnostics => set({ mediaDiagnostics }),
+  resetMediaDiagnostics: () => set({ mediaDiagnostics: emptyMediaDiagnostics() }),
   setVoice: (voice, engine) => {
     const selected = engine ?? "";
     persist(conversationTtsEngineKey, selected);

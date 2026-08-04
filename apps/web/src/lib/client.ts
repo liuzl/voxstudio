@@ -4,6 +4,18 @@ import {
   type SessionStartOptions,
 } from "@voxstudio/realtime-gateway/protocol";
 
+export type MediaFrameEvent = Extract<GatewayEvent, { type: "media.frame" }>;
+
+export interface AudioFrameDelivery {
+  frame: MediaFrameEvent | undefined;
+  receivedAtMs: number;
+  decodedAtMs: number;
+}
+
+export function monotonicEpochMs(): number {
+  return performance.timeOrigin + performance.now();
+}
+
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
 
 /** The subset of the WebSocket API the client uses; tests inject a scripted one. */
@@ -22,7 +34,7 @@ export interface GatewayClientOptions {
   startOptions: SessionStartOptions;
   onEvent(event: GatewayEvent): void;
   /** Reply audio: raw float32 samples at the rate announced by the last playback.format. */
-  onAudio(samples: Float32Array): void;
+  onAudio(samples: Float32Array, delivery: AudioFrameDelivery): void;
   onConnectionChange(state: ConnectionState): void;
   makeSocket?(url: string): SocketLike;
   /** Reconnect backoff base; tests shrink it. */
@@ -45,6 +57,8 @@ export class GatewayClient {
   private attempts = 0;
   private closed = false;
   private lastSequence = 0;
+  private readonly pendingMediaFrames: MediaFrameEvent[] = [];
+  private pingTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(options: GatewayClientOptions) {
     this.options = options;
@@ -77,6 +91,11 @@ export class GatewayClient {
         const parsed = JSON.parse(event.data) as GatewayEvent;
         this.sessionId ??= parsed.sessionId || undefined;
         if (parsed.sequence > 0) this.lastSequence = parsed.sequence;
+        if (parsed.type === "media.frame") this.pendingMediaFrames.push(parsed);
+        if (parsed.type === "media.socket" && parsed.dropped) {
+          const index = this.pendingMediaFrames.findIndex(frame => frame.frameId === parsed.frameId);
+          if (index >= 0) this.pendingMediaFrames.splice(index, 1);
+        }
         // A rejected attach means the session expired while we were gone: the next
         // connection starts fresh instead of retrying a dead id forever.
         if (parsed.type === "command.rejected" && parsed.reason === "unknown_session") {
@@ -84,13 +103,25 @@ export class GatewayClient {
           this.command({ type: "session.start", options: this.options.startOptions });
         }
         this.options.onEvent(parsed);
+        if (this.options.startOptions.mediaTelemetry === true && this.pingTimer === undefined && this.sessionId !== undefined) {
+          this.sendMediaPing();
+          this.pingTimer = setInterval(() => this.sendMediaPing(), 5_000);
+        }
       } else if (event.data instanceof ArrayBuffer) {
-        this.options.onAudio(new Float32Array(event.data));
+        const receivedAtMs = monotonicEpochMs();
+        const samples = new Float32Array(event.data);
+        this.options.onAudio(samples, {
+          frame: this.pendingMediaFrames.shift(),
+          receivedAtMs,
+          decodedAtMs: monotonicEpochMs(),
+        });
       }
     });
     socket.addEventListener("close", () => {
       if (this.socket !== socket) return;
       this.socket = undefined;
+      this.stopMediaPing();
+      this.pendingMediaFrames.length = 0;
       if (this.closed) {
         this.options.onConnectionChange("disconnected");
         return;
@@ -131,6 +162,8 @@ export class GatewayClient {
 
   close(): void {
     this.closed = true;
+    this.stopMediaPing();
+    this.pendingMediaFrames.length = 0;
     this.socket?.close();
     this.socket = undefined;
     this.options.onConnectionChange("disconnected");
@@ -140,5 +173,15 @@ export class GatewayClient {
     if (this.socket?.readyState !== 1) return;
     const key = this.options.newIdempotencyKey?.() ?? crypto.randomUUID();
     this.socket.send(JSON.stringify({ v: protocolVersion, idempotencyKey: key, ...payload }));
+  }
+
+  private sendMediaPing(): void {
+    this.command({ type: "media.ping", clientSentAtMs: monotonicEpochMs() });
+  }
+
+  private stopMediaPing(): void {
+    if (this.pingTimer === undefined) return;
+    clearInterval(this.pingTimer);
+    this.pingTimer = undefined;
   }
 }

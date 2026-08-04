@@ -4,7 +4,20 @@ import { synthesize } from "./lib/api";
 import { MicCapture, SpeakerOutput } from "./lib/audio";
 import { GatewayClient } from "./lib/client";
 import { gatewayRealtimeUrl } from "./lib/gateway-auth";
+import { MediaTraceRecorder, type BrowserMediaTelemetryEvent } from "./lib/media-telemetry";
 import { useStudio } from "./store";
+
+let lastMediaTracePayload: Record<string, unknown> | undefined;
+
+function downloadTracePayload(payload: Record<string, unknown>): void {
+  const json = JSON.stringify(payload, null, 2);
+  const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `voxstudio-media-trace-${useStudio.getState().sessionId ?? "session"}.json`;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 
 /**
  * One live conversation: microphone, gateway socket, and speaker, bound to the store.
@@ -17,9 +30,13 @@ export class ConversationController {
   private playbackTurnId: string | undefined;
   private lastLevelAt = 0;
   private stopped = false;
+  private readonly mediaTrace = new MediaTraceRecorder();
+  private mediaUiTimer: ReturnType<typeof setTimeout> | undefined;
 
   async start(overrides?: SessionStartOptions, inputDeviceId = ""): Promise<void> {
     const store = useStudio.getState();
+    this.mediaTrace.reset();
+    store.resetMediaDiagnostics();
     const client = new GatewayClient({
       url: gatewayRealtimeUrl(),
       startOptions: overrides?.agent ? {
@@ -28,6 +45,7 @@ export class ConversationController {
         // not silently override the saved Agent's voice, prompt, or greeting.
         bargeIn: true,
         playbackAck: true,
+        mediaTelemetry: true,
         ...overrides,
       } : {
         // The ASR hint stays "auto": measured identical to "zh" on the SenseVoice slot
@@ -42,13 +60,18 @@ export class ConversationController {
         // endpoint owns the audible-playback clock.
         bargeIn: true,
         playbackAck: true,
+        mediaTelemetry: true,
         turnTaking: "speculative",
         ...(store.welcome.trim() ? { welcome: store.welcome.trim() } : {}),
         ...(store.nudgeAfterSeconds > 0 ? { nudgeAfterSeconds: store.nudgeAfterSeconds } : {}),
         ...(store.studioTools ? { studioTools: true } : {}),
       },
       onEvent: event => this.handleEvent(event),
-      onAudio: samples => this.speaker?.enqueue(samples),
+      onAudio: (samples, delivery) => {
+        this.mediaTrace.observeDelivery(samples, delivery);
+        this.speaker?.enqueue(samples, delivery);
+        this.scheduleMediaUi();
+      },
       onConnectionChange: state => useStudio.getState().setConnection(state),
     });
     this.client = client;
@@ -58,7 +81,10 @@ export class ConversationController {
     }, {
       autoRecover: true,
       deviceId: inputDeviceId,
-      onCapabilityChange: capability => useStudio.getState().setCapability(capability),
+      onCapabilityChange: capability => {
+        useStudio.getState().setCapability(capability);
+        this.recordRoute(capability);
+      },
       onRecovered: capability => {
         useStudio.getState().toast("info", t("麦克风已恢复：{device}", {
           device: capability.deviceLabel ?? t("系统默认输入"),
@@ -77,12 +103,13 @@ export class ConversationController {
     }
     this.mic = mic;
     useStudio.getState().setCapability(mic.capability());
+    this.recordRoute(mic.capability());
 
     // Open playback only after the microphone route is stable. AirPods and other
     // Bluetooth headsets switch from A2DP playback to a duplex profile when capture
     // starts; an AudioContext created before that switch can remain bound to the stale
     // output route.
-    const speaker = new SpeakerOutput();
+    const speaker = new SpeakerOutput(event => this.recordBrowserMedia(event));
     this.speaker = speaker;
     await speaker.resume();
     if (this.stopped) {
@@ -135,11 +162,21 @@ export class ConversationController {
     this.mic = undefined;
     await this.speaker?.close();
     this.speaker = undefined;
+    if (this.mediaUiTimer !== undefined) clearTimeout(this.mediaUiTimer);
+    this.mediaUiTimer = undefined;
+    useStudio.getState().setMediaDiagnostics(this.mediaTrace.summary());
+    lastMediaTracePayload = this.mediaTrace.export();
     useStudio.getState().resetSession();
+  }
+
+  downloadMediaTrace(): void {
+    downloadTracePayload(this.mediaTrace.export());
   }
 
   private handleEvent(event: GatewayEvent): void {
     const store = useStudio.getState();
+    this.mediaTrace.observeGateway(event);
+    if (event.type.startsWith("media.")) this.scheduleMediaUi();
     store.apply(event);
     switch (event.type) {
       case "session.state":
@@ -182,11 +219,35 @@ export class ConversationController {
       }
       case "playback.interrupted":
       case "turn.interrupted":
-        this.speaker?.stop();
+        this.speaker?.stop("interrupted");
         return;
       default:
         return;
     }
+  }
+
+  private recordBrowserMedia(event: BrowserMediaTelemetryEvent): void {
+    this.mediaTrace.observeBrowser(event);
+    this.scheduleMediaUi();
+  }
+
+  private recordRoute(capability: ReturnType<MicCapture["capability"]>): void {
+    this.recordBrowserMedia({
+      stage: "browser.route",
+      atMs: performance.timeOrigin + performance.now(),
+      ...(capability.deviceId === undefined ? {} : { deviceId: capability.deviceId }),
+      ...(capability.deviceLabel === undefined ? {} : { label: capability.deviceLabel }),
+      ...(capability.trackState === undefined ? {} : { trackState: capability.trackState }),
+      recoveries: capability.recoveries,
+    });
+  }
+
+  private scheduleMediaUi(): void {
+    if (this.mediaUiTimer !== undefined) return;
+    this.mediaUiTimer = setTimeout(() => {
+      this.mediaUiTimer = undefined;
+      useStudio.getState().setMediaDiagnostics(this.mediaTrace.summary());
+    }, 200);
   }
 }
 
@@ -218,6 +279,11 @@ export async function stopConversation(): Promise<void> {
   await active?.stop();
 }
 
-export function conversationControls(): Pick<ConversationController, "setMuted" | "interruptPlayback" | "cancelTurn"> | undefined {
+export function conversationControls(): Pick<ConversationController, "setMuted" | "interruptPlayback" | "cancelTurn" | "downloadMediaTrace"> | undefined {
   return current;
+}
+
+export function downloadMediaTrace(): void {
+  if (current) current.downloadMediaTrace();
+  else if (lastMediaTracePayload) downloadTracePayload(lastMediaTracePayload);
 }

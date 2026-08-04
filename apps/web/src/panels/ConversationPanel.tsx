@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   AudioLines,
   CircleStop,
+  Download,
   Gauge,
   Headphones,
   Mic,
@@ -14,7 +15,7 @@ import {
 import { VoicePicker } from "../components/VoicePicker";
 import { ConversationRoutePicker } from "../components/EngineRoutePicker";
 import { PageHeader, SectionCard, StatusBadge, primaryButton, secondaryButton } from "../components/StudioPage";
-import { conversationControls, startConversation, stopConversation } from "../conversation";
+import { conversationControls, downloadMediaTrace, startConversation, stopConversation } from "../conversation";
 import { listAudioInputDevices, type AudioInputDevice } from "../lib/audio";
 import { useGatewayHealth } from "../lib/useGatewayHealth";
 import { useStudio, type TurnView } from "../store";
@@ -335,6 +336,7 @@ export function ConversationPanel() {
   const turns = useStudio(state => state.turns);
   const notices = useStudio(state => state.notices);
   const capability = useStudio(state => state.capability);
+  const media = useStudio(state => state.mediaDiagnostics);
   const toast = useStudio(state => state.toast);
   const scroller = useRef<HTMLDivElement>(null);
 
@@ -486,6 +488,23 @@ export function ConversationPanel() {
           )}
           {lastNotice && (
             <span className={`truncate ${lastNotice.kind === "error" ? "text-red-300" : ""}`}>{lastNotice.text}</span>
+          )}
+          {media.frames > 0 && (
+            <span className="ml-auto hidden shrink-0 md:inline">
+              PCM f32 · {Math.round(media.bufferDepthMs)}ms buffer · underrun {media.underruns}
+              {media.rttMs === undefined ? "" : ` · RTT ${Math.round(media.rttMs)}ms`}
+            </span>
+          )}
+          {media.frames > 0 && (
+            <button
+              type="button"
+              onClick={downloadMediaTrace}
+              className="ml-auto inline-flex shrink-0 items-center gap-1 hover:text-ink-300 md:ml-0"
+              title="Metadata only; no audio or transcript content"
+              aria-label={`media trace · ${t("下载")}`}
+            >
+              <Download className="size-3" /> <span className="hidden sm:inline">media trace · {t("下载")}</span>
+            </button>
           )}
         </div>
       </footer>

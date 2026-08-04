@@ -122,8 +122,9 @@ describe("realtime gateway", () => {
     const client = new TestClient(gateway.url);
     await client.ready();
 
-    client.command({ type: "session.start", idempotencyKey: "start-1", options: startOptions });
+    client.command({ type: "session.start", idempotencyKey: "start-1", options: { ...startOptions, mediaTelemetry: true } });
     await client.until(events => events.some(event => event.type === "session.snapshot"), "session.snapshot");
+    client.command({ type: "media.ping", idempotencyKey: "ping-1", clientSentAtMs: 100 });
     client.sendPcm(2, 0.2);
     client.sendPcm(2, 0);
     await client.until(events => events.some(event => event.type === "turn.completed"), "turn.completed");
@@ -136,6 +137,10 @@ describe("realtime gateway", () => {
     expect(types).toContain("response.text.delta");
     expect(types).toContain("response.text.final");
     expect(types).toContain("playback.format");
+    expect(types).toContain("media.frame");
+    expect(types).toContain("media.socket");
+    expect(types).toContain("media.rendition");
+    expect(types).toContain("media.pong");
     expect(types).toContain("playback.ended");
     expect(types).toContain("turn.timing");
 
@@ -147,6 +152,9 @@ describe("realtime gateway", () => {
     expect(format && "sampleRate" in format ? format.sampleRate : 0).toBe(24_000);
     expect(client.audio.length).toBeGreaterThan(0);
     expect((client.audio[0] as Uint8Array).byteLength % 4).toBe(0);
+    const media = client.events.find(event => event.type === "media.frame");
+    expect(media && "codec" in media ? media.codec : "").toBe("pcm_f32le");
+    expect(media && "bytes" in media ? media.bytes : 0).toBe((client.audio[0] as Uint8Array).byteLength);
 
     // The envelope contract: one session, one schema version, strictly monotonic sequence.
     const sessionIds = new Set(client.events.map(event => event.sessionId));

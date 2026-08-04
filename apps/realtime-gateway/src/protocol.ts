@@ -59,6 +59,11 @@ export interface SessionStartOptions {
    * playing reply instead of barging in. Default false.
    */
   playbackAck?: boolean;
+  /**
+   * Emit metadata-only media diagnostics for this session. No audio bytes or transcript
+   * content are included; protocol-v1 PCM remains unchanged on the wire.
+   */
+  mediaTelemetry?: boolean;
 }
 
 interface CommandBase {
@@ -72,6 +77,7 @@ export type GatewayCommand =
   | (CommandBase & { type: "session.snapshot.request" })
   | (CommandBase & { type: "turn.interrupt"; turnId: string })
   | (CommandBase & { type: "playback.complete"; turnId: string })
+  | (CommandBase & { type: "media.ping"; clientSentAtMs: number })
   | (CommandBase & { type: "session.stop" });
 
 export type GatewayCommandType = GatewayCommand["type"];
@@ -84,6 +90,52 @@ export type GatewayEventPayload =
   | { type: "playback.format"; turnId: string; revision: number; sampleRate: number }
   | { type: "playback.ended"; turnId: string }
   | { type: "playback.interrupted"; turnId: string }
+  | {
+      type: "media.frame";
+      frameId: number;
+      turnId: string;
+      revision: number;
+      codec: "pcm_f32le";
+      sampleRate: number;
+      channels: 1;
+      bytes: number;
+      audioMs: number;
+      producedAtMs: number;
+      enqueuedAtMs: number;
+    }
+  | {
+      type: "media.socket";
+      frameId: number;
+      submittedAtMs: number;
+      sendResult?: number;
+      bufferedBytes?: number;
+      highWaterBytes: number;
+      backpressured: boolean;
+      dropped: boolean;
+    }
+  | {
+      type: "media.socket.drain";
+      startedAtMs: number;
+      drainedAtMs: number;
+      durationMs: number;
+      highWaterBytes: number;
+    }
+  | {
+      type: "media.rendition";
+      turnId: string;
+      revision: number;
+      status: "completed" | "interrupted";
+      frames: number;
+      audioMs: number;
+      staleFramesDiscarded: number;
+      endedAtMs: number;
+    }
+  | {
+      type: "media.pong";
+      clientSentAtMs: number;
+      serverReceivedAtMs: number;
+      serverSentAtMs: number;
+    }
   | { type: "session.snapshot"; state: DuplexState; currentTurnId?: string; lastSequence: number }
   | { type: "tool.call"; turnId: string; name: string; arguments: Record<string, unknown> }
   | { type: "tool.result"; turnId: string; name: string; ok: boolean; result?: unknown }
@@ -159,6 +211,8 @@ function parseStartOptions(value: unknown): SessionStartOptions {
   if (bargeIn !== undefined && typeof bargeIn !== "boolean") throw new ProtocolError("bargeIn must be a boolean");
   const playbackAck = value.playbackAck;
   if (playbackAck !== undefined && typeof playbackAck !== "boolean") throw new ProtocolError("playbackAck must be a boolean");
+  const mediaTelemetry = value.mediaTelemetry;
+  if (mediaTelemetry !== undefined && typeof mediaTelemetry !== "boolean") throw new ProtocolError("mediaTelemetry must be a boolean");
   const studioTools = value.studioTools;
   if (studioTools !== undefined && typeof studioTools !== "boolean") throw new ProtocolError("studioTools must be a boolean");
   const maxTokens = optionalNumber(value, "maxTokens");
@@ -215,6 +269,7 @@ function parseStartOptions(value: unknown): SessionStartOptions {
   if (voice !== undefined) options.voice = voice;
   if (bargeIn !== undefined) options.bargeIn = bargeIn;
   if (playbackAck !== undefined) options.playbackAck = playbackAck;
+  if (mediaTelemetry !== undefined) options.mediaTelemetry = mediaTelemetry;
   if (studioTools !== undefined) options.studioTools = studioTools;
   if (turnTaking !== undefined) options.turnTaking = turnTaking;
   if (reopenMs !== undefined) options.reopenMs = reopenMs;
@@ -252,6 +307,13 @@ export function parseCommand(text: string): GatewayCommand {
     case "session.snapshot.request":
     case "session.stop":
       return { v: protocolVersion, type, idempotencyKey };
+    case "media.ping": {
+      const clientSentAtMs = value.clientSentAtMs;
+      if (typeof clientSentAtMs !== "number" || !Number.isFinite(clientSentAtMs) || clientSentAtMs < 0) {
+        throw new ProtocolError("clientSentAtMs must be a non-negative number");
+      }
+      return { v: protocolVersion, type, idempotencyKey, clientSentAtMs };
+    }
     case "turn.interrupt":
     case "playback.complete": {
       const turnId = value.turnId;

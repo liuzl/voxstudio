@@ -1,7 +1,7 @@
 # Realtime media transport
 
-Status: Proposed implementation plan, 2026-08-04. Research and current-state
-measurement complete; implementation has not started.
+Status: Accepted implementation plan, 2026-08-04. Research, current-state
+measurement, and Phase 0 observability are delivered; Phase 1 has not started.
 
 This document turns the remote/mobile audio investigation into an implementation
 contract. It refines the transport portion of
@@ -399,6 +399,20 @@ socket delivery, browser queue depth, and audible rendering on one monotonic tim
 
 Gate: a synthetic pause injected independently at TTS production, server send, network
 arrival, decode, and rendering is attributed to the correct layer.
+
+Delivered 2026-08-04. Protocol-v1 sessions can opt in with `mediaTelemetry`; the Web
+Studio does so for ordinary and Agent-preview conversations. Metadata control events
+associate every unchanged PCM binary frame with production/enqueue timing, codec/rate,
+duration, bytes, socket result, buffered high-water mark, drain timing, and rendition
+outcome. A monotonic application ping/pong estimates RTT and server/client clock offset.
+The browser adds receive/decode/enqueue timing, target and actual queue depth, underruns,
+AudioContext state/rate/output latency, input-route changes, scheduled-render callbacks,
+and interruption stop cost to one bounded metadata-only export. Because protocol v1 still
+renders with `AudioBufferSourceNode`, its render event is explicitly marked estimated;
+Phase 2's output worklet will replace that estimate with a render-thread observation.
+Synthetic attribution tests cover production, server-send, network, decode,
+browser-enqueue, and render pauses independently. The real-device shaped-network matrix
+remains a promotion gate for Phase 1/3 rather than being claimed by unit tests.
 
 ### Phase 1 — Legacy PCM hardening
 

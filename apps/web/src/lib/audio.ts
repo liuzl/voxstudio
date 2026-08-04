@@ -18,6 +18,16 @@ import { LinearResampler } from "@voxstudio/audio";
 
 export { LinearResampler };
 
+import type { AudioFrameDelivery } from "./client";
+import type { BrowserMediaTelemetryEvent } from "./media-telemetry";
+
+export interface PlaybackSchedule {
+  startAtSec: number;
+  bufferBeforeSec: number;
+  bufferAfterSec: number;
+  underrunSec: number;
+}
+
 /**
  * Schedule math for gapless streamed playback: each chunk starts where the previous one
  * ends (or now plus a small lead when the queue ran dry), and the audible end is always
@@ -42,15 +52,30 @@ export class PlaybackTimeline {
     this.rebufferSec = rebufferSec;
   }
 
+  get targetBufferSec(): number {
+    return this.rebufferSec;
+  }
+
   schedule(durationSec: number, nowSec: number): number {
+    return this.scheduleWithMetrics(durationSec, nowSec).startAtSec;
+  }
+
+  scheduleWithMetrics(durationSec: number, nowSec: number): PlaybackSchedule {
     // An underrun (the queue drained mid-reply) re-buffers instead of resuming at once:
     // bursty delivery would otherwise play as burst-gap-burst — a string of micro-gaps
     // that shreds words into crackle. One audible pause, then contiguous speech; the
     // cushion also absorbs the next delivery wobble. A fresh reply keeps the low lead.
     const starved = this.playheadSec > 0 && this.playheadSec < nowSec;
+    const bufferBeforeSec = Math.max(0, this.playheadSec - nowSec);
+    const underrunSec = starved ? nowSec - this.playheadSec : 0;
     const startAt = Math.max(nowSec + (starved ? this.rebufferSec : this.leadSec), this.playheadSec);
     this.playheadSec = startAt + durationSec;
-    return startAt;
+    return {
+      startAtSec: startAt,
+      bufferBeforeSec,
+      bufferAfterSec: Math.max(0, this.playheadSec - nowSec),
+      underrunSec,
+    };
   }
 
   remainingSec(nowSec: number): number {
@@ -433,29 +458,75 @@ export class SpeakerOutput {
   private readonly sources = new Set<AudioBufferSourceNode>();
   private sampleRate = 48_000;
   private drainTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly renderTimers = new Map<AudioBufferSourceNode, ReturnType<typeof setTimeout>>();
+  private readonly onTelemetry: ((event: BrowserMediaTelemetryEvent) => void) | undefined;
 
-  constructor() {
+  constructor(onTelemetry?: (event: BrowserMediaTelemetryEvent) => void) {
     this.context = new AudioContext();
+    this.onTelemetry = onTelemetry;
+    this.context.addEventListener("statechange", this.reportContext);
+    this.reportContext();
   }
 
   async resume(): Promise<void> {
     await this.context.resume();
+    this.reportContext();
   }
 
   setFormat(sampleRate: number): void {
     this.sampleRate = sampleRate;
   }
 
-  enqueue(samples: Float32Array): void {
+  enqueue(samples: Float32Array, delivery?: AudioFrameDelivery): void {
     if (samples.length === 0) return;
     const buffer = this.context.createBuffer(1, samples.length, this.sampleRate);
     buffer.copyToChannel(samples as Float32Array<ArrayBuffer>, 0);
     const source = this.context.createBufferSource();
     source.buffer = buffer;
     source.connect(this.context.destination);
-    source.onended = () => this.sources.delete(source);
+    source.onended = () => {
+      this.sources.delete(source);
+      const timer = this.renderTimers.get(source);
+      if (timer !== undefined) clearTimeout(timer);
+      this.renderTimers.delete(source);
+    };
     this.sources.add(source);
-    source.start(this.timeline.schedule(samples.length / this.sampleRate, this.context.currentTime));
+    const nowSec = this.context.currentTime;
+    const schedule = this.timeline.scheduleWithMetrics(samples.length / this.sampleRate, nowSec);
+    const atMs = performance.timeOrigin + performance.now();
+    const frameId = delivery?.frame?.frameId;
+    if (schedule.underrunSec > 0) {
+      this.onTelemetry?.({
+        stage: "browser.underrun",
+        atMs,
+        ...(frameId === undefined ? {} : { frameId }),
+        durationMs: schedule.underrunSec * 1_000,
+      });
+    }
+    this.onTelemetry?.({
+      stage: "browser.enqueue",
+      atMs,
+      ...(frameId === undefined ? {} : { frameId }),
+      bufferBeforeMs: schedule.bufferBeforeSec * 1_000,
+      bufferAfterMs: schedule.bufferAfterSec * 1_000,
+      targetBufferMs: this.timeline.targetBufferSec * 1_000,
+    });
+    const scheduledAtMs = atMs + Math.max(0, schedule.startAtSec - nowSec) * 1_000;
+    const renderTimer = setTimeout(() => {
+      this.renderTimers.delete(source);
+      const renderedAtMs = performance.timeOrigin + performance.now();
+      this.onTelemetry?.({
+        stage: "browser.render",
+        atMs: renderedAtMs,
+        ...(frameId === undefined ? {} : { frameId }),
+        scheduledAtMs,
+        latenessMs: Math.max(0, renderedAtMs - scheduledAtMs),
+        bufferDepthMs: this.timeline.remainingSec(this.context.currentTime) * 1_000,
+        estimated: true,
+      });
+    }, Math.max(0, scheduledAtMs - (performance.timeOrigin + performance.now())));
+    this.renderTimers.set(source, renderTimer);
+    source.start(schedule.startAtSec);
   }
 
   /** All pieces are in; fire when the playhead passes the end of the scheduled audio. */
@@ -465,12 +536,16 @@ export class SpeakerOutput {
     this.drainTimer = setTimeout(callback, delayMs);
   }
 
-  stop(): void {
+  stop(reason: "interrupted" | "closed" = "closed"): void {
+    const startedAtMs = performance.timeOrigin + performance.now();
+    const sourceCount = this.sources.size;
     if (this.drainTimer !== undefined) {
       clearTimeout(this.drainTimer);
       this.drainTimer = undefined;
     }
     for (const source of this.sources) {
+      const timer = this.renderTimers.get(source);
+      if (timer !== undefined) clearTimeout(timer);
       try {
         source.stop();
       } catch {
@@ -478,11 +553,36 @@ export class SpeakerOutput {
       }
     }
     this.sources.clear();
+    this.renderTimers.clear();
     this.timeline.reset();
+    const finishedAtMs = performance.timeOrigin + performance.now();
+    if (sourceCount > 0) {
+      this.onTelemetry?.({
+        stage: "browser.stop",
+        atMs: finishedAtMs,
+        reason,
+        sourceCount,
+        operationMs: Math.max(0, finishedAtMs - startedAtMs),
+      });
+    }
   }
 
   async close(): Promise<void> {
-    this.stop();
+    this.stop("closed");
+    this.context.removeEventListener("statechange", this.reportContext);
     await this.context.close();
   }
+
+  private readonly reportContext = (): void => {
+    const outputLatencyMs = "outputLatency" in this.context
+      ? Number((this.context as AudioContext & { outputLatency: number }).outputLatency) * 1_000
+      : undefined;
+    this.onTelemetry?.({
+      stage: "browser.context",
+      atMs: performance.timeOrigin + performance.now(),
+      state: this.context.state,
+      sampleRate: this.context.sampleRate,
+      ...(outputLatencyMs === undefined || !Number.isFinite(outputLatencyMs) ? {} : { outputLatencyMs }),
+    });
+  };
 }
