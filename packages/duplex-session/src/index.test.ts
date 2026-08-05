@@ -191,6 +191,21 @@ describe("duplex session", () => {
     ]);
   });
 
+  test("completes a successful tool-only turn directly from thinking", () => {
+    const { value, events } = session();
+    value.start();
+    const turn = value.startUserSpeech();
+    expect(value.finalizeUserSpeech(turn.id)).toBe(true);
+    expect(value.startThinking(turn.id)).toBe(true);
+
+    expect(value.complete(turn.id)).toBe(true);
+    expect(value.state).toBe("listening");
+    expect(events.some(event => event.type === "turn.completed" && event.turnId === turn.id)).toBe(true);
+    expect(events.filter(event => event.type === "session.state").map(event => event.state)).toEqual([
+      "listening", "speech_started", "finalizing", "thinking", "listening",
+    ]);
+  });
+
   test("a new user speech interrupts and aborts the previous active turn", () => {
     const { value, events } = session();
     value.start();

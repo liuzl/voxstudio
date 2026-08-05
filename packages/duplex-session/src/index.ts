@@ -591,7 +591,12 @@ export class DuplexSession {
   }
 
   complete(turnId: string): boolean {
-    if (!this.isCurrent(turnId) || this.currentState !== "speaking") return false;
+    // A successful tool-only turn can legitimately have no assistant text and therefore
+    // no TTS frames. It never crosses startSpeaking(), but it still has to complete so a
+    // terminal action such as end_call can close the session. Finalizing is excluded:
+    // thinking proves the conversation loop accepted this revision for processing.
+    if (!this.isCurrent(turnId)
+        || (this.currentState !== "thinking" && this.currentState !== "speaking")) return false;
     this.emitTiming("completed");
     this.emit({ type: "turn.completed", turnId });
     this.active = undefined;

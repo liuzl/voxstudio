@@ -1148,6 +1148,10 @@ export class GatewaySession {
           this.emit({ type: "playback.end", turnId, revision, streamId, totalSamples: nextTimestampSamples });
         }
         reportRendition("completed");
+        // A wordless successful tool turn has no endpoint playback clock. Emitting
+        // playback.ended without playback.start makes the browser unable to acknowledge
+        // this turn and adds a pointless timeout before end_call can finish.
+        if (sentFrames === 0) return;
         this.emit({ type: "playback.ended", turnId });
         if (!this.playbackAck || this.stopped) return;
         if (this.lastAckedTurnId === turnId) return;

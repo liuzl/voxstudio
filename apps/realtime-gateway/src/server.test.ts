@@ -477,6 +477,55 @@ describe("realtime gateway", () => {
     client.close();
   });
 
+  test("a wordless end_call completes without phantom playback or an ack timeout", async () => {
+    let chatRound = 0;
+    let ttsCalls = 0;
+    gateway = startGateway({
+      config,
+      port: 0,
+      fetch: engineFetch({
+        "/v1/chat/completions": async () => {
+          chatRound += 1;
+          if (chatRound === 1) {
+            return Response.json({ choices: [{ message: { content: "", tool_calls: [
+              { id: "end-1", type: "function", function: { name: "end_call", arguments: "{}" } },
+            ] } }] });
+          }
+          return Response.json({ choices: [{ message: { content: "" } }] });
+        },
+        "/v1/audio/speech": async () => {
+          ttsCalls += 1;
+          return new Response(new Uint8Array(writeWav(new Float32Array(4_800), 24_000)));
+        },
+      }),
+    });
+    const client = new TestClient(gateway.url);
+    await client.ready();
+    client.command({
+      type: "session.start",
+      idempotencyKey: "start-wordless-end",
+      options: { ...startOptions, playbackAck: true, mediaTelemetry: true },
+    });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "session.snapshot");
+
+    client.sendPcm(2, 0.2);
+    client.sendPcm(2, 0);
+    await client.until(
+      events => events.some(event => event.type === "session.state" && event.state === "closed"),
+      "wordless end_call closure",
+      1_000,
+    );
+
+    expect(client.events.some(event => event.type === "tool.call" && event.name === "end_call")).toBe(true);
+    expect(client.events.some(event => event.type === "tool.result" && event.name === "end_call" && event.ok)).toBe(true);
+    expect(client.events.some(event => event.type === "turn.completed")).toBe(true);
+    expect(client.events.some(event => event.type === "playback.ended")).toBe(false);
+    expect(client.events.some(event => event.type === "playback.start")).toBe(false);
+    expect(ttsCalls).toBe(0);
+    expect(gateway.sessionCount()).toBe(0);
+    client.close();
+  });
+
   test("survives a dropped socket: reattach, snapshot resync, no stale or replayed commands", async () => {
     gateway = startGateway({ config, fetch: engineFetch(), port: 0, reconnectGraceMs: 2_000 });
     const first = new TestClient(gateway.url);
