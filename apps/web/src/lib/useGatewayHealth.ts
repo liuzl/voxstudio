@@ -3,6 +3,8 @@ import { useSyncExternalStore } from "react";
 export type GatewayHealth = "probing" | "ok" | "down";
 
 let gateway: GatewayHealth = "probing";
+let livekit = false;
+let liveKitClient: typeof import("./livekit-client").BrowserLiveKitClient | undefined;
 let timer: ReturnType<typeof setInterval> | undefined;
 let inFlight: Promise<void> | undefined;
 const listeners = new Set<() => void>();
@@ -21,8 +23,30 @@ const probe = (): Promise<void> => {
     return Promise.resolve();
   }
   inFlight = fetch("/healthz")
-    .then(response => publish(response.ok ? "ok" : "down"))
-    .catch(() => publish("down"))
+    .then(async response => {
+      if (!response.ok) {
+        livekit = false;
+        publish("down");
+        return;
+      }
+      const body = await response.json().catch(() => null) as { deployment?: { livekit?: unknown } } | null;
+      livekit = body?.deployment?.livekit === true;
+      if (livekit && liveKitClient === undefined) {
+        // Keep the substantial WebRTC SDK out of the default Studio bundle. Loading it
+        // as soon as capability discovery completes makes the constructor available
+        // before the user's later click, preserving iOS transient activation.
+        void import("./livekit-client")
+          .then(module => { if (livekit) liveKitClient = module.BrowserLiveKitClient; })
+          .catch(() => { liveKitClient = undefined; });
+      } else if (!livekit) {
+        liveKitClient = undefined;
+      }
+      publish("ok");
+    })
+    .catch(() => {
+      livekit = false;
+      publish("down");
+    })
     .finally(() => { inFlight = undefined; });
   return inFlight;
 };
@@ -50,4 +74,14 @@ const getSnapshot = (): GatewayHealth => gateway;
  */
 export function useGatewayHealth(): GatewayHealth {
   return useSyncExternalStore(subscribe, getSnapshot, () => "probing");
+}
+
+/** Synchronous by design: transport choice happens inside the user's start gesture. */
+export function gatewaySupportsLiveKit(): boolean {
+  return gateway === "ok" && livekit && liveKitClient !== undefined;
+}
+
+/** Constructor already preloaded by capability discovery; never awaits inside a click. */
+export function preparedLiveKitClient(): typeof import("./livekit-client").BrowserLiveKitClient | undefined {
+  return gatewaySupportsLiveKit() ? liveKitClient : undefined;
 }

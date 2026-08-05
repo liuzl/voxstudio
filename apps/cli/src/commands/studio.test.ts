@@ -72,6 +72,49 @@ describe("vox studio", () => {
     }
   });
 
+  test("LiveKit bootstrap credentials are environment-only, complete, bounded, and passed without logging secrets", async () => {
+    const names = [
+      "VOX_LIVEKIT_URL",
+      "VOX_LIVEKIT_API_KEY",
+      "VOX_LIVEKIT_API_SECRET",
+      "VOX_LIVEKIT_TOKEN_TTL_SECONDS",
+    ] as const;
+    const before = Object.fromEntries(names.map(name => [name, process.env[name]]));
+    const clear = () => { for (const name of names) delete process.env[name]; };
+    const io = collectingIo();
+    try {
+      clear();
+      let seen: GatewayServerOptions | undefined;
+      const capture = (options: GatewayServerOptions): GatewayServer => { seen = options; return fakeGateway(); };
+      expect(await runStudio([], config, io, capture, false)).toBe(0);
+      expect(seen?.livekit).toBeUndefined();
+
+      process.env.VOX_LIVEKIT_URL = "wss://media.voxstudio.example";
+      await expect(runStudio([], config, io, capture, false)).rejects.toThrow("must be set together");
+      process.env.VOX_LIVEKIT_API_KEY = "livekit-key";
+      process.env.VOX_LIVEKIT_API_SECRET = "livekit-secret-that-must-not-be-logged";
+      process.env.VOX_LIVEKIT_TOKEN_TTL_SECONDS = "420";
+      expect(await runStudio([], config, io, capture, false)).toBe(0);
+      expect(seen?.livekit).toEqual({
+        serverUrl: "wss://media.voxstudio.example",
+        apiKey: "livekit-key",
+        apiSecret: "livekit-secret-that-must-not-be-logged",
+        tokenTtlSeconds: 420,
+      });
+      expect(seen?.livekitAdapter).toBeDefined();
+      expect(`${io.outs.join("\n")}\n${io.errs.join("\n")}`).not.toContain("livekit-secret-that-must-not-be-logged");
+
+      process.env.VOX_LIVEKIT_TOKEN_TTL_SECONDS = "601";
+      await expect(runStudio([], config, io, capture, false)).rejects.toThrow("between 30 and 600");
+    } finally {
+      for (const name of names) {
+        const value = before[name];
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
   test("refuses a shared token that OpenAI realtime clients cannot carry", async () => {
     const io = collectingIo();
     await expect(runStudio(["--token", "base64/secret="], config, io, () => fakeGateway(), false))

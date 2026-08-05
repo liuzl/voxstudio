@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createAgent, deleteAgent, deleteAgentConversation, getAgentConversation, getDeploymentInfo, listAgentConversations, listAgents, publishAgent, registerVoice, transcribe, updateAgent } from "./api";
+import { createAgent, deleteAgent, deleteAgentConversation, getAgentConversation, getDeploymentInfo, issueLiveKitBootstrap, listAgentConversations, listAgents, publishAgent, registerVoice, transcribe, updateAgent } from "./api";
 
 const realFetch = globalThis.fetch;
 
@@ -84,16 +84,46 @@ describe("Agent API", () => {
       expect(String(input)).toBe("/healthz");
       return Response.json({
         auth: "self",
-        deployment: { demo: true, tokenRequired: true, demoAgent: { id: "support", version: 3 }, maxSessions: 4, maxSessionSeconds: 600 },
+        deployment: { demo: true, tokenRequired: true, livekit: true, demoAgent: { id: "support", version: 3 }, maxSessions: 4, maxSessionSeconds: 600 },
       });
     });
     await expect(getDeploymentInfo()).resolves.toEqual({
       auth: "self",
       demo: true,
       tokenRequired: true,
+      livekit: true,
       demoAgent: { id: "support", version: 3 },
       maxSessions: 4,
       maxSessionSeconds: 600,
+    });
+  });
+
+  test("requests a room-scoped LiveKit grant with only the Agent selection", async () => {
+    let request: { path: string; method: string; body: unknown } | undefined;
+    stubFetch((input, init) => {
+      request = {
+        path: String(input),
+        method: init?.method ?? "GET",
+        body: JSON.parse(String(init?.body)),
+      };
+      return Response.json({
+        server_url: "wss://media.example",
+        participant_token: "jwt",
+        room_name: "vox-room",
+        participant_identity: "web-user",
+        expires_at: "2026-08-05T00:05:00.000Z",
+        agent: { agentId: "support", source: "draft", revision: 7 },
+      });
+    });
+    await expect(issueLiveKitBootstrap({
+      agent: "support",
+      agentSource: "draft",
+      agentRevision: 7,
+    })).resolves.toMatchObject({ room_name: "vox-room" });
+    expect(request).toEqual({
+      path: "/v1/realtime/livekit/token",
+      method: "POST",
+      body: { agent: "support", agentSource: "draft", agentRevision: 7 },
     });
   });
 

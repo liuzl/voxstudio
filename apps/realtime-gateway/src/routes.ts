@@ -23,6 +23,8 @@ export interface ApiRoute {
   methods: readonly string[];
   /** Methods charged against the account quota (docs/auth.md phase 4). */
   charged?: readonly string[];
+  /** Methods that may return retryable 429 for a non-quota capacity boundary. */
+  capacityLimited?: readonly string[];
   /** Reads `?engine=` to target a named instance instead of the role default. */
   engineParam?: boolean;
   /** Served only when the capture library is enabled; 404 `library_disabled` otherwise. */
@@ -33,6 +35,8 @@ export interface ApiRoute {
   public?: boolean;
   /** Served only on a hosted (accounts) deployment. */
   hosted?: boolean;
+  /** Served only when the Phase 3A LiveKit bootstrap is configured. */
+  livekit?: boolean;
 }
 
 /**
@@ -60,6 +64,12 @@ export const apiRoutes: readonly ApiRoute[] = [
     methods: ["POST"],
     charged: ["POST"],
     engineParam: true,
+  },
+  {
+    path: "/v1/realtime/livekit/token",
+    methods: ["POST"],
+    livekit: true,
+    capacityLimited: ["POST"],
   },
   { path: "/v1/engines", methods: ["GET"] },
   {

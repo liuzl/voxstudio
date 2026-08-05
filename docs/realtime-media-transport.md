@@ -7,6 +7,17 @@ implemented behind explicit negotiation, including its continuous AudioWorklet
 renderer. Studio advertises it only after worklet initialization succeeds. The bounded
 long-run metrics and strict Phase 2 report generator are implemented; the actual device
 and shaped-network runs are still required before the slice is considered delivered.
+The Phase 3A bootstrap, server media adapter, and browser client are implemented. An
+authenticated, same-origin-guarded boundary resolves an owner-scoped Agent, claims the
+room with an isolated rtc-node programmatic participant, and only then mints a unique
+five-minute browser grant. The adapter maps the expected microphone participant, PCM,
+control data, interruption, playout draining, and room lifecycle to the existing
+`GatewaySession`. When `/healthz` advertises `deployment.livekit: true`, Agent Builder's
+Try it live publishes one processed microphone track, subscribes to the Agent track, and
+uses reliable data messages for protocol-v1 events and controls. Deployments without the
+complete signer/adapter capability keep the existing WebSocket path. A real LiveKit
+deployment/device gate and WebRTC statistics are still required before Phase 3A is
+considered delivered.
 
 This document turns the remote/mobile audio investigation into an implementation
 contract. It refines the transport portion of
@@ -523,6 +534,63 @@ block validating the renderer and interruption behavior with PCM16.
 - make remote/mobile Studio choose WebRTC by deployment capability;
 - retain Media v2 as local/self-hosted fallback;
 - expose WebRTC media statistics in the same trace timeline.
+
+Bootstrap/security and server-adapter slice implemented 2026-08-05. `VOX_LIVEKIT_URL`,
+`VOX_LIVEKIT_API_KEY`, and `VOX_LIVEKIT_API_SECRET` configure only the server-side
+signer. `/healthz` advertises the authenticated `POST /v1/realtime/livekit/token`
+capability only after the rtc-node media adapter is also wired. The CLI and standalone gateway wire that
+adapter whenever the complete environment contract is present. The endpoint requires an owner-scoped Agent selection,
+resolves the exact draft revision or immutable published version, and makes the adapter
+accept that binding before returning a token. An absent or rejecting adapter yields 503,
+so a browser never receives an orphan-room credential. Token signing itself is not an
+engine-time quota operation; the adapter creates and charges the real conversation only
+when the expected browser microphone participant joins. An abandoned token consumes no
+engine quota or VoxStudio session slot. It does still hold a native participant, so the
+gateway bounds pending grants to four per owner and 32 per process (or the lower declared
+`maxSessions` ceiling), counts pending plus active sessions for admission, and returns a
+retryable 429 when that allowance is full. The adapter independently applies the same
+participant bounds and a ten-second native-connect timeout; expiration, refusal, room
+closure, and gateway shutdown all release the pending reservation exactly once.
+
+Each accepted request creates a new opaque room and browser participant identity. The
+owner/account id, email, and display name are not placed in LiveKit identity or metadata;
+the adapter receives them through the private server-side binding. The signed grant
+permits joining only that room, publishing only a microphone track, subscribing to the
+Agent track, and publishing data messages; it grants no room administration, recording,
+camera, or screen-share authority. Tokens last five minutes by default; deployment
+configuration may choose only 30–600 seconds. Production endpoints must use `wss://`; `ws://` is accepted
+only for a loopback development server. Ambient browser sessions receive the existing
+same-origin protection, while explicit API/shared bearer credentials remain suitable for
+non-browser clients. LiveKit's documented `devkey`/`secret` pair is accepted only with a
+loopback `ws://` endpoint; non-loopback or `wss://` deployments require at least 32 bytes
+of signing secret. Partial or malformed signing configuration fails before the gateway
+starts. The signing **secret** never enters argv or leaves the gateway. The non-secret API
+key is necessarily visible as the participant JWT's issuer, while both values remain
+omitted from `/healthz` and discovery output.
+
+The native `@livekit/rtc-node` dependency remains isolated behind `LiveKitRoomConnector`:
+Agent/session policy imports no LiveKit types, tests use a deterministic fake connector,
+and one adapter owns all native room, stream, track, and audio-source cleanup. The SDK is
+currently upstream Developer Preview, so compiled-binary packaging and crash-free soak
+are explicit release gates rather than assumptions.
+
+`deployment.livekit` stays false unless signer and adapter are both configured; the
+token route returns a structured disabled/unavailable response outside that state. The
+browser selects the complete capability synchronously, starts
+`Room.startAudio()` inside the initiating click for iOS, requests AEC/NS/AGC on one mono
+microphone, publishes speech Opus with DTX and RED, and leaves jitter, decode, and audible
+rendering on the native WebRTC track. The server-side `AudioSource.waitForPlayout` owns
+`playback.complete`; the browser does not acknowledge the same rendition a second time.
+If bootstrap or the browser's room connection fails for a transport/service reason before
+microphone capture, Studio visibly falls back to the existing WebSocket transport;
+authentication, validation, quota, capacity, and microphone refusals are never hidden by
+that fallback. Capacity/quota failures that occur after the browser joins are published as
+protocol `command.rejected` events before the native room closes. Ending a test stops the
+local microphone before best-effort control delivery, and the mute UI changes only after
+the native track operation succeeds.
+Remaining Phase 3A work is WebRTC statistics, LiveKit Cloud Build deployment, and the
+real-device/network/billing gate below. Reconnect and route-change behavior must be
+validated by that gate rather than claimed from unit tests.
 
 Gate: remote/mobile WebRTC passes audio continuity, double-talk, interruption, route
 change, reconnect, and authorization tests without changing the shared conversation

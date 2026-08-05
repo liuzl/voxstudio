@@ -142,6 +142,7 @@ describe("a self-hosted studio answers the machine paths honestly", () => {
     expect(selfHosted.deployment).toEqual({
       demo: false,
       tokenRequired: false,
+      livekit: false,
       traces: { enabled: false, content: false, audio: false },
     });
     await gateway.stop();
@@ -157,6 +158,7 @@ describe("a self-hosted studio answers the machine paths honestly", () => {
     expect(hosted.deployment).toEqual({
       demo: false,
       tokenRequired: false,
+      livekit: false,
       traces: { enabled: false, content: false, audio: false },
     });
     // Live-session counts are nobody's business on a public entrance.

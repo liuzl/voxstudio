@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@better-auth/api-key": "^1.6.25",
+    "@livekit/rtc-node": "^0.13.33",
     "@voxstudio/agents": "workspace:*",
     "@voxstudio/audio": "workspace:*",
     "@voxstudio/clients": "workspace:*",
@@ -23,7 +24,8 @@
     "@voxstudio/mcp": "workspace:*",
     "@voxstudio/platform-bun": "workspace:*",
     "@voxstudio/text": "workspace:*",
-    "better-auth": "^1.6.25"
+    "better-auth": "^1.6.25",
+    "livekit-server-sdk": "^2.17.0"
   },
   "devDependencies": {
     "openai": "^6.48.0"

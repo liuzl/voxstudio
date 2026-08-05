@@ -10,22 +10,35 @@ import type {
   CreateAgentInput,
 } from "@voxstudio/agents";
 
+export class GatewayApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = "GatewayApiError";
+  }
+}
+
 async function fail(response: Response, what: MessageKey): Promise<never> {
   // A hosted session that expired (or was signed out elsewhere) must send the shell
   // back to the sign-in card, not bury a 401 in a panel-shaped error.
   if (response.status === 401) reportUnauthorized();
   let detail = "";
+  let code: string | undefined;
   try {
-    const body = await response.json() as { error?: { message?: string } };
+    const body = await response.json() as { error?: { message?: string; code?: string } };
     detail = body.error?.message ?? "";
+    code = body.error?.code;
   } catch {
     // Non-JSON error body; the status is the message.
   }
-  throw new Error(t("{what}失败（{status}{detail}）", {
+  throw new GatewayApiError(t("{what}失败（{status}{detail}）", {
     what: t(what),
     status: response.status,
     detail: detail ? `: ${detail}` : "",
-  }));
+  }), response.status, code);
 }
 
 export type { AgentAudit, AgentPublishedVersion, AgentRecord, AgentSpec };
@@ -194,6 +207,7 @@ export interface DeploymentInfo {
   auth: "self" | "accounts";
   demo: boolean;
   tokenRequired: boolean;
+  livekit: boolean;
   demoAgent?: { id: string; version: number };
   maxSessions?: number;
   maxSessionSeconds?: number;
@@ -210,10 +224,38 @@ export async function getDeploymentInfo(): Promise<DeploymentInfo> {
     auth: body.auth ?? "self",
     demo: body.deployment?.demo ?? false,
     tokenRequired: body.deployment?.tokenRequired ?? false,
+    livekit: body.deployment?.livekit ?? false,
     ...(body.deployment?.demoAgent === undefined ? {} : { demoAgent: body.deployment.demoAgent }),
     ...(body.deployment?.maxSessions === undefined ? {} : { maxSessions: body.deployment.maxSessions }),
     ...(body.deployment?.maxSessionSeconds === undefined ? {} : { maxSessionSeconds: body.deployment.maxSessionSeconds }),
   };
+}
+
+export interface LiveKitBootstrapResponse {
+  server_url: string;
+  participant_token: string;
+  room_name: string;
+  participant_identity: string;
+  expires_at: string;
+  agent: {
+    agentId: string;
+    source: "draft" | "published";
+    revision?: number;
+    version?: number;
+    hash?: string;
+  };
+}
+
+/** Exchange an authenticated Agent selection for one short-lived, room-scoped grant. */
+export async function issueLiveKitBootstrap(selection: Pick<
+  import("@voxstudio/realtime-gateway/protocol").SessionStartOptions,
+  "agent" | "agentSource" | "agentRevision" | "agentVersion"
+>): Promise<LiveKitBootstrapResponse> {
+  return agentJson(await gatewayFetch("/v1/realtime/livekit/token", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(selection),
+  }), "实时试用");
 }
 
 export interface DesignProfileMeta {

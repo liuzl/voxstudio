@@ -10,6 +10,8 @@ export const agentBuilderMessages = {
   "删除会话": "Deleting the conversation",
   "麦克风已恢复：{device}": "Microphone recovered: {device}",
   "麦克风恢复失败：{message}": "Microphone recovery failed: {message}",
+  "麦克风静音切换失败：{message}": "Could not change microphone mute state: {message}",
+  "WebRTC 暂时不可用，已切换到兼容模式": "WebRTC is temporarily unavailable. Switched to compatibility mode.",
   "系统默认输入": "System default input",
   "输入设备": "Input device",
   "输入已暂停": "Input paused",

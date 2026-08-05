@@ -37,5 +37,27 @@ export {
   type TracePolicy,
 } from "./trace-store";
 export { assertGatewayToken } from "./auth/request-auth";
+export {
+  defaultLiveKitTokenTtlSeconds,
+  issueLiveKitAgentToken,
+  issueLiveKitBrowserToken,
+  liveKitBootstrapFromEnv,
+  maxLiveKitTokenTtlSeconds,
+  minLiveKitTokenTtlSeconds,
+  validateLiveKitBootstrapOptions,
+  type LiveKitBootstrapOptions,
+  type LiveKitBootstrapResponse,
+  type LiveKitAgentToken,
+} from "./livekit-bootstrap";
+export {
+  DefaultLiveKitAgentMediaAdapter,
+  RtcNodeRoomConnector,
+  type LiveKitAgentBootstrap,
+  type LiveKitAgentMediaAdapter,
+  type LiveKitRoomConnector,
+  type LiveKitRoomEndpoint,
+  type LiveKitRoomHandlers,
+  type OpenLiveKitSession,
+} from "./livekit-agent-adapter";
 export { startGateway, type GatewayServer, type GatewayServerOptions } from "./server";
 export { GatewaySession, type EventSink, type GatewaySessionOptions } from "./session";

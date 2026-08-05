@@ -3,7 +3,15 @@ import { AgentRegistry } from "@voxstudio/agents";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ffmpegPcmDecoder, loadSileroVadModel, persistPronunciationsFile, resolveConfigPath } from "@voxstudio/platform-bun";
-import { assertGatewayToken, parseByteSize, startGateway, type GatewayServer, type GatewayServerOptions } from "@voxstudio/realtime-gateway";
+import {
+  assertGatewayToken,
+  DefaultLiveKitAgentMediaAdapter,
+  liveKitBootstrapFromEnv,
+  parseByteSize,
+  startGateway,
+  type GatewayServer,
+  type GatewayServerOptions,
+} from "@voxstudio/realtime-gateway";
 import { webAssets } from "../generated/web-assets";
 import type { CliIo } from "../io";
 
@@ -62,6 +70,11 @@ options:
                  (credentials come from the environment, never argv). VOX_AUTH_PASSWORD=off
                  closes the email-and-password door — a public launch should open one door,
                  not two (docs/auth.md)
+  LiveKit Phase 3A bootstrap (environment only; secrets never enter argv):
+                 VOX_LIVEKIT_URL=wss://..., VOX_LIVEKIT_API_KEY, and
+                 VOX_LIVEKIT_API_SECRET must be set together. They configure the signer
+                 and the isolated rtc-node Agent media adapter. Tokens last 300 seconds;
+                 VOX_LIVEKIT_TOKEN_TTL_SECONDS may set 30–600
   --quota N      bound each account to N chargeable operations per window: synthesis,
                  transcription, chat, voice/profile creation, promote, and starting a
                  realtime conversation. Reads, deletes, health and the discovery
@@ -157,6 +170,7 @@ export async function runStudio(
   let maxSynthesisSeconds = positiveEnv("VOX_GATEWAY_MAX_SYNTHESIS_SECONDS");
   let maxConcurrentSynthesis = positiveEnv("VOX_GATEWAY_MAX_CONCURRENT_SYNTHESIS", true);
   let maxQueuedSynthesis = positiveEnv("VOX_GATEWAY_MAX_QUEUED_SYNTHESIS", true);
+  const livekit = liveKitBootstrapFromEnv(process.env, "studio");
   const quotaEnv = process.env.VOX_GATEWAY_LIBRARY_MAX_BYTES;
   // A quota typo must fail closed too, exactly like the guardrail envs above.
   let libraryMaxBytes = quotaEnv === undefined || quotaEnv === ""
@@ -243,6 +257,9 @@ export async function runStudio(
   // Without ffmpeg the decoder is absent and engines negotiate raw PCM instead.
   const decoder = ffmpegPcmDecoder();
   const configPath = await resolveConfigPath(explicitConfigPath === undefined ? {} : { explicit: explicitConfigPath });
+  const livekitAdapter = livekit === undefined
+    ? undefined
+    : new DefaultLiveKitAgentMediaAdapter(livekit, undefined, line => io.err(line));
   const gateway = start({
     config,
     staticAssets: webAssets,
@@ -250,6 +267,7 @@ export async function runStudio(
     ...(host === undefined ? {} : { hostname: host }),
     ...(port === undefined ? {} : { port }),
     ...(token === undefined || token === "" ? {} : { token }),
+    ...(livekit === undefined ? {} : { livekit, livekitAdapter: livekitAdapter as DefaultLiveKitAgentMediaAdapter }),
     ...(maxSessions === undefined ? {} : { maxSessions }),
     ...(maxSessionSeconds === undefined ? {} : { maxSessionSeconds }),
     ...(demoMode ? { demoMode } : {}),

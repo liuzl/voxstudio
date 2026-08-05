@@ -659,6 +659,12 @@ export class GatewaySession {
     }
     const samples = new Float32Array(bytes.byteLength / 4);
     new Uint8Array(samples.buffer).set(bytes);
+    this.pushAudioSamples(samples);
+  }
+
+  /** Platform adapters that already own decoded 16 kHz mono PCM avoid a byte round-trip. */
+  pushAudioSamples(samples: Float32Array): void {
+    if (samples.length === 0) return;
     this.frames.push(samples);
   }
 

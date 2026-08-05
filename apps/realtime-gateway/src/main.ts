@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { parseByteSize } from "./library";
 import { assertGatewayToken } from "./auth/request-auth";
 import { startGateway } from "./server";
+import { liveKitBootstrapFromEnv } from "./livekit-bootstrap";
+import { DefaultLiveKitAgentMediaAdapter } from "./livekit-agent-adapter";
 
 const usage = `usage: vox-gateway [--config CONFIG] [--host HOST] [--port PORT] [--token TOKEN] [--agents DIR]
 
@@ -48,7 +50,12 @@ drafts and immutable published versions.
 events. Off by default; audio is never stored. --trace-content
 (VOX_GATEWAY_TRACE_CONTENT=1) separately enables transcripts, replies, and tool
 payloads; demo mode always forces content off. --trace-retention-days N and
---trace-max-conversations N bound completed records.`;
+--trace-max-conversations N bound completed records.
+LiveKit Phase 3A bootstrap is environment-only: set VOX_LIVEKIT_URL,
+VOX_LIVEKIT_API_KEY, and VOX_LIVEKIT_API_SECRET together. Optional
+VOX_LIVEKIT_TOKEN_TTL_SECONDS is 30–600 (default 300). The gateway wires the signer
+and isolated rtc-node Agent media adapter together; Studio browser WebRTC selection
+remains a separate client capability.`;
 
 /**
  * OAuth providers from the environment. Credentials never travel in argv, where a
@@ -177,6 +184,7 @@ async function main(args: string[]): Promise<number> {
   const synthesisCeiling = positive(maxSynthesisSeconds, "--max-synthesis-seconds");
   const inFlight = positive(maxConcurrentSynthesis, "--max-concurrent-synthesis", true);
   const queued = positive(maxQueuedSynthesis, "--max-queued-synthesis", true);
+  const livekit = liveKitBootstrapFromEnv(process.env, "vox-gateway");
   if (queued !== undefined && inFlight === undefined) {
     throw new TypeError("vox-gateway: --max-queued-synthesis requires --max-concurrent-synthesis");
   }
@@ -199,11 +207,15 @@ async function main(args: string[]): Promise<number> {
     demoAgent = { id: demoAgentId, version: resolved.version };
   }
   const decoder = ffmpegPcmDecoder();
+  const livekitAdapter = livekit === undefined
+    ? undefined
+    : new DefaultLiveKitAgentMediaAdapter(livekit, undefined, line => console.error(line));
   const gateway = startGateway({
     config,
     ...(host === undefined ? {} : { hostname: host }),
     ...(parsedPort === undefined ? {} : { port: parsedPort }),
     ...(token === undefined || token === "" ? {} : { token }),
+    ...(livekit === undefined ? {} : { livekit, livekitAdapter: livekitAdapter as DefaultLiveKitAgentMediaAdapter }),
     ...(agentsDir === "" ? {} : { agentsDir }),
     ...(cappedSessions === undefined ? {} : { maxSessions: cappedSessions }),
     ...(cappedSeconds === undefined ? {} : { maxSessionSeconds: cappedSeconds }),

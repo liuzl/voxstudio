@@ -20,7 +20,7 @@ const config = parseConfig({
   },
 });
 
-const options: DiscoveryOptions = { baseUrl: "https://voxstudio.example", library: true, demo: false };
+const options: DiscoveryOptions = { baseUrl: "https://voxstudio.example", library: true, demo: false, livekit: true };
 const document = openApiDocument(options) as {
   paths: Record<string, Record<string, { security?: unknown[]; parameters?: { name: string }[]; responses: Record<string, unknown> }>>;
 };
@@ -63,7 +63,7 @@ describe("the OpenAPI paths come from the router's own catalog", () => {
     }
   });
 
-  test("authenticated operations declare 401 and 405; charged ones declare 429; public ones declare neither", () => {
+  test("authenticated operations declare 401 and 405; charged/capacity-limited ones declare 429; public ones declare neither", () => {
     for (const route of apiRoutes) {
       for (const method of route.methods.filter(entry => entry !== "HEAD")) {
         const responses = Object.keys(document.paths[route.path]?.[method.toLowerCase()]?.responses ?? {});
@@ -73,7 +73,7 @@ describe("the OpenAPI paths come from the router's own catalog", () => {
         }
         expect(responses).toContain("401");
         expect(responses).toContain("405");
-        if (route.charged?.includes(method)) expect(responses).toContain("429");
+        if (route.charged?.includes(method) || route.capacityLimited?.includes(method)) expect(responses).toContain("429");
         else expect(responses).not.toContain("429");
         if (route.library === true) expect(responses).toContain("503");
       }
@@ -88,6 +88,12 @@ describe("the OpenAPI paths come from the router's own catalog", () => {
       expect(document.paths[path]).toBeDefined();
       expect(withoutLibrary.paths[path]).toBeUndefined();
     }
+  });
+
+  test("LiveKit bootstrap appears only when its signer and adapter are configured", () => {
+    const withoutLiveKit = openApiDocument({ ...options, livekit: false }) as { paths: Record<string, unknown> };
+    expect(document.paths["/v1/realtime/livekit/token"]).toBeDefined();
+    expect(withoutLiveKit.paths["/v1/realtime/livekit/token"]).toBeUndefined();
   });
 });
 
@@ -122,6 +128,7 @@ describe("the catalog matches the gateway that runs", () => {
     expect(routeFor("/v1/audio/speech")?.charged).toEqual(["POST"]);
     expect(routeFor("/v1/engines")?.charged).toBeUndefined();
     expect(routeFor("/v1/library/abc/promote")?.charged).toEqual(["POST"]);
+    expect(routeFor("/v1/realtime/livekit/token")?.charged).toBeUndefined();
     expect(routeFor("/v1/library/abc")?.charged).toBeUndefined();
     // A path nothing serves has no route at all.
     expect(routeFor("/v1/nope")).toBeUndefined();
@@ -171,6 +178,7 @@ describe("the charged list agent-facing documents publish is derived, not restat
     const index = llmsTxt(metered);
 
     for (const route of apiRoutes) {
+      if (route.livekit === true && options.livekit !== true) continue;
       for (const method of route.charged ?? []) {
         expect(page).toContain(`${method} ${route.path}`);
         expect(index).toContain(`${method} ${route.path}`);

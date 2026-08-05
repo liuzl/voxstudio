@@ -1,10 +1,12 @@
 import type { GatewayEvent, SessionStartOptions } from "@voxstudio/realtime-gateway/protocol";
 import { t } from "./i18n";
-import { synthesize } from "./lib/api";
+import { GatewayApiError, synthesize } from "./lib/api";
 import { MicCapture, SpeakerOutput } from "./lib/audio";
 import { GatewayClient } from "./lib/client";
 import { gatewayRealtimeUrl } from "./lib/gateway-auth";
+import type { BrowserLiveKitClient } from "./lib/livekit-client";
 import { MediaTraceRecorder, type BrowserMediaTelemetryEvent } from "./lib/media-telemetry";
+import { preparedLiveKitClient } from "./lib/useGatewayHealth";
 import { useStudio } from "./store";
 
 let lastMediaTracePayload: Record<string, unknown> | undefined;
@@ -13,6 +15,16 @@ const webMediaV2 = {
   version: 2,
   playback: [{ codec: "pcm_s16le", sampleRate: 24_000, channels: 1, packetDurationMs: 20 }],
 } as const satisfies NonNullable<SessionStartOptions["media"]>;
+
+export function mayFallbackFromLiveKit(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const phase = (error as Error & { liveKitPhase?: unknown }).liveKitPhase;
+  if (phase === "room connect") return true;
+  if (phase !== "bootstrap") return false;
+  // Authentication, validation, quota, and capacity refusals apply to the conversation,
+  // not just to WebRTC. Only transport/service failures should enter compatibility mode.
+  return !(error.cause instanceof GatewayApiError) || error.cause.status >= 500;
+}
 
 function downloadTracePayload(payload: Record<string, unknown>): void {
   const json = JSON.stringify(payload, null, 2);
@@ -29,12 +41,14 @@ function downloadTracePayload(payload: Record<string, unknown>): void {
  * Created on the user's start gesture (browser audio requires one) and torn down on stop.
  */
 export class ConversationController {
-  private client: GatewayClient | undefined;
+  private client: Pick<GatewayClient, "interruptTurn" | "playbackComplete" | "requestSnapshot" | "stopSession" | "close"> | BrowserLiveKitClient | undefined;
+  private livekit: BrowserLiveKitClient | undefined;
   private mic: MicCapture | undefined;
   private speaker: SpeakerOutput | undefined;
   private playbackTurnId: string | undefined;
   private lastLevelAt = 0;
   private stopped = false;
+  private muteOperation = 0;
   private readonly mediaTrace = new MediaTraceRecorder();
   private mediaUiTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -42,6 +56,42 @@ export class ConversationController {
     const store = useStudio.getState();
     this.mediaTrace.reset();
     store.resetMediaDiagnostics();
+    const LiveKitClient = overrides?.agent ? preparedLiveKitClient() : undefined;
+    if (overrides?.agent && LiveKitClient) {
+      const client = new LiveKitClient({
+        selection: {
+          agent: overrides.agent,
+          ...(overrides.agentSource === undefined ? {} : { agentSource: overrides.agentSource }),
+          ...(overrides.agentRevision === undefined ? {} : { agentRevision: overrides.agentRevision }),
+          ...(overrides.agentVersion === undefined ? {} : { agentVersion: overrides.agentVersion }),
+        },
+        inputDeviceId,
+        onEvent: event => this.handleEvent(event),
+        onConnectionChange: state => useStudio.getState().setConnection(state),
+        onCapabilityChange: endpoint => {
+          useStudio.getState().setCapability(endpoint);
+          this.recordRoute(endpoint);
+        },
+        onMicLevel: level => useStudio.getState().setMicLevel(level),
+        onDisconnected: () => {
+          if (!this.stopped) void stopConversation();
+        },
+      });
+      this.client = client;
+      this.livekit = client;
+      // connect() primes iOS playback synchronously before its first await.
+      try {
+        await client.connect();
+        if (this.stopped) throw new Error("conversation start cancelled");
+        useStudio.getState().setActive(true);
+        return;
+      } catch (error) {
+        this.client = undefined;
+        this.livekit = undefined;
+        if (!mayFallbackFromLiveKit(error) || this.stopped) throw error;
+        store.toast("info", t("WebRTC 暂时不可用，已切换到兼容模式"));
+      }
+    }
     const client = new GatewayClient({
       url: gatewayRealtimeUrl(),
       startOptions: overrides?.agent ? {
@@ -129,11 +179,21 @@ export class ConversationController {
     useStudio.getState().setActive(true);
   }
 
-  setMuted(muted: boolean): void {
-    this.mic?.setMuted(muted);
-    useStudio.getState().setMuted(muted);
-    // Muting suppresses frames at the capture node, so the meter would freeze mid-level.
-    if (muted) useStudio.getState().setMicLevel(0);
+  async setMuted(muted: boolean): Promise<void> {
+    const operation = ++this.muteOperation;
+    try {
+      if (this.livekit) await this.livekit.setMuted(muted);
+      else this.mic?.setMuted(muted);
+      if (this.stopped || operation !== this.muteOperation) return;
+      useStudio.getState().setMuted(muted);
+      // Muting suppresses frames at the capture node, so the meter would freeze mid-level.
+      if (muted) useStudio.getState().setMicLevel(0);
+    } catch (error) {
+      if (this.stopped || operation !== this.muteOperation) return;
+      useStudio.getState().toast("error", t("麦克风静音切换失败：{message}", {
+        message: error instanceof Error ? error.message : String(error),
+      }));
+    }
   }
 
   /**
@@ -164,8 +224,11 @@ export class ConversationController {
 
   async stop(): Promise<void> {
     this.stopped = true;
-    this.client?.stopSession();
+    this.muteOperation += 1;
+    const client = this.client;
     this.client = undefined;
+    await client?.stopSession();
+    this.livekit = undefined;
     await this.mic?.stop();
     this.mic = undefined;
     await this.speaker?.close();
@@ -232,6 +295,11 @@ export class ConversationController {
       case "playback.interrupted":
       case "turn.interrupted":
         this.speaker?.stop("interrupted");
+        return;
+      case "command.rejected":
+        // ConversationPanel renders notices inline; Agent Builder does not, so a native
+        // admission refusal also needs a visible toast on the LiveKit preview surface.
+        if (this.livekit) store.toast("error", `${t("失败")}: ${event.reason}`);
         return;
       default:
         return;

@@ -19,6 +19,8 @@ export interface DiscoveryOptions {
   library: boolean;
   /** Demo mode makes the registry read-only; worth stating rather than surprising. */
   demo: boolean;
+  /** Whether the short-lived LiveKit browser-token bootstrap is configured. */
+  livekit?: boolean;
   /**
    * The per-account quota this deployment enforces, when it enforces one. Stated with
    * its real numbers: an agent that knows the allowance can pace itself instead of
@@ -34,8 +36,11 @@ export interface DiscoveryOptions {
  * charges that are not routes. Hand-maintaining this list is how `/agent` came to
  * under-report what costs an account its allowance.
  */
-const chargeableList = [
-  ...apiRoutes.flatMap(route => (route.charged ?? []).map(method => `${method} ${route.path}`)),
+const availableApiRoutes = (options: DiscoveryOptions): readonly ApiRoute[] => apiRoutes.filter(route =>
+  (route.library !== true || options.library) && (route.livekit !== true || options.livekit === true));
+
+const chargeableList = (options: DiscoveryOptions): string => [
+  ...availableApiRoutes(options).flatMap(route => (route.charged ?? []).map(method => `${method} ${route.path}`)),
   ...chargedBeyondRoutes,
 ].join(", ");
 
@@ -47,7 +52,7 @@ Rate limiting may still exist in front of the gateway (a proxy or tunnel), so ho
   }
   const { operations, windowSeconds } = options.quota;
   return `This deployment allows **${operations} chargeable operations per ${windowSeconds} seconds, per account**.
-Chargeable: ${chargeableList}.
+Chargeable: ${chargeableList(options)}.
 Free: every GET, correcting or deleting a capture, deleting a voice, \`/healthz\`, and
 this page.${options.maxSynthesisSeconds === undefined ? "" : ` One charge is one request, not a fixed amount of work, so a single
 synthesis is capped at ${options.maxSynthesisSeconds}s of estimated speech (\`input_too_long\`).`} Over the allowance you get 429 with \`Retry-After\` (seconds) and
@@ -104,8 +109,7 @@ Base URL: ${base}/v1 — point any OpenAI-compatible client at it.
 
 Every implemented route, generated from the gateway's own routing table:
 
-${apiRoutes
-    .filter(route => route.library !== true || options.library)
+${availableApiRoutes(options)
     .map(route => `    ${route.methods.filter(method => method !== "HEAD").join(" ")} ${route.path}`)
     .join("\n")}
 
@@ -197,13 +201,14 @@ export function llmsTxt(options: DiscoveryOptions): string {
 - GET|POST /v1/voices, GET|DELETE /v1/voices/{id} — the caller's voice bank
 - POST /v1/design-profiles — reproducible designed voice
 ${options.library ? "- GET /v1/library, GET|PATCH|DELETE /v1/library/{id}, GET /v1/library/{id}/audio, POST /v1/library/{id}/promote — captures\n" : "- /v1/library — not enabled on this deployment (404 library_disabled)\n"}- WS /v1/realtime — live session protocol; same auth header
+${options.livekit === true ? "- POST /v1/realtime/livekit/token — atomically bind an owner-scoped Agent and mint its short-lived browser participant token\n" : ""}
 
 ## Quota
 
 ${options.quota === undefined
     ? "- No per-account quota on this deployment; a fronting proxy may still return 429."
     : `- ${options.quota.operations} chargeable operations per ${options.quota.windowSeconds}s, per account.
-- Chargeable: ${chargeableList}. Everything else (GETs, corrections, deletes, health) is free.
+- Chargeable: ${chargeableList(options)}. Everything else (GETs, corrections, deletes, health) is free.
 - Over the allowance: 429, \`code: "quota_exceeded"\`, \`Retry-After\` in seconds, \`x-request-id\`.`}
 
 ## Rules
@@ -428,6 +433,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
     const reconciled: Record<string, Record<string, unknown>> = {};
     for (const route of [...apiRoutes, ...discoveryRoutesCatalog]) {
       if (route.library === true && !options.library) continue;
+      if (route.livekit === true && options.livekit !== true) continue;
       const documented = paths[route.path];
       if (documented === undefined) continue;
       const entry: Record<string, unknown> = {};
@@ -476,7 +482,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
         "",
         options.quota === undefined
           ? "This deployment enforces no per-account quota; a proxy in front of it may still return 429."
-          : `Quota: ${options.quota.operations} chargeable operations per ${options.quota.windowSeconds}s per account. Chargeable: ${chargeableList}. Everything else is free. A 429 carries code "quota_exceeded", retryAfterSeconds, and a requestId, mirrored in the Retry-After and x-request-id headers.`,
+          : `Quota: ${options.quota.operations} chargeable operations per ${options.quota.windowSeconds}s per account. Chargeable: ${chargeableList(options)}. Everything else is free. A 429 carries code "quota_exceeded", retryAfterSeconds, and a requestId, mirrored in the Retry-After and x-request-id headers.`,
       ].join("\n"),
     },
     servers: [{ url: base }],
@@ -504,6 +510,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
                         properties: {
                           demo: { type: "boolean" },
                           tokenRequired: { type: "boolean", description: "Whether this self-hosted deployment requires its shared token. Always false for account deployments." },
+                          livekit: { type: "boolean", description: "Whether browser LiveKit signing and the Agent media adapter are both available." },
                           demoAgent: {
                             type: "object",
                             properties: { id: { type: "string" }, version: { type: "integer" } },
@@ -512,7 +519,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
                           maxSessions: { type: "integer" },
                           maxSessionSeconds: { type: "number" },
                         },
-                        required: ["demo", "tokenRequired"],
+                        required: ["demo", "tokenRequired", "livekit"],
                       },
                     },
                     required: ["ok", "protocol", "auth", "deployment"],
@@ -654,6 +661,68 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
             "401": errorResponse("Missing or invalid key."),
             "429": quota429,
             "502": errorResponse("The LLM engine is unreachable (`engine_unreachable`)."),
+          },
+        },
+      },
+      "/v1/realtime/livekit/token": {
+        post: {
+          summary: "Mint a short-lived LiveKit browser participant token",
+          description: "Atomically resolves an owner-scoped Agent, registers that immutable bootstrap with the deployed media adapter, then creates a unique opaque room and participant identity. The token expires in at most ten minutes and permits only microphone publication, subscription, and data messages.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    agent: { type: "string", description: "Owner-scoped Agent id." },
+                    agentSource: { type: "string", enum: ["published", "draft"], default: "published" },
+                    agentRevision: { type: "integer", minimum: 1, description: "Required exact revision for a draft preview." },
+                    agentVersion: { type: "integer", minimum: 1, description: "Optional exact immutable published version." },
+                  },
+                  required: ["agent"],
+                  additionalProperties: false,
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "One ephemeral browser connection grant.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      server_url: { type: "string", format: "uri", description: "The configured wss:// LiveKit endpoint." },
+                      participant_token: { type: "string", description: "Ephemeral signed participant JWT. Never persist or log it." },
+                      room_name: { type: "string", description: "Opaque, unique room for this bootstrap." },
+                      participant_identity: { type: "string", description: "Opaque browser participant; it contains no account id or email." },
+                      expires_at: { type: "string", format: "date-time" },
+                      agent: {
+                        type: "object",
+                        description: "The resolved immutable Agent binding accepted by the media adapter.",
+                        properties: {
+                          agentId: { type: "string" },
+                          source: { type: "string", enum: ["published", "draft"] },
+                          revision: { type: "integer" },
+                          version: { type: "integer" },
+                          hash: { type: "string" },
+                        },
+                        required: ["agentId", "source"],
+                      },
+                    },
+                    required: ["server_url", "participant_token", "room_name", "participant_identity", "expires_at", "agent"],
+                  },
+                },
+              },
+            },
+            "400": errorResponse("The Agent selection is malformed (`bad_request` or `agent_invalid`)."),
+            "403": errorResponse("An ambient browser request came from an untrusted Origin (`forbidden_origin`)."),
+            "404": errorResponse("The selected Agent does not exist for this owner (`agent_not_found`)."),
+            "409": errorResponse("The Agent is unpublished or its requested revision/version is stale."),
+            "429": errorResponse("Too many native participants are active or waiting to join (`livekit_bootstrap_capacity`); obey `Retry-After`."),
+            "503": errorResponse("The Agent media adapter is unavailable or refused the atomic bootstrap (`livekit_adapter_unavailable`)."),
           },
         },
       },

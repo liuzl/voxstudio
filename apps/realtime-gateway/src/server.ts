@@ -24,6 +24,17 @@ import { studioToolNames } from "@voxstudio/conversation";
 import { estSeconds } from "@voxstudio/text";
 import { builtinToolNames, GatewaySession, type EventSink } from "./session";
 import { ConversationTraceStore, type TraceAgentIdentity, type TraceOutcome } from "./trace-store";
+import {
+  issueLiveKitBrowserToken,
+  validateLiveKitBootstrapOptions,
+  type LiveKitBootstrapOptions,
+} from "./livekit-bootstrap";
+import {
+  LiveKitAdapterCapacityError,
+  LiveKitSessionAdmissionError,
+  type LiveKitAgentMediaAdapter,
+} from "./livekit-agent-adapter";
+export type { LiveKitAgentBootstrap } from "./livekit-agent-adapter";
 
 export interface GatewayServerOptions {
   config: VoxConfig;
@@ -39,6 +50,17 @@ export interface GatewayServerOptions {
    * Absent, the self-hosted rule applies: the optional shared token, owner identity.
    */
   authResolver?: (request: Request) => AuthContext | null;
+  /**
+   * Phase 3A bootstrap credentials. When present, authenticated callers may mint a
+   * short-lived, least-privilege browser participant token. This does not by itself
+   * advertise a complete WebRTC media adapter.
+   */
+  livekit?: LiveKitBootstrapOptions;
+  /**
+   * Atomically register/dispatch the owner-bound Agent before its browser token is
+   * returned. Without an adapter the bootstrap route stays unavailable and undiscovered.
+   */
+  livekitAdapter?: LiveKitAgentMediaAdapter;
   /**
    * Hosted accounts (docs/auth.md phase 3): Better Auth behind the identity seam,
    * auth.db in `dir`. Mutually exclusive with `token` — hosted is session or API key,
@@ -238,6 +260,31 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const log = options.log ?? (() => {});
   const sessions = new Map<string, GatewaySession>();
+  // Token minting is deliberately free, but its server-side Agent participant is not:
+  // it consumes a native connection and (on hosted LiveKit) participant minutes before
+  // the browser publishes a microphone. Bound those pending grants separately from the
+  // real session quota, and count them alongside active sessions when maxSessions exists.
+  const maxPendingLiveKit = Math.min(options.maxSessions ?? 32, 32);
+  const maxPendingLiveKitPerOwner = Math.min(maxPendingLiveKit, 4);
+  let pendingLiveKit = 0;
+  const pendingLiveKitByOwner = new Map<string, number>();
+  const pendingLiveKitCleanups = new Set<() => void>();
+  const reserveLiveKit = (owner: string): (() => void) | undefined => {
+    const owned = pendingLiveKitByOwner.get(owner) ?? 0;
+    if (pendingLiveKit >= maxPendingLiveKit || owned >= maxPendingLiveKitPerOwner) return undefined;
+    if (options.maxSessions !== undefined && sessions.size + pendingLiveKit >= options.maxSessions) return undefined;
+    pendingLiveKit += 1;
+    pendingLiveKitByOwner.set(owner, owned + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      pendingLiveKit = Math.max(0, pendingLiveKit - 1);
+      const remaining = (pendingLiveKitByOwner.get(owner) ?? 1) - 1;
+      if (remaining <= 0) pendingLiveKitByOwner.delete(owner);
+      else pendingLiveKitByOwner.set(owner, remaining);
+    };
+  };
 
   // Hosted accounts and the shared token are different products (docs/auth.md
   // decision 1); a deployment that configures both is a mistake, said at startup.
@@ -245,6 +292,13 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     throw new TypeError("accounts and --token are mutually exclusive: hosted deployments take a session or an API key, nothing else");
   }
   if (options.token !== undefined) assertGatewayToken(options.token);
+  if (options.livekit !== undefined) validateLiveKitBootstrapOptions(options.livekit);
+  if (options.livekitAdapter !== undefined && options.livekit === undefined) {
+    throw new TypeError("livekitAdapter requires LiveKit signing configuration");
+  }
+  if (options.livekitAdapter !== undefined && options.agentsDir === undefined) {
+    throw new TypeError("livekitAdapter requires an Agent registry");
+  }
   // The resolver seam exists for tests and future identity sources; standing beside
   // hosted accounts it would silently outrank Better Auth on every request — an
   // authentication bypass assembled from two valid options (adversarial review
@@ -325,6 +379,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     baseUrl: publicOrigin(request),
     library: library !== undefined,
     demo: options.demoMode === true,
+    livekit: options.livekit !== undefined && options.livekitAdapter !== undefined,
     // The real allowance, so an agent can pace itself instead of learning it by refusal.
     ...(quota === undefined ? {} : { quota: { operations: quota.operations, windowSeconds: quota.windowSeconds } }),
     ...(options.maxSynthesisSeconds === undefined ? {} : { maxSynthesisSeconds: options.maxSynthesisSeconds }),
@@ -1031,6 +1086,10 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         const deployment = {
           demo: options.demoMode === true,
           tokenRequired: options.accounts === undefined && options.token !== undefined && options.token !== "",
+          // Browsers choose WebRTC from the initiating click so iOS can authorize
+          // playback. Advertise it only when both the signer and Agent participant
+          // adapter are ready; partial configuration is not a usable capability.
+          livekit: options.livekit !== undefined && options.livekitAdapter !== undefined,
           ...(options.demoAgent === undefined ? {} : { demoAgent: options.demoAgent }),
           ...(options.maxSessions === undefined ? {} : { maxSessions: options.maxSessions }),
           ...(options.maxSessionSeconds === undefined ? {} : { maxSessionSeconds: options.maxSessionSeconds }),
@@ -1142,6 +1201,165 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         }
         return undefined;
       };
+      if (url.pathname === "/v1/realtime/livekit/token") {
+        if (options.livekit === undefined) {
+          return problem(404, "livekit_disabled", "this deployment has no LiveKit signing configuration");
+        }
+        if (options.livekitAdapter === undefined) {
+          return problem(503, "livekit_adapter_unavailable", "the LiveKit Agent media adapter is not available");
+        }
+        // Browser sessions and the credential-less self-hosted owner are ambient
+        // authority, so token issuance receives the same Origin discipline as registry
+        // writes and WebSocket upgrades. Explicit bearer/shared/API keys are not CSRF-able.
+        if ((ctx.via === "session" || ctx.via === "none") && !upgradeOriginAllowed(request, originPolicy())) {
+          return problem(403, "forbidden_origin", "this origin may not mint a LiveKit participant token");
+        }
+        if (agents === undefined) {
+          return problem(404, "agents_disabled", "this deployment has no Agent registry configured");
+        }
+        const input = await request.json().catch(() => null) as unknown;
+        if (typeof input !== "object" || input === null || Array.isArray(input)) {
+          return problem(400, "bad_request", "expected a JSON Agent selection");
+        }
+        const selection = input as Record<string, unknown>;
+        const selectionKeys = new Set(["agent", "agentSource", "agentRevision", "agentVersion"]);
+        const unknownField = Object.keys(selection).find(key => !selectionKeys.has(key));
+        if (unknownField !== undefined) {
+          return problem(400, "bad_request", `unknown LiveKit bootstrap field ${unknownField}`);
+        }
+        let requested: SessionStartOptions;
+        try {
+          const command = parseCommand(JSON.stringify({
+            v: protocolVersion,
+            type: "session.start",
+            idempotencyKey: crypto.randomUUID(),
+            options: {
+              agent: selection.agent,
+              agentSource: selection.agentSource,
+              agentRevision: selection.agentRevision,
+              agentVersion: selection.agentVersion,
+            },
+          }));
+          if (command.type !== "session.start" || command.options?.agent === undefined) {
+            return problem(400, "bad_request", "agent is required");
+          }
+          requested = command.options;
+        } catch (error) {
+          if (!(error instanceof ProtocolError)) throw error;
+          return problem(400, "bad_request", error.message);
+        }
+        let resolved: Awaited<ReturnType<typeof resolveDeploymentStart>>;
+        try {
+          resolved = await resolveDeploymentStart(ctx.userId, requested);
+        } catch (error) {
+          if (!(error instanceof AgentRegistryError)) throw error;
+          const status = error.code === "invalid" ? 400
+            : error.code === "not_found" ? 404
+              : 409;
+          const code = error.code === "not_found" ? "agent_not_found" : `agent_${error.code}`;
+          return problem(status, code, error.message);
+        }
+        if (resolved.spec === undefined || resolved.trace === undefined) {
+          return problem(500, "agent_resolution_failed", "the selected Agent did not resolve to an immutable bootstrap");
+        }
+        // LiveKit publishes a browser microphone with AEC/NS/AGC and keeps that track
+        // flowing while the Agent audio track plays. Mirror the browser WebSocket
+        // preview contract here: without this explicit opt-in the shared conversation
+        // kernel deliberately suppresses input during playback, so WebRTC would sound
+        // full-duplex while silently losing voice barge-in.
+        const liveKitStart: SessionStartOptions = {
+          ...resolved.start,
+          bargeIn: true,
+          playbackAck: true,
+          mediaTelemetry: true,
+        };
+        const releasePending = reserveLiveKit(ctx.userId);
+        if (releasePending === undefined) {
+          return Response.json({
+            error: {
+              code: "livekit_bootstrap_capacity",
+              message: "too many LiveKit sessions are active or waiting to join",
+              retryAfterSeconds: 1,
+            },
+          }, { status: 429, headers: { "retry-after": "1" } });
+        }
+        let bootstrap: Awaited<ReturnType<typeof issueLiveKitBrowserToken>>;
+        let release = releasePending;
+        try {
+          bootstrap = await issueLiveKitBrowserToken(options.livekit);
+          const releaseTimer = setTimeout(() => release(), Math.max(0, Date.parse(bootstrap.expires_at) - Date.now()));
+          release = (): void => {
+            clearTimeout(releaseTimer);
+            pendingLiveKitCleanups.delete(release);
+            releasePending();
+          };
+          pendingLiveKitCleanups.add(release);
+          await options.livekitAdapter.accept({
+            roomName: bootstrap.room_name,
+            participantIdentity: bootstrap.participant_identity,
+            expiresAt: bootstrap.expires_at,
+            ownerUserId: ctx.userId,
+            start: liveKitStart,
+            spec: resolved.spec,
+            agent: resolved.trace,
+            onClosed: release,
+          }, async sink => {
+            const command: GatewayCommand = {
+              v: protocolVersion,
+              type: "session.start",
+              idempotencyKey: `livekit-start-${bootstrap.room_name}`,
+              options: liveKitStart,
+            };
+            // The native participant is no longer pending once its expected microphone
+            // arrives. createSession synchronously replaces this reservation in `sessions`.
+            release();
+            let session: GatewaySession;
+            try {
+              session = createSession([], ctx.userId, resolved.spec, resolved.trace);
+            } catch (error) {
+              if (error instanceof QuotaError) {
+                throw new LiveKitSessionAdmissionError(rejection("", "quota_exceeded", command, {
+                  retryAfterSeconds: error.retryAfterSeconds,
+                  requestId: crypto.randomUUID(),
+                }), { cause: error });
+              }
+              const reason = error instanceof CapacityError ? "session_capacity" : "session_unavailable";
+              throw new LiveKitSessionAdmissionError(rejection("", reason, command), { cause: error });
+            }
+            session.recordCommand(command);
+            try {
+              // rtc-node owns a real playout queue. Keep the shared turn in speaking
+              // until that queue drains, and retain the same metadata-only diagnostics.
+              await session.start(liveKitStart, sink);
+              session.accept(command);
+              session.emit(session.snapshotPayload());
+              return session;
+            } catch (error) {
+              session.markFailed("livekit_session_start_failed");
+              session.stop();
+              throw error;
+            }
+          });
+        } catch (error) {
+          release();
+          log(`livekit: bootstrap adapter refused: ${error instanceof Error ? error.message : String(error)}`);
+          if (error instanceof LiveKitAdapterCapacityError) {
+            return Response.json({
+              error: {
+                code: error.code,
+                message: error.message,
+                retryAfterSeconds: 1,
+              },
+            }, { status: 429, headers: { "retry-after": "1" } });
+          }
+          return problem(503, "livekit_adapter_unavailable", "the LiveKit Agent media adapter refused the bootstrap");
+        }
+        return Response.json({ ...bootstrap, agent: resolved.trace }, {
+          // A participant JWT is a bearer credential. POST responses are rarely cached,
+          // but making the boundary explicit protects against an over-eager proxy or SW.
+          headers: { "cache-control": "no-store", pragma: "no-cache" },
+        });
+      }
       const agentMatch = agentEntryPattern.exec(url.pathname);
       const conversationMatch = agentConversationPattern.exec(url.pathname);
       if (url.pathname === "/v1/agents" || agentMatch !== null || conversationMatch !== null) {
@@ -1774,6 +1992,8 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     stop: async () => {
       for (const session of sessions.values()) session.stop();
       await Promise.allSettled([...sessions.values()].map(session => session.done));
+      for (const release of [...pendingLiveKitCleanups]) release();
+      await options.livekitAdapter?.close().catch(() => {});
       if (mcpSource) await (await mcpSource).close().catch(() => {});
       // Draining: in-flight library work (a promote awaiting its engine) finishes
       // against an open database; only then does the store close.

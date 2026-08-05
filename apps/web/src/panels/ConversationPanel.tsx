@@ -360,7 +360,7 @@ export function ConversationPanel() {
       const target = event.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, button, [contenteditable]")) return;
       event.preventDefault();
-      conversationControls()?.setMuted(!useStudio.getState().muted);
+      void conversationControls()?.setMuted(!useStudio.getState().muted);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -406,7 +406,7 @@ export function ConversationPanel() {
                 {active && (
                   <>
                     <button
-                      onClick={() => conversationControls()?.setMuted(!muted)}
+                      onClick={() => { void conversationControls()?.setMuted(!muted); }}
                       className={`${secondaryButton} ${muted ? "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300" : ""}`}
                       title={t("空格键切换")}
                     >

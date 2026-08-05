@@ -65,10 +65,10 @@ describe("Agent deployment snippets", () => {
 
   test("distinguishes demo mode without an Agent pin from demo mode being off", () => {
     expect(agentDemoPinState(undefined, "support", 1)).toBe("loading");
-    expect(agentDemoPinState({ auth: "self", demo: false, tokenRequired: false }, "support", 1)).toBe("off");
-    expect(agentDemoPinState({ auth: "self", demo: true, tokenRequired: false }, "support", 1)).toBe("unpinned");
+    expect(agentDemoPinState({ auth: "self", demo: false, tokenRequired: false, livekit: false }, "support", 1)).toBe("off");
+    expect(agentDemoPinState({ auth: "self", demo: true, tokenRequired: false, livekit: false }, "support", 1)).toBe("unpinned");
     expect(agentDemoPinState({
-      auth: "self", demo: true, tokenRequired: false, demoAgent: { id: "support", version: 1 },
+      auth: "self", demo: true, tokenRequired: false, livekit: false, demoAgent: { id: "support", version: 1 },
     }, "support", 1)).toBe("current");
   });
 });
