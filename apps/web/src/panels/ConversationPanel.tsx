@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   AudioLines,
   CircleStop,
@@ -8,6 +8,7 @@ import {
   Mic,
   MicOff,
   Radio,
+  Send,
   ShieldCheck,
   Sparkles,
   VolumeX,
@@ -329,10 +330,13 @@ function StartCard({ starting, onStart }: { starting: boolean; onStart: () => vo
 export function ConversationPanel() {
   const t = useT();
   const [starting, setStarting] = useState(false);
+  const [textInput, setTextInput] = useState("");
+  const [sendingText, setSendingText] = useState(false);
   const active = useStudio(state => state.active);
   const voice = useStudio(state => state.voice);
   const voiceEngine = useStudio(state => state.voiceEngine);
   const muted = useStudio(state => state.muted);
+  const connection = useStudio(state => state.connection);
   const sessionState = useStudio(state => state.sessionState);
   const turns = useStudio(state => state.turns);
   const notices = useStudio(state => state.notices);
@@ -382,6 +386,26 @@ export function ConversationPanel() {
   const state = stateLabels[stateKey] ?? stateLabels.off as { text: MessageKey; tone: string };
   const lastNotice = notices[notices.length - 1];
   const clearHistory = useStudio(state => state.clearHistory);
+  const sessionCanAcceptText = sessionState !== "off" && sessionState !== "idle" && sessionState !== "closed";
+  const canSubmitText = active && connection === "connected" && sessionCanAcceptText && !sendingText;
+  const textWillInterrupt = sessionState !== "listening";
+  const submitText = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const submitted = textInput.trim();
+    if (!submitted || !canSubmitText) return;
+    setSendingText(true);
+    try {
+      if (await conversationControls()?.submitText(submitted)) {
+        // LiveKit publication is asynchronous. Preserve anything typed while the command
+        // was in flight instead of clearing a newer draft with the submitted one.
+        setTextInput(current => current.trim() === submitted ? "" : current);
+      }
+    } catch (error) {
+      toast("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      setSendingText(false);
+    }
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -469,6 +493,34 @@ export function ConversationPanel() {
           )}
         </div>
       </div>
+
+      {active && (
+        <div className="border-t border-ink-700 bg-ink-950 px-4 py-3 sm:px-8 lg:px-12">
+          <form
+            onSubmit={event => { void submitText(event); }}
+            aria-label={t("输入消息")}
+            className="mx-auto flex w-full max-w-[1276px] items-center gap-2.5"
+          >
+            <input
+              value={textInput}
+              onChange={event => setTextInput(event.target.value)}
+              maxLength={8_000}
+              placeholder={t("输入消息")}
+              aria-label={t("输入消息")}
+              className="h-11 min-w-0 flex-1 rounded-full border border-ink-700 bg-ink-900 px-4 text-sm text-ink-100 outline-none placeholder:text-ink-500 focus:border-ink-500"
+            />
+            <button
+              type="submit"
+              disabled={!canSubmitText || !textInput.trim()}
+              title={t(textWillInterrupt ? "打断并发送" : "发送消息")}
+              aria-label={t(textWillInterrupt ? "打断并发送" : "发送消息")}
+              className={`flex size-11 shrink-0 items-center justify-center rounded-full text-ink-950 transition disabled:cursor-not-allowed disabled:opacity-30 ${textWillInterrupt ? "bg-amber-300 hover:bg-amber-200" : "bg-ink-100 hover:bg-white"}`}
+            >
+              <Send className="size-4" />
+            </button>
+          </form>
+        </div>
+      )}
 
       <footer className="border-t border-ink-700 bg-ink-900 py-2">
         <div className="mx-auto flex w-full max-w-[1276px] items-center gap-4 overflow-hidden px-4 text-[10px] text-ink-500 sm:px-8 lg:px-12">

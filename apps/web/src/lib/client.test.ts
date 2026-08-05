@@ -286,14 +286,43 @@ describe("GatewayClient", () => {
     expect(states.at(-1)).toBe("disconnected");
   });
 
-  test("every command carries a distinct idempotency key", () => {
+  test("every command carries a distinct idempotency key", async () => {
     const { client, sockets } = makeClient();
     client.connect();
     const socket = sockets[0] as FakeSocket;
     socket.emit("open", {});
+    const sending = client.sendText("typed hello");
     client.interruptTurn("t-1");
     client.playbackComplete("t-1");
+    expect(socket.commands()).toContainEqual(expect.objectContaining({ type: "turn.text", text: "typed hello" }));
     const keys = socket.commands().map(command => command.idempotencyKey);
     expect(new Set(keys).size).toBe(keys.length);
+    const textKey = socket.commands().find(command => command.type === "turn.text")?.idempotencyKey;
+    socket.serverEvent({ type: "command.accepted", commandType: "turn.text", idempotencyKey: textKey });
+    await sending;
+    client.close();
+  });
+
+  test("text submission waits for acceptance and rejects on refusal or disconnect", async () => {
+    const { client, sockets } = makeClient();
+    await expect(client.sendText("offline")).rejects.toThrow("conversation is not connected");
+
+    client.connect();
+    const socket = sockets[0] as FakeSocket;
+    socket.emit("open", {});
+    const rejected = client.sendText("keep this draft");
+    const rejectedKey = socket.commands().find(command => command.type === "turn.text")?.idempotencyKey;
+    socket.serverEvent({
+      type: "command.rejected",
+      commandType: "turn.text",
+      idempotencyKey: rejectedKey,
+      reason: "session_starting",
+    });
+    await expect(rejected).rejects.toThrow("command rejected: session_starting");
+
+    const disconnected = client.sendText("also keep this draft");
+    socket.emit("close", {});
+    await expect(disconnected).rejects.toThrow("connection closed before the command was accepted");
+    client.close();
   });
 });

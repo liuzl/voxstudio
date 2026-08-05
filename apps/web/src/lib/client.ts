@@ -52,6 +52,13 @@ export interface GatewayClientOptions {
 }
 
 const maxBackoffMs = 5_000;
+const commandAcceptanceTimeoutMs = 10_000;
+
+interface PendingCommandAcceptance {
+  resolve(): void;
+  reject(error: Error): void;
+  timer: ReturnType<typeof setTimeout>;
+}
 
 /**
  * Protocol v1 client: opens the socket, starts (or, after a drop, reattaches to) the
@@ -72,6 +79,7 @@ export class GatewayClient {
   private expectedMediaSequence = 0;
   private expectedTimestampSamples = 0;
   private pingTimer: ReturnType<typeof setInterval> | undefined;
+  private readonly pendingCommandAcceptances = new Map<string, PendingCommandAcceptance>();
 
   constructor(options: GatewayClientOptions) {
     this.options = options;
@@ -102,6 +110,7 @@ export class GatewayClient {
       if (this.socket !== socket) return;
       if (typeof event.data === "string") {
         const parsed = JSON.parse(event.data) as GatewayEvent;
+        this.settleCommandAcceptance(parsed);
         this.sessionId ??= parsed.sessionId || undefined;
         if (parsed.sequence > 0) this.lastSequence = parsed.sequence;
         if (parsed.type === "media.frame") this.pendingMediaFrames.push(parsed);
@@ -192,6 +201,7 @@ export class GatewayClient {
     socket.addEventListener("close", () => {
       if (this.socket !== socket) return;
       this.socket = undefined;
+      this.rejectCommandAcceptances("connection closed before the command was accepted");
       this.stopMediaPing();
       this.pendingMediaFrames.length = 0;
       this.playbackStreamId = undefined;
@@ -216,6 +226,10 @@ export class GatewayClient {
     this.socket.send(samples.buffer.slice(samples.byteOffset, samples.byteOffset + samples.byteLength));
   }
 
+  async sendText(text: string): Promise<void> {
+    await this.commandAndWaitForAcceptance({ type: "turn.text", text });
+  }
+
   interruptTurn(turnId: string): void {
     this.command({ type: "turn.interrupt", turnId });
   }
@@ -235,6 +249,7 @@ export class GatewayClient {
 
   close(): void {
     this.closed = true;
+    this.rejectCommandAcceptances("client closed before the command was accepted");
     this.stopMediaPing();
     this.pendingMediaFrames.length = 0;
     this.socket?.close();
@@ -246,6 +261,44 @@ export class GatewayClient {
     if (this.socket?.readyState !== 1) return;
     const key = this.options.newIdempotencyKey?.() ?? crypto.randomUUID();
     this.socket.send(JSON.stringify({ v: protocolVersion, idempotencyKey: key, ...payload }));
+  }
+
+  private commandAndWaitForAcceptance(payload: Record<string, unknown>): Promise<void> {
+    const socket = this.socket;
+    if (socket?.readyState !== 1) return Promise.reject(new Error("conversation is not connected"));
+    const key = this.options.newIdempotencyKey?.() ?? crypto.randomUUID();
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingCommandAcceptances.delete(key);
+        reject(new Error("command acceptance timed out"));
+      }, commandAcceptanceTimeoutMs);
+      this.pendingCommandAcceptances.set(key, { resolve, reject, timer });
+      try {
+        socket.send(JSON.stringify({ v: protocolVersion, idempotencyKey: key, ...payload }));
+      } catch (error) {
+        clearTimeout(timer);
+        this.pendingCommandAcceptances.delete(key);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
+  private settleCommandAcceptance(event: GatewayEvent): void {
+    if ((event.type !== "command.accepted" && event.type !== "command.rejected") || event.idempotencyKey === undefined) return;
+    const pending = this.pendingCommandAcceptances.get(event.idempotencyKey);
+    if (pending === undefined) return;
+    clearTimeout(pending.timer);
+    this.pendingCommandAcceptances.delete(event.idempotencyKey);
+    if (event.type === "command.accepted") pending.resolve();
+    else pending.reject(new Error(`command rejected: ${event.reason}`));
+  }
+
+  private rejectCommandAcceptances(message: string): void {
+    for (const pending of this.pendingCommandAcceptances.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error(message));
+    }
+    this.pendingCommandAcceptances.clear();
   }
 
   private sendMediaPing(): void {

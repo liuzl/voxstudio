@@ -403,3 +403,32 @@ describe("agent-initiated turns", () => {
     expect(session.snapshot().state).toBe("speech_started");
   });
 });
+
+describe("typed user turns", () => {
+  test("opens directly in finalizing without fabricating speech or VAD events", () => {
+    const events: DuplexEvent[] = [];
+    const session = new DuplexSession({ onEvent: event => events.push(event) });
+    session.start();
+
+    const turn = session.startUserText();
+    expect(turn).toBeDefined();
+    expect(session.state).toBe("finalizing");
+    expect(events.some(event => event.type === "turn.started")).toBe(true);
+    expect(events.some(event => event.type === "vad.end")).toBe(false);
+    expect(session.startThinking(turn!.id)).toBe(true);
+    expect(session.startSpeaking(turn!.id)).toBe(true);
+    expect(session.complete(turn!.id)).toBe(true);
+    expect(session.state).toBe("listening");
+  });
+
+  test("is accepted only while the session is idle and listening", () => {
+    const session = new DuplexSession();
+    expect(session.startUserText()).toBeUndefined();
+    session.start();
+    const first = session.startUserText();
+    expect(first).toBeDefined();
+    expect(session.startUserText()).toBeUndefined();
+    session.interrupt("cancel");
+    expect(session.startUserText()).toBeDefined();
+  });
+});

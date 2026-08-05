@@ -52,19 +52,21 @@ function downloadTracePayload(payload: Record<string, unknown>): void {
  * Created on the user's start gesture (browser audio requires one) and torn down on stop.
  */
 export class ConversationController {
-  private client: Pick<GatewayClient, "interruptTurn" | "playbackComplete" | "requestSnapshot" | "stopSession" | "close"> | BrowserLiveKitClient | undefined;
+  private client: Pick<GatewayClient, "sendText" | "interruptTurn" | "playbackComplete" | "requestSnapshot" | "stopSession" | "close"> | BrowserLiveKitClient | undefined;
   private livekit: BrowserLiveKitClient | undefined;
   private mic: MicCapture | undefined;
   private speaker: SpeakerOutput | undefined;
   private playbackTurnId: string | undefined;
   private lastLevelAt = 0;
   private stopped = false;
+  private agentPreview = false;
   private muteOperation = 0;
   private readonly mediaTrace = new MediaTraceRecorder();
   private mediaUiTimer: ReturnType<typeof setTimeout> | undefined;
 
   async start(overrides?: SessionStartOptions, inputDeviceId = ""): Promise<void> {
     const store = useStudio.getState();
+    this.agentPreview = overrides?.agent !== undefined;
     this.mediaTrace.reset();
     store.resetMediaDiagnostics();
     const ordinaryBehavior: SessionStartOptions = {
@@ -248,6 +250,17 @@ export class ConversationController {
     if (speaking) this.client?.interruptTurn(speaking.id);
   }
 
+  /**
+   * Submit a typed user turn through the same native session as microphone speech.
+   * The gateway treats submission during an active reply as an explicit barge-in.
+   */
+  async submitText(text: string): Promise<boolean> {
+    const submitted = text.trim();
+    if (!submitted || this.client === undefined) return false;
+    await this.client.sendText(submitted);
+    return true;
+  }
+
   /** The escape hatch for a stuck turn: cancel it by id (stale ids are rejected server-side). */
   cancelTurn(turnId: string): void {
     this.client?.interruptTurn(turnId);
@@ -329,8 +342,8 @@ export class ConversationController {
         return;
       case "command.rejected":
         // ConversationPanel renders notices inline; Agent Builder does not, so a native
-        // admission refusal also needs a visible toast on the LiveKit preview surface.
-        if (this.livekit) store.toast("error", `${t("失败")}: ${event.reason}`);
+        // admission refusal also needs a visible toast on either preview transport.
+        if (this.agentPreview) store.toast("error", `${t("失败")}: ${event.reason}`);
         return;
       default:
         return;
@@ -390,7 +403,7 @@ export async function stopConversation(): Promise<void> {
   await active?.stop();
 }
 
-export function conversationControls(): Pick<ConversationController, "setMuted" | "interruptPlayback" | "cancelTurn" | "downloadMediaTrace"> | undefined {
+export function conversationControls(): Pick<ConversationController, "setMuted" | "submitText" | "interruptPlayback" | "cancelTurn" | "downloadMediaTrace"> | undefined {
   return current;
 }
 

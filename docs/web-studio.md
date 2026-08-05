@@ -4,7 +4,8 @@ Status: Accepted, 2026-07-14; living delivery record. The realtime gateway,
 five original functional panels, single-binary packaging, hosted authentication,
 and explicit engine-route selection are delivered. The registry-backed Agents
 list, Configuration/Speech/Deployment/Conversations Builder sections, immutable version
-lifecycle, and draft/published Try it live are delivered. The remaining Builder work,
+lifecycle, and draft/published Try it live (including microphone selection and
+native typed turns) are delivered. The remaining Builder work,
 real-browser double-talk gate, and production hosting operations remain.
 
 ## Scope
@@ -99,13 +100,17 @@ below rather than relitigated per feature.
    redacts it from the URL, retains it for the tab, and applies it consistently to REST,
    realtime WebSocket, media playback, and downloads; account deployments never consume
    that shared-token state.
-   Conversations, Statistics, telephony attachment, and the remaining
-   preview controls remain.
+   Statistics, telephony attachment, response feedback, and the remaining
+   preview failure/retry controls remain. The StreamCore-inspired Full Preview
+   is a later independent surface, not a restyling of the compact drawer.
 2. **对话 Conversation** — live duplex session: mic capture with negotiated AEC (browser
    constraints verified per the duplex doc), agent audio playback, streaming captions,
    visible turn/barge-in/reopen state, per-turn latency readout (the `turn.timing`
    event), push-to-talk and mute as first-class controls, plus an optional named
-   ASR/LLM/TTS route picker that defaults to automatic routing.
+   ASR/LLM/TTS route picker that defaults to automatic routing. The active session also
+   accepts native typed turns over WebSocket or LiveKit. Drafting remains available while
+   the Agent replies; sending then explicitly interrupts the active turn and synchronously
+   starts the replacement through the same Agent/tool/TTS/history path as speech.
 3. **生成 Generate** — text in, audio out: voice/profile and named-TTS pickers,
    chunking preview for long text, bounded in-browser takes history, effect
    chain slot (v2).

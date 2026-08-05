@@ -165,6 +165,29 @@ describe("engine HTTP clients", () => {
     expect(deltas).toEqual(["整段回复"]);
   });
 
+  test("drops a late batch reply when a custom fetch resolves after cancellation", async () => {
+    let release = (): void => {};
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const fetch: Fetch = async () => {
+      // Deliberately ignores RequestInit.signal, as an imperfect self-hosted adapter may.
+      await gate;
+      return json({ choices: [{ message: { content: "stale reply" } }] });
+    };
+    const client = new LlmClient({ baseUrl: "https://voice.example", model: "gemma" }, fetch);
+    const controller = new AbortController();
+    const collected: string[] = [];
+    const consuming = (async () => {
+      for await (const delta of client.chatStream(
+        [{ role: "user", content: "old turn" }], undefined, undefined, controller.signal,
+      )) collected.push(delta);
+    })();
+
+    controller.abort("superseded");
+    release();
+    await expect(consuming).rejects.toThrow();
+    expect(collected).toEqual([]);
+  });
+
   test("speechStream yields PCM pieces from a chunked audio/pcm response", async () => {
     // Two pieces whose byte boundary deliberately splits a float in half.
     const samples = Float32Array.from([0.1, -0.2, 0.3, -0.4, 0.5]);

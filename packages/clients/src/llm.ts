@@ -66,6 +66,9 @@ export class LlmClient extends EngineClient {
     const type = response.headers.get("content-type") ?? "";
     if (!type.includes("text/event-stream")) {
       const content = extractChatContent(await response.json());
+      // A custom/self-hosted fetch may resolve even after cancellation. Never let its
+      // stale batch reply escape into the replacement turn's captions or history.
+      signal?.throwIfAborted();
       if (content) yield content;
       return;
     }
@@ -110,6 +113,7 @@ export class LlmClient extends EngineClient {
         choices?: { message?: { content?: string | null; tool_calls?: ChatToolCall[] } }[];
       };
       const message = payload.choices?.[0]?.message;
+      signal?.throwIfAborted();
       if (message?.content) yield { type: "text", text: message.content };
       if (message?.tool_calls?.length) yield { type: "tool_calls", calls: message.tool_calls };
       return;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -56,6 +56,7 @@ import {
   type VoiceEntry,
 } from "../lib/api";
 import type { ConnectionState } from "../lib/client";
+import { listAudioInputDevices, type AudioInputDevice } from "../lib/audio";
 import { formatMediaTransportDetails, mediaTransportFallbackMessage } from "../lib/media-telemetry";
 import { useStudio } from "../store";
 import { AgentConversations } from "./AgentConversations";
@@ -1377,6 +1378,8 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
   const sessionState = useStudio(state => state.sessionState);
   const turns = useStudio(state => state.turns);
   const muted = useStudio(state => state.muted);
+  const micInputDeviceId = useStudio(state => state.micInputDeviceId);
+  const setMicInputDevice = useStudio(state => state.setMicInputDevice);
   const micLevel = useStudio(state => state.micLevel);
   const media = useStudio(state => state.mediaDiagnostics);
   const mediaDetails = formatMediaTransportDetails(media);
@@ -1384,6 +1387,9 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
   const clearHistory = useStudio(state => state.clearHistory);
   const toast = useStudio(state => state.toast);
   const [starting, setStarting] = useState(false);
+  const [sendingText, setSendingText] = useState(false);
+  const [textInput, setTextInput] = useState("");
+  const [audioInputs, setAudioInputs] = useState<AudioInputDevice[]>([]);
   const [previewTraceKey, setPreviewTraceKey] = useState<string>();
   const [hasUnseen, setHasUnseen] = useState(false);
   const previewOwned = useRef(false);
@@ -1402,6 +1408,23 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
       previewOwned.current = false;
       previewStarting.current = false;
       if (shouldStop) void stopConversation();
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    const refresh = () => {
+      void listAudioInputDevices().then(devices => {
+        if (alive) setAudioInputs(devices);
+      }).catch(() => {
+        if (alive) setAudioInputs([]);
+      });
+    };
+    refresh();
+    navigator.mediaDevices?.addEventListener?.("devicechange", refresh);
+    return () => {
+      alive = false;
+      navigator.mediaDevices?.removeEventListener?.("devicechange", refresh);
     };
   }, []);
 
@@ -1509,6 +1532,24 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
 
   const isPreview = active && previewOwned.current;
   const previewConnected = isPreview && connection === "connected";
+  const sessionCanAcceptText = sessionState !== "off" && sessionState !== "idle" && sessionState !== "closed";
+  const canSubmitText = previewConnected && sessionCanAcceptText && !starting && !sendingText;
+  const textWillInterrupt = sessionState !== "listening";
+  const submitText = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const submitted = textInput.trim();
+    if (!submitted || !canSubmitText) return;
+    setSendingText(true);
+    try {
+      if (await conversationControls()?.submitText(submitted)) {
+        setTextInput(current => current.trim() === submitted ? "" : current);
+      }
+    } catch (error) {
+      toast("error", error instanceof Error ? error.message : String(error));
+    } finally {
+      if (mounted.current) setSendingText(false);
+    }
+  };
   const stateLabel = isPreview ? t(previewStatusLabel(connection, sessionState)) : t("未开始");
   const latestTurn = turns.at(-1);
   const liveAnnouncement = latestTurn?.status === "completed" && latestTurn.reply ? latestTurn.reply : stateLabel;
@@ -1580,6 +1621,27 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
             {fallbackMessage ? <p className="truncate text-amber-600 dark:text-amber-300" title={t(fallbackMessage)}>{t(fallbackMessage)}</p> : null}
           </div>
         ) : null}
+        {isPreview ? (
+          <form onSubmit={event => { void submitText(event); }} className="mb-3 flex items-center gap-2" aria-label={t("输入消息")}>
+            <input
+              value={textInput}
+              onChange={event => setTextInput(event.target.value)}
+              maxLength={8_000}
+              placeholder={t("输入消息")}
+              aria-label={t("输入消息")}
+              className="h-10 min-w-0 flex-1 rounded-full border border-edge bg-surface px-4 text-[11px] text-fg outline-none placeholder:text-fg-faint focus:border-edge-hover focus:bg-canvas"
+            />
+            <button
+              type="submit"
+              disabled={!canSubmitText || !textInput.trim()}
+              title={t(textWillInterrupt ? "打断并发送" : "发送消息")}
+              aria-label={t(textWillInterrupt ? "打断并发送" : "发送消息")}
+              className={`flex size-10 shrink-0 items-center justify-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-30 ${textWillInterrupt ? "bg-amber-300 text-amber-950 hover:bg-amber-200" : "bg-ink text-on-ink hover:bg-ink-hover"}`}
+            >
+              <Send className="size-3.5" />
+            </button>
+          </form>
+        ) : null}
         <div className="mb-3 flex items-center justify-between text-[10px] text-fg-faint">
           <span className="flex items-center gap-2"><span className={`size-1.5 rounded-full ${previewConnected ? "bg-emerald-400" : isPreview ? "bg-amber-400" : "bg-edge-hover"}`} />{isPreview ? stateLabel : t("麦克风将在开始后启用")}</span>
           <span className={`flex h-3 items-end gap-[2px] ${muted ? "opacity-35" : ""}`}>{[0.15, 0.3, 0.5, 0.7, 0.9].map((threshold, index) => <span key={threshold} className={`w-[2px] rounded-full transition ${!muted && micLevel >= threshold ? "bg-emerald-400" : "bg-edge-hover"}`} style={{ height: `${4 + index * 2}px` }} />)}</span>
@@ -1591,7 +1653,23 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
             <button onClick={() => void end()} disabled={starting} className="flex h-10 min-w-0 items-center justify-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 text-[11px] font-medium text-red-600 hover:bg-red-100 disabled:opacity-40 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300"><CircleStop className="size-3.5" />{t("结束测试")}</button>
           </div>
         ) : (
-          <button onClick={() => void start()} disabled={starting || (blocked && source.type === "draft")} className="flex h-11 w-full items-center justify-center gap-2 rounded-full bg-ink text-[12px] font-medium text-on-ink transition hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-40">{starting ? <LoaderCircle className="size-4 animate-spin" /> : <Mic className="size-4" />}{source.type === "draft" && dirty ? t("保存并开始测试") : t("开始测试")}</button>
+          <div className="space-y-3">
+            <label className="flex h-10 items-center gap-2 rounded-full border border-edge bg-surface px-3 text-[10px] text-fg-muted">
+              <Mic className="size-3.5 shrink-0" />
+              <span className="shrink-0">{t("麦克风")}</span>
+              <select
+                aria-label={t("麦克风")}
+                value={micInputDeviceId}
+                onChange={event => setMicInputDevice(event.target.value)}
+                className="min-w-0 flex-1 bg-transparent text-right text-[10px] font-medium text-fg outline-none"
+              >
+                <option value="">{t("浏览器默认输入")}</option>
+                {micInputDeviceId && !audioInputs.some(device => device.id === micInputDeviceId) ? <option value={micInputDeviceId}>{t("已选择的麦克风不可用")}</option> : null}
+                {audioInputs.map(device => <option key={device.id} value={device.id}>{device.label}</option>)}
+              </select>
+            </label>
+            <button onClick={() => void start()} disabled={starting || (blocked && source.type === "draft")} className="flex h-11 w-full items-center justify-center gap-2 rounded-full bg-ink text-[12px] font-medium text-on-ink transition hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-40">{starting ? <LoaderCircle className="size-4 animate-spin" /> : <Mic className="size-4" />}{source.type === "draft" && dirty ? t("保存并开始测试") : t("开始测试")}</button>
+          </div>
         )}
       </footer>
     </aside>

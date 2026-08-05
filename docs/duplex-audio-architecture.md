@@ -426,7 +426,10 @@ its socket by a grace period), a client reattaches, resynchronizes from the
 pushed `session.snapshot`, and must not replay stale commands; the gateway
 enforces this rather than trusting it — every command carries an idempotency
 key (replays are acknowledged as `command.duplicate`, never re-executed), and a
-`turn.interrupt` naming a superseded turn is rejected as stale.
+`turn.interrupt` naming a superseded turn is rejected as stale. A typed user
+turn uses `turn.text`; it bypasses microphone capture and ASR but enters the
+same Agent, LLM/tool, TTS, quota, trace, and history pipeline. It is accepted
+only from idle `listening`, so text never silently barges into audible work.
 
 ### Wire format
 
@@ -441,7 +444,7 @@ binary frame  raw mono float32 PCM
 
 **Client → server — commands.** Every command carries the protocol version `v`
 and a non-empty `idempotencyKey`; a replay is answered `command.duplicate` and
-never re-run. Envelope and the six types:
+never re-run. Envelope and the command types:
 
 ```text
 { "v": 1, "type": "...", "idempotencyKey": "...", ...typeFields }
@@ -449,10 +452,19 @@ never re-run. Envelope and the six types:
 session.start            { options?: SessionStartOptions }
 session.attach           { sessionId }        # reconnect to a live session
 session.snapshot.request { }                  # ask for a fresh session.snapshot
+turn.text                { text }             # trim; non-empty; <= 8000 chars; active reply is interrupted
 turn.interrupt           { turnId }           # stale turnId -> command.rejected
 playback.complete        { turnId }           # audible-clock ack (playbackAck)
 session.stop             { }
 ```
+
+`turn.text` starts directly at the finalized-input boundary: it emits no fake
+speech/VAD event and performs no ASR request. `transcript.final` is still the
+canonical user-input event, after which the ordinary response and playback
+events apply. Sending text while a voice or typed turn is active is an explicit user
+barge-in: the gateway acknowledges the command, interrupts the old turn, and starts the
+replacement text turn synchronously. Idle/closed sessions reject it as
+`session_not_active`; commands still retain ordinary idempotency semantics.
 
 `SessionStartOptions` (all optional): `language`, `system`, `maxTokens`,
 `voice`, `bargeIn`, `turnTaking` (`conservative`|`speculative`), `reopenMs`,

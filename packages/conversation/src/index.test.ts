@@ -104,6 +104,179 @@ describe("runConversation", () => {
     expect(aborted).toBe(true);
     expect(session.state).toBe("closed");
   });
+
+  test("runs typed input through the ordinary reply pipeline without invoking ASR", async () => {
+    const session = new DuplexSession();
+    session.start();
+    let controls: Parameters<NonNullable<Parameters<typeof runConversation>[1]["onControls"]>>[0] | undefined;
+    let releaseFrames = (): void => {};
+    const frameGate = new Promise<void>(resolve => { releaseFrames = resolve; });
+    let asrCalls = 0;
+    let utteranceCalls = 0;
+    const transcripts: string[] = [];
+    const messages: string[] = [];
+    const replies: string[] = [];
+    const played: number[] = [];
+
+    const running = runConversation({
+      session,
+      vad: new EnergyVadSegmenter({ sampleRate: 16_000, threshold: 0.1, minSpeechMs: 40, silenceMs: 20 }),
+      frames: (async function* () { await frameGate; })(),
+      createPlayer: () => ({
+        write: async audio => { played.push(audio.samples.length); },
+        close: async () => {},
+      }),
+      asr: { transcribe: async () => { asrCalls += 1; return { text: "wrong path" }; } },
+      llm: {
+        chatStream: async function* (seen) {
+          messages.push(...seen.filter(message => message.role === "user").map(message => message.content));
+          yield "typed reply.";
+        },
+      },
+      tts: { speech: async () => new Uint8Array(writeWav(new Float32Array(24_000).fill(0.1), 24_000)) },
+    }, {
+      language: "zh", chunking, ttsDefaults, voice: "demo",
+      allowBargeIn: true, turnTaking: "conservative", reopenMs: 7_000,
+      onControls: value => { controls = value; },
+    }, {
+      onTranscript: text => transcripts.push(text),
+      onReply: text => { replies.push(text); releaseFrames(); },
+      onUtterance: () => { utteranceCalls += 1; },
+    });
+
+    expect(controls?.submitUserText("  typed hello  ")).toBe(true);
+    expect(controls?.submitUserText("must not barge in")).toBe(false);
+    await running;
+
+    expect(asrCalls).toBe(0);
+    expect(utteranceCalls).toBe(0);
+    expect(transcripts).toEqual(["typed hello"]);
+    expect(messages).toEqual(["typed hello"]);
+    expect(replies).toEqual(["typed reply."]);
+    expect(played).toEqual([24_000]);
+    expect(session.state).toBe("listening");
+  });
+
+  test("accepting text over an in-progress speech segment does not block the next microphone turn", async () => {
+    const session = new DuplexSession();
+    session.start();
+    let controls: Parameters<NonNullable<Parameters<typeof runConversation>[1]["onControls"]>>[0] | undefined;
+    let speechConfirmed = (): void => {};
+    const speechConfirmedGate = new Promise<void>(resolve => { speechConfirmed = resolve; });
+    let continueFrames = (): void => {};
+    const continueFramesGate = new Promise<void>(resolve => { continueFrames = resolve; });
+    const transcripts: string[] = [];
+    const replies: string[] = [];
+    let asrCalls = 0;
+
+    const running = runConversation({
+      session,
+      vad: new EnergyVadSegmenter({ sampleRate: 16_000, threshold: 0.1, minSpeechMs: 40, silenceMs: 20 }),
+      frames: (async function* () {
+        yield { samples: new Float32Array(320).fill(0.2), timestampMs: 0 };
+        yield { samples: new Float32Array(320).fill(0.2), timestampMs: 20 };
+        // Resuming the generator proves the loop consumed the confirming frame and stored
+        // its active turn. The gateway then interrupts that turn and atomically submits text.
+        speechConfirmed();
+        await continueFramesGate;
+        yield { samples: new Float32Array(320), timestampMs: 40 };
+        yield { samples: new Float32Array(320).fill(0.2), timestampMs: 60 };
+        yield { samples: new Float32Array(320).fill(0.2), timestampMs: 80 };
+        yield { samples: new Float32Array(320), timestampMs: 100 };
+      })(),
+      createPlayer: () => ({ write: async () => {}, close: async () => {} }),
+      asr: {
+        transcribe: async () => {
+          asrCalls += 1;
+          return { text: "voice after text" };
+        },
+      },
+      llm: {
+        chatStream: async function* (messages) {
+          const last = messages.at(-1)?.content;
+          yield last === "typed replacement" ? "typed reply." : "voice reply.";
+        },
+      },
+      tts: { speech: async () => new Uint8Array(writeWav(new Float32Array(2_400).fill(0.1), 24_000)) },
+    }, {
+      language: "zh", chunking, ttsDefaults, voice: "demo",
+      allowBargeIn: true, turnTaking: "conservative", reopenMs: 7_000,
+      onControls: value => { controls = value; },
+    }, {
+      onTranscript: text => transcripts.push(text),
+      onReply: text => {
+        replies.push(text);
+        if (text === "typed reply.") continueFrames();
+      },
+    });
+
+    await speechConfirmedGate;
+    expect(session.interrupt("barge_in")).toBe(true);
+    expect(controls?.submitUserText("typed replacement")).toBe(true);
+    await running;
+
+    expect(asrCalls).toBe(1);
+    expect(transcripts).toEqual(["typed replacement", "voice after text"]);
+    expect(replies).toEqual(["typed reply.", "voice reply."]);
+    expect(session.state).toBe("listening");
+  });
+
+  test("discards asynchronous VAD events that finish after a typed replacement", async () => {
+    const session = new DuplexSession();
+    session.start();
+    let controls: Parameters<NonNullable<Parameters<typeof runConversation>[1]["onControls"]>>[0] | undefined;
+    let markVadStarted = (): void => {};
+    const vadStarted = new Promise<void>(resolve => { markVadStarted = resolve; });
+    let releaseVad = (): void => {};
+    const vadGate = new Promise<void>(resolve => { releaseVad = resolve; });
+    let asrCalls = 0;
+    let resets = 0;
+    const transcripts: string[] = [];
+
+    const running = runConversation({
+      session,
+      vad: {
+        reset: () => { resets += 1; },
+        push: async () => {
+          markVadStarted();
+          await vadGate;
+          return [
+            { type: "speech.confirmed" as const, timestampMs: 20, startedAtMs: 0 },
+            {
+              type: "speech.end" as const,
+              timestampMs: 40,
+              startedAtMs: 0,
+              reason: "silence" as const,
+              samples: new Float32Array(640).fill(0.2),
+            },
+          ];
+        },
+      },
+      frames: (async function* () {
+        yield { samples: new Float32Array(320).fill(0.2), timestampMs: 0 };
+      })(),
+      createPlayer: () => ({ write: async () => {}, close: async () => {} }),
+      asr: { transcribe: async () => { asrCalls += 1; return { text: "stale audio" }; } },
+      llm: { chatStream: async function* () { yield "typed reply."; } },
+      tts: { speech: async () => new Uint8Array(writeWav(new Float32Array(2_400).fill(0.1), 24_000)) },
+    }, {
+      language: "zh", chunking, ttsDefaults, voice: "demo",
+      allowBargeIn: true, turnTaking: "conservative", reopenMs: 7_000,
+      onControls: value => { controls = value; },
+    }, {
+      onTranscript: text => transcripts.push(text),
+      onReply: () => { releaseVad(); },
+    });
+
+    await vadStarted;
+    expect(controls?.submitUserText("typed while VAD is pending")).toBe(true);
+    await running;
+
+    expect(asrCalls).toBe(0);
+    expect(transcripts).toEqual(["typed while VAD is pending"]);
+    expect(resets).toBe(2);
+    expect(session.state).toBe("listening");
+  });
 });
 
 describe("runConversation tool cycle", () => {

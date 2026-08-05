@@ -179,6 +179,85 @@ describe("realtime gateway", () => {
     client.close();
   });
 
+  test("treats text during an active reply as an atomic barge-in without stale output", async () => {
+    let asrCalls = 0;
+    const userTexts: string[] = [];
+    let releaseFirstReply = (): void => {};
+    const firstReplyGate = new Promise<void>(resolve => { releaseFirstReply = resolve; });
+    let markFirstReplyDrained = (): void => {};
+    const firstReplyDrained = new Promise<void>(resolve => { markFirstReplyDrained = resolve; });
+    gateway = startGateway({
+      config,
+      fetch: engineFetch({
+        "/v1/audio/transcriptions": async () => { asrCalls += 1; return Response.json({ text: "wrong path" }); },
+        "/v1/chat/completions": async request => {
+          const body = await request.json() as { messages?: { role: string; content: string }[] };
+          const userText = [...(body.messages ?? [])].reverse().find(message => message.role === "user")?.content ?? "";
+          userTexts.push(userText);
+          // Deliberately ignore request.signal on the first call. The session must still
+          // suppress a late batch response from an imperfect self-hosted fetch adapter.
+          if (userText === "第一轮") {
+            await firstReplyGate;
+            const payload = { choices: [{ message: { content: "过期回复。" } }] };
+            return {
+              ok: true,
+              headers: new Headers({ "content-type": "application/json" }),
+              json: async () => {
+                // Resolve on the next task, after the aborted LLM iterator and conversation
+                // work promise have drained their microtasks. This is synchronization, not
+                // a guessed wall-clock delay.
+                setTimeout(markFirstReplyDrained, 0);
+                return payload;
+              },
+            } as Response;
+          }
+          return Response.json({ choices: [{ message: { content: "新回复。" } }] });
+        },
+      }),
+      port: 0,
+    });
+    const client = new TestClient(gateway.url);
+    await client.ready();
+    client.command({ type: "session.start", idempotencyKey: "start-1", options: startOptions });
+    await client.until(events => events.some(event => event.type === "session.snapshot"), "session.snapshot");
+
+    client.command({ type: "turn.text", idempotencyKey: "text-1", text: "第一轮" });
+    await client.until(events => events.some(event =>
+      event.type === "transcript.final" && event.text === "第一轮"), "first typed transcript");
+    const firstTurn = client.events.find(event => event.type === "transcript.final" && event.text === "第一轮");
+    expect(firstTurn?.type).toBe("transcript.final");
+    const firstTurnId = firstTurn?.type === "transcript.final" ? firstTurn.turnId : undefined;
+
+    client.command({ type: "turn.text", idempotencyKey: "text-2", text: "第二轮" });
+    await client.until(events => events.some(event =>
+      event.type === "response.text.final" && event.text === "新回复。"), "replacement typed reply");
+    releaseFirstReply();
+    await firstReplyDrained;
+
+    expect(asrCalls).toBe(0);
+    expect(userTexts).toEqual(["第一轮", "第二轮"]);
+    expect(client.events.filter(event => event.type === "transcript.final").map(event => event.text))
+      .toEqual(["第一轮", "第二轮"]);
+    expect(client.events.filter(event => event.type === "response.text.final").map(event => event.text)).toEqual([
+      "新回复。",
+    ]);
+    expect(client.events.some(event => event.type === "vad.end")).toBe(false);
+    expect(client.events).toContainEqual(expect.objectContaining({
+      type: "command.accepted", commandType: "turn.text", idempotencyKey: "text-1",
+    }));
+    expect(client.events).toContainEqual(expect.objectContaining({
+      type: "command.accepted", commandType: "turn.text", idempotencyKey: "text-2",
+    }));
+    expect(client.events.some(event => event.type === "command.rejected" && event.idempotencyKey === "text-2")).toBe(false);
+    const acceptedIndex = client.events.findIndex(event => event.type === "command.accepted" && event.idempotencyKey === "text-2");
+    const interruptedIndex = client.events.findIndex(event => event.type === "turn.interrupted" && event.turnId === firstTurnId);
+    const replacementIndex = client.events.findIndex(event => event.type === "turn.started" && event.turnId !== firstTurnId);
+    expect(acceptedIndex).toBeGreaterThan(-1);
+    expect(interruptedIndex).toBeGreaterThan(acceptedIndex);
+    expect(replacementIndex).toBeGreaterThan(interruptedIndex);
+    client.close();
+  });
+
   test("negotiates framed 20ms PCM16 playback while an absent offer stays on v1", async () => {
     gateway = startGateway({ config, fetch: engineFetch(), port: 0 });
     const client = new TestClient(gateway.url);

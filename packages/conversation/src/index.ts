@@ -176,6 +176,8 @@ export interface ConversationOptions {
 }
 
 export interface ConversationControls {
+  /** Submit an already-transcribed user turn; false means the session is not idle. */
+  submitUserText(text: string): boolean;
   queueAgentSpeech(text: string, overrides?: { voice?: string; speed?: number }): void;
   /** Queued agent speech not yet spoken — surfaces defer an end_call teardown past it. */
   pendingAgentSpeech(): number;
@@ -243,6 +245,9 @@ export async function runConversation(
   const history: ChatMessage[] = [];
   const historyLimit = options.historyLimit ?? 16;
   let activeTurn: DuplexTurn | undefined;
+  // `VadSegmenter.push` may await model inference. A typed replacement can reset VAD
+  // while that promise is pending, so its eventual events must be recognized as stale.
+  let vadGeneration = 0;
   let suppressInputUntil = 0;
   // The confirmation flow (docs/mcp-tools.md): at most one external call waits for a
   // spoken yes, and only across turns the user actually heard — an aborted or reopened
@@ -262,44 +267,45 @@ export async function runConversation(
   // Agent speech queued from outside the turn pipeline (ConversationControls): drained
   // into agent turns at the next idle gap, exactly where the nudge fires.
   const agentSpeechQueue: { text: string; overrides?: { voice?: string; speed?: number } }[] = [];
-  options.onControls?.({
-    queueAgentSpeech: (text, overrides) => {
-      if (text.trim() !== "") agentSpeechQueue.push({ text: text.trim(), ...(overrides === undefined ? {} : { overrides }) });
-    },
-    pendingAgentSpeech: () => agentSpeechQueue.length,
-  });
 
-  const processTurn = async (turn: DuplexTurn, samples: Float32Array): Promise<void> => {
+  type UserTurnInput = { kind: "audio"; samples: Float32Array } | { kind: "text"; text: string };
+
+  const processTurn = async (turn: DuplexTurn, input: UserTurnInput): Promise<void> => {
     try {
       if (!session.startThinking(turn.id)) return;
-      const wav = writeWav(samples, 16_000);
-      const transcription = await asr.transcribe(
-        new File([new Uint8Array(wav)], "utterance.wav", { type: "audio/wav" }),
-        "utterance.wav", options.language, {}, turn.signal,
-      );
-      session.mark(turn.id, "asr_done");
-      let transcript = transcription.text.trim();
-      // The empty-transcript failures are the most valuable samples in the set, so the
-      // utterance callback fires regardless of the result — and it receives the RAW
-      // transcript: the utterance set exists to measure ASR, so keyterm correction
-      // must never launder its samples.
-      await callbacks.onUtterance?.(wav, transcript);
-      if (turn.signal.aborted) return;
-      if (!transcript) {
-        callbacks.onError?.("asr_empty", "ASR returned empty text", turn);
-        session.interrupt("cancel");
-        return;
-      }
-      if (options.keyterms) {
-        try {
-          const corrected = correctKeyterms(transcript, await options.keyterms());
-          for (const correction of corrected.corrections) {
-            callbacks.onKeytermCorrection?.(correction.from, correction.to, turn);
-          }
-          transcript = corrected.text;
-        } catch {
-          // A failed keyterm fetch must not cost the turn; the raw transcript stands.
+      let transcript: string;
+      if (input.kind === "audio") {
+        const wav = writeWav(input.samples, 16_000);
+        const transcription = await asr.transcribe(
+          new File([new Uint8Array(wav)], "utterance.wav", { type: "audio/wav" }),
+          "utterance.wav", options.language, {}, turn.signal,
+        );
+        session.mark(turn.id, "asr_done");
+        transcript = transcription.text.trim();
+        // The empty-transcript failures are the most valuable samples in the set, so the
+        // utterance callback fires regardless of the result — and it receives the RAW
+        // transcript: the utterance set exists to measure ASR, so keyterm correction
+        // must never launder its samples.
+        await callbacks.onUtterance?.(wav, transcript);
+        if (turn.signal.aborted) return;
+        if (!transcript) {
+          callbacks.onError?.("asr_empty", "ASR returned empty text", turn);
+          session.interrupt("cancel");
+          return;
         }
+        if (options.keyterms) {
+          try {
+            const corrected = correctKeyterms(transcript, await options.keyterms());
+            for (const correction of corrected.corrections) {
+              callbacks.onKeytermCorrection?.(correction.from, correction.to, turn);
+            }
+            transcript = corrected.text;
+          } catch {
+            // A failed keyterm fetch must not cost the turn; the raw transcript stands.
+          }
+        }
+      } else {
+        transcript = input.text;
       }
       callbacks.onTranscript?.(transcript, turn);
       // The reply pipelines: sentences flow into TTS while the model is still generating,
@@ -494,7 +500,7 @@ export async function runConversation(
           // action, which gets its own window.
           if (offeredPending !== undefined && pendingExternal === offeredPending) pendingExternal = undefined;
         }
-        if (replyText.trim()) {
+        if (!turn.signal.aborted && replyText.trim()) {
           // Reached only when generation finished: a barge-in during the audible tail still
           // lands here (the user heard the reply's start), one mid-generation does not.
           history.push({ role: "user", content: transcript }, { role: "assistant", content: replyText });
@@ -590,8 +596,8 @@ export async function runConversation(
     }
   };
 
-  const startWork = (turn: DuplexTurn, samples: Float32Array): void => {
-    const task = processTurn(turn, samples);
+  const startWork = (turn: DuplexTurn, input: UserTurnInput): void => {
+    const task = processTurn(turn, input);
     work.add(task);
     void task.finally(() => work.delete(task));
   };
@@ -606,6 +612,31 @@ export async function runConversation(
     work.add(task);
     void task.finally(() => work.delete(task));
   };
+
+  options.onControls?.({
+    submitUserText: text => {
+      const submitted = text.trim();
+      if (!submitted) return false;
+      const turn = session.startUserText();
+      if (!turn) return false;
+      // The gateway may have synchronously interrupted a speech_started turn before
+      // entering this control. Drop the frame-loop handle and its in-progress VAD segment;
+      // otherwise speech.end retains the stale turn forever and blocks future microphone
+      // turns after the typed replacement completes.
+      activeTurn = undefined;
+      vadGeneration += 1;
+      vad.reset();
+      nudgeDeadlineMs = undefined;
+      speculative = undefined;
+      continuationPrefix = undefined;
+      startWork(turn, { kind: "text", text: submitted });
+      return true;
+    },
+    queueAgentSpeech: (text, overrides) => {
+      if (text.trim() !== "") agentSpeechQueue.push({ text: text.trim(), ...(overrides === undefined ? {} : { overrides }) });
+    },
+    pendingAgentSpeech: () => agentSpeechQueue.length,
+  });
 
   try {
     // The welcome line: the agent speaks first, once, interruptibly. The kernel refuses
@@ -642,7 +673,16 @@ export async function runConversation(
         const nudgeTurn = session.startAgentTurn();
         if (nudgeTurn) startAgentWork(nudgeTurn, options.nudgeText ?? "还在吗？需要我继续帮你吗？", false);
       }
-      for (const event of await vad.push(frame.samples, frame.timestampMs)) {
+      const generation = vadGeneration;
+      const vadEvents = await vad.push(frame.samples, frame.timestampMs);
+      if (generation !== vadGeneration) {
+        // An asynchronous detector can mutate its assembler after the earlier reset. No
+        // newer frame has entered it yet because this loop is serialized, so reset once
+        // more before accepting post-replacement microphone input.
+        vad.reset();
+        continue;
+      }
+      for (const event of vadEvents) {
         if (event.type === "speech.start") {
           nudgeDeadlineMs = undefined;
           // Continuation hysteresis: resuming a soft-ended turn takes a single voiced frame,
@@ -673,7 +713,7 @@ export async function runConversation(
             continuationPrefix = undefined;
             if (session.softFinalizeUserSpeech(turn.id)) {
               speculative = { turnId: turn.id, samples, softEndedAtMs: event.timestampMs };
-              startWork(turn, samples);
+              startWork(turn, { kind: "audio", samples });
             }
           } else {
             session.recordFalseBargeIn();
@@ -686,11 +726,11 @@ export async function runConversation(
             if (session.softFinalizeUserSpeech(turn.id)) {
               activeTurn = undefined;
               speculative = { turnId: turn.id, samples, softEndedAtMs: event.timestampMs };
-              startWork(turn, samples);
+              startWork(turn, { kind: "audio", samples });
             }
           } else if (session.finalizeUserSpeech(turn.id)) {
             activeTurn = undefined;
-            startWork(turn, samples);
+            startWork(turn, { kind: "audio", samples });
           }
         }
       }

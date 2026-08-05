@@ -1,4 +1,7 @@
 export const agentBuilderMessages = {
+  "输入消息": "Type a message",
+  "发送消息": "Send message",
+  "打断并发送": "Interrupt and send",
   "获取助手列表": "Fetching the agent list",
   "获取助手": "Fetching the agent",
   "保存助手": "Saving the agent",

@@ -1,7 +1,7 @@
 # Agent Builder UI and experiential voice surfaces
 
 Status: Accepted living product requirement, 2026-08-01; implementation status
-reconciled 2026-08-02. This document expands the Web scope of
+reconciled 2026-08-05. This document expands the Web scope of
 [agents.md](./agents.md). It records reference behavior, delivered slices, and
 the remaining implementation order; it does not make either reference site's
 information architecture part of VoxStudio.
@@ -14,18 +14,19 @@ validation, preview, and version lifecycle, then add deployment and inspection
 of conversations served by one Agent.
 
 The animated, experiential voice surface observed on StreamCore is useful, but
-it comes after the Agent object and builder are real. The same Vox-owned voice
-stage should eventually serve two contexts:
+it is not the Agent Builder drawer. The console preview stays a compact,
+functional xAI-style surface; a later Vox-owned **Full Preview** is a separate
+immersive route that may eventually serve two contexts:
 
 1. a future public Portal homepage that demonstrates the product immediately;
-2. the Agent Builder's **Try it live** / preview surface.
+2. an explicit expanded preview launched from the Agent Builder.
 
 The two reference lineages have different jobs:
 
 - the authenticated xAI Voice Agent Builder informs the management workflow,
   configuration grouping, draft/publish lifecycle, and preview placement;
-- the public StreamCore demo informs the focused voice-stage presentation and
-  stateful audio visualization.
+- the public StreamCore demo informs only the later standalone Full Preview and
+  Portal presentation, not the authenticated console chrome or compact drawer.
 
 VoxStudio keeps its own navigation, terminology, runtime contracts, privacy
 defaults, engine routing, and self-hosted deployment model.
@@ -33,7 +34,7 @@ defaults, engine routing, and self-hosted deployment model.
 ## Current implementation state
 
 The placeholder-object gap that motivated this document is closed. As of
-2026-08-02:
+2026-08-05:
 
 - `@voxstudio/agents` owns the validated Agent specification, owner-scoped YAML
   registry, conditional revisions, immutable published snapshots, hashes,
@@ -54,14 +55,20 @@ The placeholder-object gap that motivated this document is closed. As of
   audit, and delete actions;
 - Try it live is a desktop drawer/mobile full-screen surface that explicitly
   selects either the revision-pinned draft or an exact immutable published
-  version through the ordinary authenticated realtime path.
+  version through the ordinary authenticated realtime path;
+- the drawer selects a microphone before start and supports typed user turns
+  over both WebSocket and LiveKit. Typed turns skip capture/ASR but enter the
+  same Agent, tool, TTS, quota, trace, and history pipeline. The input remains
+  editable during a reply; sending is an explicit barge-in that atomically
+  replaces the active turn.
 
 The Builder is nevertheless only partially delivered. Configuration, Speech,
-Deployment, version lifecycle, and the core preview shell are implemented, but
-preview text input, settings, feedback, and the complete failure matrix remain.
-Agent-scoped conversation history, statistics, `VoiceStage`, and Portal reuse
-have not started. Deployment currently covers immutable published identity,
-runtime/auth status, and native plus OpenAI-compatible connection examples;
+Deployment, Conversations, version lifecycle, and the core preview shell are
+implemented. Response feedback, additional preview settings, and the complete
+failure/retry matrix remain. Statistics, the independent Full Preview, its
+`VoiceStage`, and Portal reuse have not started. Deployment currently covers
+immutable published identity, runtime/auth status, and native plus
+OpenAI-compatible connection examples;
 telephony attachment remains future work.
 
 ## References inspected
@@ -400,8 +407,11 @@ Mobile behavior:
 - uses `100dvh` with safe-area padding and no accidental page scroll;
 - returns to the same Agent section and draft after closing.
 
-The preview uses a shared `VoiceStage` visual rather than the current static
-waveform badge. State is never encoded by animation alone:
+The compact preview deliberately does not use the StreamCore treatment. It
+keeps the restrained console hierarchy, transcript, explicit transport truth,
+and ordinary controls. An optional **Full Preview** may later open as a separate
+route/surface without replacing or restyling the drawer; only that surface owns
+the `VoiceStage` visual below. State is never encoded by animation alone:
 
 | State | Visual behavior | Required text/event truth |
 |---|---|---|
@@ -419,8 +429,9 @@ truth; the existing event protocol does.
 
 ## Future Portal homepage
 
-The future Portal homepage may use the same `VoiceStage` as a direct product
-demonstration. It is deliberately not the first implementation target.
+The future Portal homepage may reuse the standalone Full Preview's `VoiceStage`
+as a direct product demonstration. It is deliberately not the first
+implementation target and does not inherit the authenticated builder layout.
 
 On a hosted public deployment, `/` is the Portal and `/studio/*` is the
 authenticated application. `AuthGate` wraps only the Studio branch. Direct
@@ -463,14 +474,16 @@ stage component does not require sharing the entire page theme.
    saving, publish, runtime-dependency alerts, and advanced Configuration/Speech
    controls are implemented, together with duplicate, YAML export, audit,
    delete, immutable version history, and restore-as-draft.
-3. **Try it live — core preview shell delivered 2026-08-02**: revision-pinned
+3. **Try it live — functional preview delivered through typed input 2026-08-05**: revision-pinned
    draft or exact published-version start, transcript, connection truth, mute,
    stop reply, restart, and end use existing session events in a desktop drawer
-   or mobile full-screen surface. Text input, settings, feedback, and the
-   complete failure matrix remain.
-4. **VoiceStage — not started**: state-driven visual, reduced-motion/fallback
-   paths, and preview integration. This is the first implementation of the
-   StreamCore-inspired presentation.
+   or mobile full-screen surface. Pre-start microphone selection and native
+   typed turns now work over WebSocket and LiveKit. Response feedback,
+   additional settings, and the complete failure/retry matrix remain.
+4. **Independent Full Preview / VoiceStage — not started**: a separate expanded
+   surface with state-driven visual and reduced-motion/fallback paths. This is
+   the first StreamCore-inspired implementation; it is not a theme transplant
+   into the compact Try it live drawer.
 5. **Deployment and Conversations core delivered 2026-08-03**: the durable Deployment route shows
    the published version/hash, public origin, authentication/demo truth, native CLI
    and WebSocket examples, and OpenAI-compatible TypeScript/Python examples. The durable

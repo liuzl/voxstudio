@@ -32,7 +32,10 @@ Its durable section routes now expose engine routing, MCP allowlists,
 pronunciations, ASR keyterms, and turn-taking controls with runtime-dependency
 validation. The Web lifecycle now includes immutable version history,
 restore-as-draft, duplicate/export/audit/delete actions, and exact
-published-version preview. The CLI manages and runs published Agents, the OpenAI
+published-version preview. Try it live now selects its microphone before start
+and accepts native typed turns over both WebSocket and LiveKit; those turns skip
+ASR but keep the ordinary Agent/tool/TTS/quota/history path. The CLI manages and
+runs published Agents, the OpenAI
 dialect accepts `?agent=`, demo deployments pin an immutable version, and the
 Deployment section provides native/compatible integration examples. Conversation
 history now uses an optional owner-scoped Trace Store: every record pins the exact
@@ -41,7 +44,8 @@ content retention is a second opt-in, and the current implementation does not
 store trace audio. The accepted Conversation/Media/Library boundary, directional
 audio opt-ins, byte retention, replay semantics, and deletion contract are in
 [conversation-retention.md](./conversation-retention.md). Their implementation,
-Statistics, and the remaining preview controls described in
+Statistics, response feedback, the remaining preview failure/retry controls,
+and the later independent Full Preview described in
 [agent-builder-ui.md](./agent-builder-ui.md) remain next.
 
 ## The question

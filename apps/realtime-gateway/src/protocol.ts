@@ -92,6 +92,7 @@ export type GatewayCommand =
   | (CommandBase & { type: "session.start"; options?: SessionStartOptions })
   | (CommandBase & { type: "session.attach"; sessionId: string })
   | (CommandBase & { type: "session.snapshot.request" })
+  | (CommandBase & { type: "turn.text"; text: string })
   | (CommandBase & { type: "turn.interrupt"; turnId: string })
   | (CommandBase & { type: "playback.complete"; turnId: string })
   | (CommandBase & { type: "media.ping"; clientSentAtMs: number })
@@ -378,6 +379,13 @@ export function parseCommand(text: string): GatewayCommand {
     case "session.snapshot.request":
     case "session.stop":
       return { v: protocolVersion, type, idempotencyKey };
+    case "turn.text": {
+      if (typeof value.text !== "string") throw new ProtocolError("turn.text text must be a string");
+      const submitted = value.text.trim();
+      if (!submitted) throw new ProtocolError("turn.text text must not be empty");
+      if (submitted.length > 8_000) throw new ProtocolError("turn.text text must be at most 8000 characters");
+      return { v: protocolVersion, type, idempotencyKey, text: submitted };
+    }
     case "media.ping": {
       const clientSentAtMs = value.clientSentAtMs;
       if (typeof clientSentAtMs !== "number" || !Number.isFinite(clientSentAtMs) || clientSentAtMs < 0) {

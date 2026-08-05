@@ -62,4 +62,16 @@ describe("conversation event reducer", () => {
     }, 2));
     expect(interrupted.turns?.[0]).toMatchObject({ status: "interrupted", endReason: "barge_in" });
   });
+
+  test("moves a typed turn to thinking when its transcript arrives without a VAD event", () => {
+    const started = reduceEvent(base, event({ type: "turn.started", turnId: "typed", revision: 0 }, 1));
+    expect(started.turns?.[0]?.status).toBe("capturing");
+    const transcript = reduceEvent({ ...base, ...started }, event({
+      type: "transcript.final",
+      turnId: "typed",
+      revision: 0,
+      text: "typed hello",
+    }, 2));
+    expect(transcript.turns?.[0]).toMatchObject({ transcript: "typed hello", status: "thinking" });
+  });
 });

@@ -87,6 +87,7 @@ describe("BrowserLiveKitClient", () => {
       stop: () => {},
     };
     let levelTick: (() => void) | undefined;
+    let commandKey = 0;
     const client = new BrowserLiveKitClient({
       selection: { agent: "support", agentSource: "draft", agentRevision: 7 },
       inputDeviceId: "iphone-mic",
@@ -98,7 +99,7 @@ describe("BrowserLiveKitClient", () => {
       makeRoom: () => room,
       createAudioTrack: async options => { capturedOptions = options; return localTrack; },
       appendAudioElement: element => appended.push(element),
-      newIdempotencyKey: () => "command-1",
+      newIdempotencyKey: () => `command-${++commandKey}`,
       setLevelInterval: callback => { levelTick = callback; return 7; },
       clearLevelInterval: () => {},
     });
@@ -160,15 +161,35 @@ describe("BrowserLiveKitClient", () => {
     expect(events).toEqual([gatewayEvent]);
     expect(client.currentSessionId).toBe("session-1");
 
+    const sendingText = client.sendText("typed hello");
+    expect(room.published).toHaveLength(1);
+    room.emit(
+      RoomEvent.DataReceived,
+      new TextEncoder().encode(JSON.stringify({
+        ...event("command.accepted"),
+        commandType: "turn.text",
+        idempotencyKey: "command-1",
+      })),
+      { identity: "agent-runtime" },
+      undefined,
+      liveKitEventTopic,
+    );
+    await sendingText;
     client.interruptTurn("turn-1");
     await Promise.resolve();
-    expect(room.published).toHaveLength(1);
+    expect(room.published).toHaveLength(2);
     expect(room.published[0]?.options).toEqual({ reliable: true, topic: liveKitControlTopic });
     expect(JSON.parse(new TextDecoder().decode(room.published[0]?.data))).toMatchObject({
       v: 1,
+      type: "turn.text",
+      text: "typed hello",
+      idempotencyKey: "command-1",
+    });
+    expect(JSON.parse(new TextDecoder().decode(room.published[1]?.data))).toMatchObject({
+      v: 1,
       type: "turn.interrupt",
       turnId: "turn-1",
-      idempotencyKey: "command-1",
+      idempotencyKey: "command-2",
     });
 
     room.emit(RoomEvent.TrackUnsubscribed, remoteTrack);
@@ -177,6 +198,49 @@ describe("BrowserLiveKitClient", () => {
     await client.stopSession();
     expect(room.disconnects).toBe(1);
     expect(states.at(-1)).toBe("disconnected");
+  });
+
+  test("text submission waits for an Agent acknowledgement and rejects on refusal or close", async () => {
+    const room = new FakeRoom();
+    let commandKey = 0;
+    const client = new BrowserLiveKitClient({
+      selection: { agent: "support" },
+      onEvent: () => {},
+      onConnectionChange: () => {},
+      onCapabilityChange: () => {},
+      onMicLevel: () => {},
+      issueBootstrap: async () => ({
+        server_url: "wss://media.example", participant_token: "jwt", room_name: "room",
+        participant_identity: "web", expires_at: "2026-08-05T00:05:00.000Z",
+        agent: { agentId: "support", source: "published", version: 1 },
+      }),
+      makeRoom: () => room,
+      createAudioTrack: async () => ({ mediaStreamTrack: fakeMediaTrack(), mute: async () => {}, unmute: async () => {}, stop: () => {} }),
+      newIdempotencyKey: () => `command-${++commandKey}`,
+      setLevelInterval: () => 1,
+      clearLevelInterval: () => {},
+    });
+    await expect(client.sendText("offline")).rejects.toThrow("conversation is not connected");
+    await client.connect();
+
+    const rejected = client.sendText("keep this draft");
+    room.emit(
+      RoomEvent.DataReceived,
+      new TextEncoder().encode(JSON.stringify({
+        ...event("command.rejected"),
+        commandType: "turn.text",
+        idempotencyKey: "command-1",
+        reason: "session_starting",
+      })),
+      { identity: "agent-runtime" },
+      undefined,
+      liveKitEventTopic,
+    );
+    await expect(rejected).rejects.toThrow("command rejected: session_starting");
+
+    const closed = client.sendText("also keep this draft");
+    await client.close();
+    await expect(closed).rejects.toThrow("client closed before the command was accepted");
   });
 
   test("ignores foreign and malformed data and surfaces LiveKit reconnect states", async () => {

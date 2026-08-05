@@ -203,7 +203,13 @@ export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sess
     case "transcript.final":
       return {
         turns: updateTurn(state.turns, event.turnId, turn =>
-          event.revision < turn.revision ? turn : { ...turn, transcript: event.text }),
+          event.revision < turn.revision ? turn : {
+            ...turn,
+            transcript: event.text,
+            // Audio turns already moved at vad.end. Typed turns have no fabricated VAD
+            // event, so the final input transcript is their truthful thinking boundary.
+            ...(turn.status === "capturing" ? { status: "thinking" as const, statusAt: Date.now() } : {}),
+          }),
       };
     case "response.text.delta":
       return {

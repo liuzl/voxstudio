@@ -16,6 +16,13 @@ import { WebRtcStatsSampler, type RtcStatsReportLike, type WebRtcStatsDirection,
 
 export const liveKitControlTopic = "voxstudio.control";
 export const liveKitEventTopic = "voxstudio.events";
+const commandAcceptanceTimeoutMs = 10_000;
+
+interface PendingCommandAcceptance {
+  resolve(): void;
+  reject(error: Error): void;
+  timer: ReturnType<typeof setTimeout>;
+}
 
 interface ParticipantLike {
   identity: string;
@@ -130,6 +137,7 @@ export class BrowserLiveKitClient {
   private statsTimer: number | undefined;
   private statsPolling = false;
   private readonly statsSamplers = new WeakMap<object, WebRtcStatsSampler>();
+  private readonly pendingCommandAcceptances = new Map<string, PendingCommandAcceptance>();
   private closed = false;
   private connected = false;
 
@@ -209,6 +217,10 @@ export class BrowserLiveKitClient {
     if (muted) this.options.onMicLevel(0);
   }
 
+  async sendText(text: string): Promise<void> {
+    await this.commandAndWaitForAcceptance({ type: "turn.text", text });
+  }
+
   interruptTurn(turnId: string): void {
     void this.command({ type: "turn.interrupt", turnId });
   }
@@ -237,6 +249,7 @@ export class BrowserLiveKitClient {
     if (this.closed) return;
     this.closed = true;
     this.connected = false;
+    this.rejectCommandAcceptances("client closed before the command was accepted");
     if (this.levelTimer !== undefined) {
       (this.options.clearLevelInterval ?? (timer => window.clearInterval(timer)))(this.levelTimer);
       this.levelTimer = undefined;
@@ -353,6 +366,7 @@ export class BrowserLiveKitClient {
         try {
           const event = JSON.parse(new TextDecoder().decode(payload)) as unknown;
           if (!isGatewayEvent(event)) return;
+          this.settleCommandAcceptance(event);
           this.sessionId = event.sessionId || this.sessionId;
           this.options.onEvent(event);
         } catch {
@@ -395,10 +409,53 @@ export class BrowserLiveKitClient {
   private async command(payload: Record<string, unknown>): Promise<void> {
     if (!this.connected || this.bootstrap === undefined || this.closed) return;
     const key = this.options.newIdempotencyKey?.() ?? crypto.randomUUID();
+    await this.publishCommand(payload, key);
+  }
+
+  private commandAndWaitForAcceptance(payload: Record<string, unknown>): Promise<void> {
+    if (!this.connected || this.bootstrap === undefined || this.closed) {
+      return Promise.reject(new Error("conversation is not connected"));
+    }
+    const key = this.options.newIdempotencyKey?.() ?? crypto.randomUUID();
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingCommandAcceptances.delete(key);
+        reject(new Error("command acceptance timed out"));
+      }, commandAcceptanceTimeoutMs);
+      this.pendingCommandAcceptances.set(key, { resolve, reject, timer });
+      void this.publishCommand(payload, key).catch(error => {
+        const pending = this.pendingCommandAcceptances.get(key);
+        if (pending === undefined) return;
+        clearTimeout(pending.timer);
+        this.pendingCommandAcceptances.delete(key);
+        pending.reject(error instanceof Error ? error : new Error(String(error)));
+      });
+    });
+  }
+
+  private async publishCommand(payload: Record<string, unknown>, key: string): Promise<void> {
     await this.room.localParticipant.publishData(
       new TextEncoder().encode(JSON.stringify({ v: protocolVersion, idempotencyKey: key, ...payload })),
       { reliable: true, topic: liveKitControlTopic },
     );
+  }
+
+  private settleCommandAcceptance(event: GatewayEvent): void {
+    if ((event.type !== "command.accepted" && event.type !== "command.rejected") || event.idempotencyKey === undefined) return;
+    const pending = this.pendingCommandAcceptances.get(event.idempotencyKey);
+    if (pending === undefined) return;
+    clearTimeout(pending.timer);
+    this.pendingCommandAcceptances.delete(event.idempotencyKey);
+    if (event.type === "command.accepted") pending.resolve();
+    else pending.reject(new Error(`command rejected: ${event.reason}`));
+  }
+
+  private rejectCommandAcceptances(message: string): void {
+    for (const pending of this.pendingCommandAcceptances.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error(message));
+    }
+    this.pendingCommandAcceptances.clear();
   }
 
   private finishRemoteDisconnect(): void {

@@ -597,6 +597,29 @@ export class GatewaySession {
         this.accept(command);
         this.emit(snapshotEvent(this.duplex.snapshot(), this.sequence + 1));
         return;
+      case "turn.text": {
+        const controls = this.controls;
+        if (controls === undefined || this.duplex.state === "idle" || this.duplex.state === "closed") {
+          this.emit({
+            type: "command.rejected",
+            reason: "session_not_active",
+            commandType: command.type,
+            idempotencyKey: command.idempotencyKey,
+          });
+          return;
+        }
+        // A typed message is an explicit user interruption. Admission, interruption, and
+        // replacement are synchronous on the session event loop, so no microphone or text
+        // turn can slip between the old turn ending and the new one starting. Acknowledge
+        // first, then preserve the ordinary event order: old turn.interrupted before the
+        // replacement turn.started.
+        this.accept(command);
+        if (this.duplex.state !== "listening") this.duplex.interrupt("barge_in");
+        if (!controls.submitUserText(command.text)) {
+          this.emit({ type: "error", code: "text_turn_failed", message: "text turn could not start", recoverable: true });
+        }
+        return;
+      }
       case "turn.interrupt": {
         // Turn-scoped by design: a stop that raced a turn change — or was replayed after a
         // reconnect — names a superseded turn and must not kill the reply now playing.

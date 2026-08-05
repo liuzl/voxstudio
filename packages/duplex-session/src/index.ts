@@ -491,6 +491,30 @@ export class DuplexSession {
   }
 
   /**
+   * A typed user turn starts after capture/ASR, directly at the finalizing boundary.
+   * It is refused unless the session is idle. A surface that treats text as an explicit
+   * barge-in must synchronously interrupt the active turn before calling this method; the
+   * kernel never silently decides to supersede work on a caller's behalf.
+   */
+  startUserText(): DuplexTurn | undefined {
+    if (this.currentState !== "listening" || this.active !== undefined) return undefined;
+    const controller = new AbortController();
+    const turn: ActiveTurn = {
+      id: this.newTurnId(),
+      revision: 0,
+      signal: controller.signal,
+      controller,
+      startedAtMs: this.now(),
+      timing: {},
+      reopenable: false,
+    };
+    this.active = turn;
+    this.transition("finalizing");
+    this.emit({ type: "turn.started", turnId: turn.id });
+    return { id: turn.id, revision: turn.revision, signal: turn.signal };
+  }
+
+  /**
    * An agent-initiated turn (docs/conversation-etiquette.md): a welcome line or a
    * silence nudge. Created directly in `finalizing` — no speech states, no VAD — so
    * everything downstream (thinking, speaking, completion, barge-in interrupting it)
