@@ -48,10 +48,12 @@ class FakeEndpoint implements LiveKitRoomEndpoint {
 
 class FakeConnector implements LiveKitRoomConnector {
   endpoint?: FakeEndpoint;
+  deletedRooms: string[] = [];
   create(options: Parameters<LiveKitRoomConnector["create"]>[0]): LiveKitRoomEndpoint {
     this.endpoint = new FakeEndpoint(options.handlers);
     return this.endpoint;
   }
+  async deleteRoom(roomName: string): Promise<void> { this.deletedRooms.push(roomName); }
 }
 
 function fakeSession(): {
@@ -110,6 +112,7 @@ describe("LiveKit Agent media adapter", () => {
     await adapter.close();
     expect(fake.stops.count).toBe(1);
     expect(endpoint.closeCount).toBe(1);
+    expect(connector.deletedRooms).toEqual([bootstrap.roomName]);
   });
 
   test("bridges control, PCM, interruption, and the adapter-owned playout acknowledgement", async () => {
@@ -170,6 +173,7 @@ describe("LiveKit Agent media adapter", () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(fake.stops.count).toBe(1);
     expect(endpoint.closeCount).toBe(1);
+    expect(connector.deletedRooms).toEqual([bootstrap.roomName]);
   });
 
   test("turns an RTC failure into a traceable session failure and closes resources", async () => {
@@ -184,6 +188,23 @@ describe("LiveKit Agent media adapter", () => {
     expect(fake.failures).toEqual(["livekit_media_failed"]);
     expect(fake.stops.count).toBe(1);
     expect(endpoint.closeCount).toBe(1);
+  });
+
+  test("does not let a failed server-side room deletion block local shutdown", async () => {
+    const connector = new FakeConnector();
+    connector.deleteRoom = async () => { throw new Error("room service unavailable"); };
+    const logs: string[] = [];
+    const adapter = new DefaultLiveKitAgentMediaAdapter(livekit, connector, line => logs.push(line));
+    const fake = fakeSession();
+    await adapter.accept(bootstrap, async () => fake.session);
+    const endpoint = connector.endpoint as FakeEndpoint;
+    await endpoint.handlers.participantReady(bootstrap.participantIdentity);
+
+    await adapter.close();
+
+    expect(fake.stops.count).toBe(1);
+    expect(endpoint.closeCount).toBe(1);
+    expect(logs).toContainEqual(expect.stringContaining("cleanup failed: room service unavailable"));
   });
 
   test("bounds native participants per owner before asynchronous token work can fan out", async () => {

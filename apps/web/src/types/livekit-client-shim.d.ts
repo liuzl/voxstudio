@@ -32,6 +32,7 @@ export declare const RoomEvent: {
   readonly SignalReconnecting: string;
   readonly Reconnected: string;
   readonly Disconnected: string;
+  readonly ParticipantDisconnected: string;
   readonly TrackSubscribed: string;
   readonly TrackUnsubscribed: string;
   readonly DataReceived: string;

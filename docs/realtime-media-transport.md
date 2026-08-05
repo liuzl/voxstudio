@@ -589,7 +589,11 @@ authentication, validation, quota, capacity, and microphone refusals are never h
 that fallback. Capacity/quota failures that occur after the browser joins are published as
 protocol `command.rejected` events before the native room closes. Ending a test stops the
 local microphone before best-effort control delivery, and the mute UI changes only after
-the native track operation succeeds.
+the native track operation succeeds. Session termination also has two independent cleanup
+paths: the browser stops its microphone when the programmatic Agent participant leaves,
+while the gateway uses the authenticated Room API to delete the per-session room and
+disconnect any browser that is suspended or unable to process that event. Room deletion
+is bounded and best-effort so a media-service outage cannot hold gateway shutdown open.
 WebRTC statistics implemented 2026-08-05. While a LiveKit conversation is connected,
 the browser samples the published microphone and every subscribed Agent audio track at
 a bounded two-second interval using the SDK's `getRTCStatsReport()` surface. Standard

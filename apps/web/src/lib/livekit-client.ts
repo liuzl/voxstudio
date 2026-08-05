@@ -298,11 +298,15 @@ export class BrowserLiveKitClient {
         if (!this.closed) this.options.onConnectionChange("connected");
       })
       .on(RoomEvent.Disconnected, () => {
-        if (!this.closed) {
-          this.connected = false;
-          this.options.onConnectionChange("disconnected");
-          void this.close().finally(() => this.options.onDisconnected?.());
-        }
+        this.finishRemoteDisconnect();
+      })
+      .on(RoomEvent.ParticipantDisconnected, (...args) => {
+        const participant = args[0] as ParticipantLike | undefined;
+        // The programmatic Agent participant owns the VoxStudio session. If it leaves,
+        // the room can remain alive with only the browser participant, which would keep
+        // an iPhone microphone publishing indefinitely unless the browser tears itself
+        // down. Foreign participants never own this lifecycle.
+        if (participant?.identity.startsWith("agent-")) this.finishRemoteDisconnect();
       })
       .on(RoomEvent.TrackSubscribed, (...args) => {
         const track = args[0] as RemoteAudioTrackLike;
@@ -346,5 +350,11 @@ export class BrowserLiveKitClient {
       new TextEncoder().encode(JSON.stringify({ v: protocolVersion, idempotencyKey: key, ...payload })),
       { reliable: true, topic: liveKitControlTopic },
     );
+  }
+
+  private finishRemoteDisconnect(): void {
+    if (this.closed) return;
+    this.connected = false;
+    void this.close().finally(() => this.options.onDisconnected?.());
   }
 }

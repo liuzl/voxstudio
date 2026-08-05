@@ -215,6 +215,50 @@ describe("BrowserLiveKitClient", () => {
     expect(room.disconnects).toBe(1);
   });
 
+  test("stops the microphone when the server-side Agent participant leaves", async () => {
+    const room = new FakeRoom();
+    let stops = 0;
+    let disconnected = 0;
+    const client = new BrowserLiveKitClient({
+      selection: { language: "auto" },
+      onEvent: () => {},
+      onConnectionChange: () => {},
+      onCapabilityChange: () => {},
+      onMicLevel: () => {},
+      onDisconnected: () => { disconnected += 1; },
+      issueBootstrap: async () => ({
+        server_url: "wss://media.example", participant_token: "jwt", room_name: "room",
+        participant_identity: "web", expires_at: "2026-08-05T00:05:00.000Z",
+      }),
+      makeRoom: () => room,
+      createAudioTrack: async () => ({
+        mediaStreamTrack: fakeMediaTrack(),
+        mute: async () => {},
+        unmute: async () => {},
+        stop: () => { stops += 1; },
+      }),
+      setLevelInterval: () => 1,
+      clearLevelInterval: () => {},
+    });
+    await client.connect();
+
+    room.emit(RoomEvent.ParticipantDisconnected, { identity: "observer" });
+    await Bun.sleep(0);
+    expect(stops).toBe(0);
+    expect(room.disconnects).toBe(0);
+
+    room.emit(RoomEvent.ParticipantDisconnected, { identity: "agent-runtime" });
+    await Bun.sleep(0);
+    expect(stops).toBe(1);
+    expect(room.disconnects).toBe(1);
+    expect(disconnected).toBe(1);
+
+    // A room-level event racing the participant event must not notify twice.
+    room.emit(RoomEvent.Disconnected);
+    await Bun.sleep(0);
+    expect(disconnected).toBe(1);
+  });
+
   test("annotates the failing startup phase and still releases the room", async () => {
     const room = new FakeRoom();
     room.localParticipant.publishTrack = async () => { throw new Error(""); };

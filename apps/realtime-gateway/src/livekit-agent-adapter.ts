@@ -1,5 +1,6 @@
 import type { AgentSpec } from "@voxstudio/agents";
 import { encodePcm16, LinearResampler } from "@voxstudio/audio";
+import { RoomServiceClient } from "livekit-server-sdk";
 import type { TraceAgentIdentity } from "./trace-store";
 import { issueLiveKitAgentToken, type LiveKitBootstrapOptions } from "./livekit-bootstrap";
 import { parseCommand, protocolVersion, type SessionStartOptions } from "./protocol";
@@ -11,6 +12,7 @@ const rtcOutputSampleRate = 24_000;
 const rtcFrameSamples = rtcOutputSampleRate / 50;
 const adapterBackpressureMs = 500;
 const defaultConnectTimeoutMs = 10_000;
+const defaultRoomDeleteTimeoutMs = 1_500;
 const defaultMaxRooms = 32;
 const defaultMaxRoomsPerOwner = 4;
 
@@ -56,6 +58,8 @@ export interface LiveKitRoomConnector {
     agentIdentity: string;
     handlers: LiveKitRoomHandlers;
   }): LiveKitRoomEndpoint;
+  /** Force-closes the room and every remaining remote participant. */
+  deleteRoom?(roomName: string): Promise<void>;
 }
 
 export interface LiveKitAgentMediaAdapter {
@@ -66,6 +70,8 @@ export interface LiveKitAgentMediaAdapter {
 export interface LiveKitAgentMediaAdapterLimits {
   /** Bounds a native connect that never settles. */
   connectTimeoutMs?: number;
+  /** Bounds best-effort server-side room cleanup during session shutdown. */
+  roomDeleteTimeoutMs?: number;
   /** Defense-in-depth ceiling over pending and active native participants. */
   maxRooms?: number;
   /** One account cannot consume the entire native-participant allowance. */
@@ -128,7 +134,7 @@ export class DefaultLiveKitAgentMediaAdapter implements LiveKitAgentMediaAdapter
 
   constructor(
     private readonly options: LiveKitBootstrapOptions,
-    private readonly connector: LiveKitRoomConnector = new RtcNodeRoomConnector(),
+    private readonly connector: LiveKitRoomConnector = new RtcNodeRoomConnector(options),
     private readonly log: (line: string) => void = () => {},
     private readonly limits: LiveKitAgentMediaAdapterLimits = {},
   ) {}
@@ -342,14 +348,49 @@ export class DefaultLiveKitAgentMediaAdapter implements LiveKitAgentMediaAdapter
       context.session?.markFailed("livekit_media_failed");
     }
     context.session?.stop();
-    await context.endpoint.close().catch(() => {});
+    await Promise.all([
+      context.endpoint.close().catch(() => {}),
+      this.deleteRoom(context.bootstrap.roomName),
+    ]);
+  }
+
+  private async deleteRoom(roomName: string): Promise<void> {
+    if (this.connector.deleteRoom === undefined) return;
+    const timeoutMs = this.limits.roomDeleteTimeoutMs ?? defaultRoomDeleteTimeoutMs;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      this.connector.deleteRoom(roomName),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(`room deletion timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]).catch(error => {
+      // Endpoint shutdown remains authoritative locally. Room deletion is the
+      // server-side privacy backstop for suspended/backgrounded mobile browsers.
+      this.log(`livekit room ${roomName.slice(0, 12)} cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
+    }).finally(() => {
+      if (timeout !== undefined) clearTimeout(timeout);
+    });
   }
 }
 
 /** Production connector; all native rtc-node objects and resource rules live here. */
 export class RtcNodeRoomConnector implements LiveKitRoomConnector {
+  private readonly roomService: RoomServiceClient;
+
+  constructor(options: LiveKitBootstrapOptions) {
+    const url = new URL(options.serverUrl);
+    url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+    this.roomService = new RoomServiceClient(url.toString(), options.apiKey, options.apiSecret, {
+      requestTimeout: 1,
+    });
+  }
+
   create(options: Parameters<LiveKitRoomConnector["create"]>[0]): LiveKitRoomEndpoint {
     return new RtcNodeRoomEndpoint(options);
+  }
+
+  async deleteRoom(roomName: string): Promise<void> {
+    await this.roomService.deleteRoom(roomName);
   }
 }
 
