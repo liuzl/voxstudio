@@ -1557,35 +1557,49 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
   const sourceDescription = source.type === "draft"
     ? t("使用当前草稿进行实时测试。")
     : t("使用不可变的已发布版本 v{version} 进行测试。", { version: source.version });
+  const hasMediaDiagnostics = previewTraceKey === agentPreviewTraceKey(source, record.revision)
+    && media.transport !== undefined;
+  const transportLabel = media.transport === "webrtc" ? "WebRTC" : "WebSocket";
+  // On a phone the transcript is the primary surface: active-session configuration is
+  // immutable anyway, and full transport diagnostics remain available through download.
+  // Keep those controls detailed in the desktop drawer but collapse them around the log
+  // below md so browser chrome plus footer controls cannot squeeze the conversation out.
   return (
     <div className="fixed inset-0 z-50 bg-black/20 backdrop-blur-[1px]" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
     <aside role="dialog" aria-modal="true" aria-labelledby="try-live-title" className="absolute inset-0 flex flex-col overflow-hidden bg-canvas shadow-[-18px_0_60px_rgba(0,0,0,0.12)] md:left-auto md:w-[430px] md:border-l md:border-edge">
-      <header className="shrink-0 border-b border-edge-faint bg-canvas px-5 py-4">
+      <header className="shrink-0 border-b border-edge-faint bg-canvas px-4 py-3 sm:px-5 sm:py-4">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <div className="flex items-center gap-2"><h2 id="try-live-title" className="text-[14px] font-semibold">{t("实时试用")}</h2><span className={`rounded-full px-2 py-0.5 text-[9px] ${source.type === "draft" ? "bg-fill-active text-fg-muted" : "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"}`}>{source.type === "draft" ? t("草稿") : `v${source.version}`}</span></div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 id="try-live-title" className="text-[14px] font-semibold">{t("实时试用")}</h2>
+              <span className={`rounded-full px-2 py-0.5 text-[9px] ${source.type === "draft" ? "bg-fill-active text-fg-muted" : "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300"}`}>{source.type === "draft" ? t("草稿") : `v${source.version}`}</span>
+              {hasMediaDiagnostics ? <span className={`rounded-full border px-2 py-0.5 text-[9px] font-medium md:hidden ${media.transport === "webrtc" ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300" : "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-300"}`}>{transportLabel}</span> : null}
+            </div>
             <p className="mt-1 truncate text-[10px] text-fg-muted">{record.name}</p>
           </div>
           <div className="flex items-center gap-1.5">
             {isPreview ? <button onClick={() => void restart()} disabled={starting || (blocked && source.type === "draft")} title={t("重新开始")} aria-label={t("重新开始")} className="flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg disabled:opacity-40"><RotateCw className={`size-3.5 ${starting ? "animate-spin" : ""}`} /></button> : null}
+            {hasMediaDiagnostics ? <button type="button" onClick={downloadMediaTrace} className="flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg md:hidden" title="Metadata only; no audio or transcript content" aria-label={`media trace · ${t("下载")}`}><Download className="size-3.5" /></button> : null}
             <span className={`mx-1 size-2 rounded-full ${previewConnected ? "bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.12)]" : isPreview ? "bg-amber-400 shadow-[0_0_0_4px_rgba(251,191,36,0.12)]" : "bg-edge-hover"}`} />
             <button onClick={onClose} aria-label={t("关闭")} className="flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg"><X className="size-4" /></button>
           </div>
         </div>
-        <div className="mt-4 rounded-xl border border-edge bg-surface p-1">
-          <select aria-label={t("试用版本")} value={sourceValue} disabled={isPreview || starting} onChange={event => {
-            const value = event.target.value;
-            onSourceChange(value === "draft" ? { type: "draft" } : { type: "published", version: Number(value.slice("published:".length)) });
-          }} className="h-9 w-full rounded-lg bg-canvas px-3 text-[11px] font-medium text-fg outline-none disabled:opacity-60">
-            <option value="draft">{t("当前草稿")} · revision {record.revision}</option>
-            {versions.map(version => <option key={version.version} value={`published:${version.version}`}>{t("已发布版本")} v{version.version}{currentPublishedVersion === version.version ? ` · ${t("当前发布")}` : ""}</option>)}
-          </select>
+        <div className={isPreview ? "hidden md:block" : "block"}>
+          <div className="mt-3 rounded-xl border border-edge bg-surface p-1 sm:mt-4">
+            <select aria-label={t("试用版本")} value={sourceValue} disabled={isPreview || starting} onChange={event => {
+              const value = event.target.value;
+              onSourceChange(value === "draft" ? { type: "draft" } : { type: "published", version: Number(value.slice("published:".length)) });
+            }} className="h-9 w-full rounded-lg bg-canvas px-3 text-[11px] font-medium text-fg outline-none disabled:opacity-60">
+              <option value="draft">{t("当前草稿")} · revision {record.revision}</option>
+              {versions.map(version => <option key={version.version} value={`published:${version.version}`}>{t("已发布版本")} v{version.version}{currentPublishedVersion === version.version ? ` · ${t("当前发布")}` : ""}</option>)}
+            </select>
+          </div>
+          <p className="mt-2 hidden text-[10px] leading-5 text-fg-faint md:block">{sourceDescription}</p>
         </div>
-        <p className="mt-2 text-[10px] leading-5 text-fg-faint">{sourceDescription}</p>
       </header>
 
       <div className="relative flex min-h-0 flex-1 flex-col bg-surface/45">
-        <div ref={messagesRef} onScroll={onMessagesScroll} role="log" aria-label={t("对话记录")} aria-live="off" className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
+        <div ref={messagesRef} onScroll={onMessagesScroll} role="log" aria-label={t("对话记录")} aria-live="off" className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:space-y-4 sm:px-5 sm:py-5">
           {turns.length === 0 ? (
             <div className="flex h-full min-h-[240px] flex-col items-center justify-center text-center"><span className="flex size-12 items-center justify-center rounded-full border border-edge bg-canvas"><Mic className="size-5 text-fg-muted" /></span><p className="mt-4 text-[12px] font-medium">{t("在浏览器中与助手对话")}</p><p className="mt-1 max-w-[270px] text-[10px] leading-5 text-fg-faint">{sourceDescription}</p></div>
           ) : turns.map(turn => (
@@ -1602,11 +1616,11 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
 
       <span className="sr-only" aria-live="polite" aria-atomic="true">{liveAnnouncement}</span>
 
-      <footer className="shrink-0 border-t border-edge-faint bg-canvas p-4">
-        {previewTraceKey === agentPreviewTraceKey(source, record.revision) && media.transport !== undefined ? (
-          <div className="mb-3 space-y-1.5 rounded-lg border border-edge-faint bg-surface px-2.5 py-2 text-[9px] text-fg-faint">
+      <footer className="shrink-0 border-t border-edge-faint bg-canvas p-3 sm:p-4">
+        {hasMediaDiagnostics ? (
+          <div className="mb-3 hidden space-y-1.5 rounded-lg border border-edge-faint bg-surface px-2.5 py-2 text-[9px] text-fg-faint md:block">
             <div className="flex items-center gap-2">
-              <span className={`shrink-0 rounded-full border px-2 py-0.5 font-medium ${media.transport === "webrtc" ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300" : "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-300"}`}>{media.transport === "webrtc" ? "WebRTC" : "WebSocket"}</span>
+              <span className={`shrink-0 rounded-full border px-2 py-0.5 font-medium ${media.transport === "webrtc" ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300" : "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-300"}`}>{transportLabel}</span>
               <span className="min-w-0 flex-1 truncate" title={mediaDetails}>{mediaDetails}</span>
               <button
                 type="button"
@@ -1621,6 +1635,7 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
             {fallbackMessage ? <p className="truncate text-amber-600 dark:text-amber-300" title={t(fallbackMessage)}>{t(fallbackMessage)}</p> : null}
           </div>
         ) : null}
+        {hasMediaDiagnostics && fallbackMessage ? <p className="mb-2 truncate text-[9px] text-amber-600 dark:text-amber-300 md:hidden" title={t(fallbackMessage)}>{t(fallbackMessage)}</p> : null}
         {isPreview ? (
           <form onSubmit={event => { void submitText(event); }} className="mb-3 flex items-center gap-2" aria-label={t("输入消息")}>
             <input
@@ -1642,7 +1657,7 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
             </button>
           </form>
         ) : null}
-        <div className="mb-3 flex items-center justify-between text-[10px] text-fg-faint">
+        <div className={`${isPreview ? "flex" : "hidden sm:flex"} mb-2 items-center justify-between text-[10px] text-fg-faint sm:mb-3`}>
           <span className="flex items-center gap-2"><span className={`size-1.5 rounded-full ${previewConnected ? "bg-emerald-400" : isPreview ? "bg-amber-400" : "bg-edge-hover"}`} />{isPreview ? stateLabel : t("麦克风将在开始后启用")}</span>
           <span className={`flex h-3 items-end gap-[2px] ${muted ? "opacity-35" : ""}`}>{[0.15, 0.3, 0.5, 0.7, 0.9].map((threshold, index) => <span key={threshold} className={`w-[2px] rounded-full transition ${!muted && micLevel >= threshold ? "bg-emerald-400" : "bg-edge-hover"}`} style={{ height: `${4 + index * 2}px` }} />)}</span>
         </div>
@@ -1653,7 +1668,7 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
             <button onClick={() => void end()} disabled={starting} className="flex h-10 min-w-0 items-center justify-center gap-2 rounded-full border border-red-200 bg-red-50 px-3 text-[11px] font-medium text-red-600 hover:bg-red-100 disabled:opacity-40 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300"><CircleStop className="size-3.5" />{t("结束测试")}</button>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:grid-cols-1 sm:gap-3">
             <label className="flex h-10 items-center gap-2 rounded-full border border-edge bg-surface px-3 text-[10px] text-fg-muted">
               <Mic className="size-3.5 shrink-0" />
               <span className="shrink-0">{t("麦克风")}</span>
@@ -1668,7 +1683,7 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
                 {audioInputs.map(device => <option key={device.id} value={device.id}>{device.label}</option>)}
               </select>
             </label>
-            <button onClick={() => void start()} disabled={starting || (blocked && source.type === "draft")} className="flex h-11 w-full items-center justify-center gap-2 rounded-full bg-ink text-[12px] font-medium text-on-ink transition hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-40">{starting ? <LoaderCircle className="size-4 animate-spin" /> : <Mic className="size-4" />}{source.type === "draft" && dirty ? t("保存并开始测试") : t("开始测试")}</button>
+            <button onClick={() => void start()} disabled={starting || (blocked && source.type === "draft")} className="flex h-10 items-center justify-center gap-2 rounded-full bg-ink px-5 text-[12px] font-medium text-on-ink transition hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-40 sm:h-11 sm:w-full">{starting ? <LoaderCircle className="size-4 animate-spin" /> : <Mic className="size-4" />}{source.type === "draft" && dirty ? t("保存并开始测试") : t("开始测试")}</button>
           </div>
         )}
       </footer>
