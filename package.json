@@ -25,7 +25,8 @@
     "measure:guardrails": "bun apps/realtime-gateway/tools/measure-guardrails.ts",
     "measure:library": "bun apps/realtime-gateway/tools/measure-library.ts",
     "measure:vad": "bun platforms/bun/tools/measure-vad.ts",
-    "gate:media-phase2": "bun apps/realtime-gateway/tools/media-phase2-gate.ts"
+    "gate:media-phase2": "bun apps/realtime-gateway/tools/media-phase2-gate.ts",
+    "gate:media-phase3": "bun apps/realtime-gateway/tools/media-phase3-gate.ts"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

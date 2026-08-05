@@ -8,21 +8,23 @@ describe("WebRTC stats normalization", () => {
   test("derives uplink bitrate, remote loss, jitter, and RTT from counter deltas", () => {
     const sampler = new WebRtcStatsSampler();
     const first = report(
-      { id: "out", type: "outbound-rtp", kind: "audio", timestamp: 1_000, bytesSent: 10_000, packetsSent: 100, remoteId: "remote", codecId: "codec" },
+      { id: "out", type: "outbound-rtp", kind: "audio", timestamp: 1_000, bytesSent: 10_000, headerBytesSent: 1_000, packetsSent: 100, remoteId: "remote", codecId: "codec" },
       { id: "remote", type: "remote-inbound-rtp", kind: "audio", localId: "out", packetsLost: 2, jitter: 0.012, roundTripTime: 0.08 },
       { id: "codec", type: "codec", mimeType: "audio/opus", clockRate: 48_000 },
     );
     const second = report(
-      { id: "out", type: "outbound-rtp", kind: "audio", timestamp: 3_000, bytesSent: 22_000, packetsSent: 220, remoteId: "remote", codecId: "codec" },
+      { id: "out", type: "outbound-rtp", kind: "audio", timestamp: 3_000, bytesSent: 22_000, headerBytesSent: 2_200, packetsSent: 220, remoteId: "remote", codecId: "codec" },
       { id: "remote", type: "remote-inbound-rtp", kind: "audio", localId: "out", packetsLost: 5, jitter: 0.02, roundTripTime: 0.1 },
       { id: "codec", type: "codec", mimeType: "audio/opus", clockRate: 48_000 },
     );
     expect(sampler.sample(first, "uplink", 10)).toMatchObject({
-      direction: "uplink", bytes: 10_000, packets: 100, packetsLost: 2,
+      direction: "uplink", streamId: "out", bytes: 10_000, bytesDelta: 10_000,
+      headerBytes: 1_000, headerBytesDelta: 1_000, rtpBytesDelta: 11_000, packets: 100, packetsLost: 2,
       jitterMs: 12, roundTripTimeMs: 80, codec: "audio/opus", sampleRate: 48_000,
     });
     expect(sampler.sample(second, "uplink", 20)).toMatchObject({
       bitrateKbps: 48,
+      rtpBitrateKbps: 52.8,
       packetLossPct: 3 * 100 / 120,
       jitterMs: 20,
       roundTripTimeMs: 100,
@@ -33,14 +35,14 @@ describe("WebRTC stats normalization", () => {
     const sampler = new WebRtcStatsSampler();
     sampler.sample(report({
       id: "in", type: "inbound-rtp", kind: "audio", timestamp: 1_000,
-      bytesReceived: 8_000, packetsReceived: 80, packetsLost: 1, jitter: 0.01,
+      bytesReceived: 8_000, headerBytesReceived: 800, packetsReceived: 80, packetsLost: 1, jitter: 0.01,
       jitterBufferDelay: 1.2, jitterBufferEmittedCount: 60,
       jitterBufferTargetDelay: 1.8, jitterBufferMinimumDelay: 0.6,
       concealedSamples: 200, concealmentEvents: 2,
     }), "downlink", 10);
     const sample = sampler.sample(report({
       id: "in", type: "inbound-rtp", kind: "audio", timestamp: 3_000,
-      bytesReceived: 24_000, packetsReceived: 240, packetsLost: 3, jitter: 0.015,
+      bytesReceived: 24_000, headerBytesReceived: 2_400, packetsReceived: 240, packetsLost: 3, jitter: 0.015,
       jitterBufferDelay: 3.6, jitterBufferEmittedCount: 180,
       jitterBufferTargetDelay: 5.4, jitterBufferMinimumDelay: 1.8,
       concealedSamples: 260, concealmentEvents: 3,
@@ -48,6 +50,8 @@ describe("WebRTC stats normalization", () => {
     expect(sample).toMatchObject({
       direction: "downlink",
       bitrateKbps: 64,
+      rtpBitrateKbps: 70.4,
+      rtpBytesDelta: 17_600,
       packetLossPct: 2 * 100 / 162,
       jitterMs: 15,
       concealedSamplesDelta: 60,
@@ -101,6 +105,7 @@ describe("WebRTC stats normalization", () => {
       { id: "new", type: "outbound-rtp", kind: "audio", active: true, timestamp: 3_000, bytesSent: 20_000, packetsSent: 200 },
     ), "uplink", 2);
     expect(switched).toMatchObject({ bytes: 20_000, packets: 200 });
+    expect(switched?.bytesDelta).toBe(20_000);
     expect(switched?.bitrateKbps).toBeUndefined();
     expect(switched?.packetLossPct).toBeUndefined();
 
@@ -108,5 +113,40 @@ describe("WebRTC stats normalization", () => {
       id: "new", type: "outbound-rtp", kind: "audio", active: true,
       timestamp: 5_000, bytesSent: 32_000, packetsSent: 320,
     }), "uplink", 3)?.bitrateKbps).toBe(48);
+  });
+
+  test("retains first-epoch and reset bytes while keeping bitrate baselines isolated", () => {
+    const sampler = new WebRtcStatsSampler();
+    const first = sampler.sample(report({
+      id: "in", type: "inbound-rtp", kind: "audio", timestamp: 1_000,
+      bytesReceived: 5_000, headerBytesReceived: 500, packetsReceived: 50,
+    }), "downlink", 1);
+    expect(first).toMatchObject({ streamId: "in", bytesDelta: 5_000, headerBytesDelta: 500, rtpBytesDelta: 5_500 });
+    expect(first?.rtpBitrateKbps).toBeUndefined();
+
+    const reset = sampler.sample(report({
+      id: "in", type: "inbound-rtp", kind: "audio", timestamp: 3_000,
+      bytesReceived: 200, headerBytesReceived: 20, packetsReceived: 2,
+    }), "downlink", 2);
+    expect(reset).toMatchObject({ bytesDelta: 200, headerBytesDelta: 20, rtpBytesDelta: 220 });
+    expect(reset?.rtpBitrateKbps).toBeUndefined();
+  });
+
+  test("does not turn a late browser header counter into a bitrate spike", () => {
+    const sampler = new WebRtcStatsSampler();
+    sampler.sample(report({
+      id: "in", type: "inbound-rtp", kind: "audio", timestamp: 1_000,
+      bytesReceived: 5_000, packetsReceived: 50,
+    }), "downlink", 1);
+    const baseline = sampler.sample(report({
+      id: "in", type: "inbound-rtp", kind: "audio", timestamp: 3_000,
+      bytesReceived: 15_000, headerBytesReceived: 1_500, packetsReceived: 150,
+    }), "downlink", 2);
+    expect(baseline).toMatchObject({ bytesDelta: 10_000, headerBytesDelta: 1_500, rtpBytesDelta: 11_500 });
+    expect(baseline?.rtpBitrateKbps).toBeUndefined();
+    expect(sampler.sample(report({
+      id: "in", type: "inbound-rtp", kind: "audio", timestamp: 5_000,
+      bytesReceived: 25_000, headerBytesReceived: 2_500, packetsReceived: 250,
+    }), "downlink", 3)?.rtpBitrateKbps).toBe(44);
   });
 });

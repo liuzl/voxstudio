@@ -1,0 +1,8 @@
+{
+  "schema": "voxstudio.livekit-billing-evidence.v1",
+  "source": "Isolated LiveKit Cloud test-project usage export; no unrelated rooms in this window",
+  "periodStart": "2026-08-04T23:55:00.000Z",
+  "periodEnd": "2026-08-05T01:00:00.000Z",
+  "participantMinutes": 28.4,
+  "downstreamBytes": 12582912
+}

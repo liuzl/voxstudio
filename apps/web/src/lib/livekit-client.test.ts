@@ -351,14 +351,15 @@ describe("BrowserLiveKitClient", () => {
     let tick: (() => void) | undefined;
     let statsIndex = 0;
     let clearedTimer: number | undefined;
+    let nowMs = 10_000;
     const telemetry: Parameters<NonNullable<ConstructorParameters<typeof BrowserLiveKitClient>[0]["onMediaTelemetry"]>>[0][] = [];
     const localReports = [
-      new Map([["out", { id: "out", type: "outbound-rtp", kind: "audio", timestamp: 1_000, bytesSent: 10_000, packetsSent: 100 }]]),
-      new Map([["out", { id: "out", type: "outbound-rtp", kind: "audio", timestamp: 3_000, bytesSent: 22_000, packetsSent: 220 }]]),
+      new Map([["out", { id: "out", type: "outbound-rtp", kind: "audio", timestamp: 1_000, bytesSent: 10_000, headerBytesSent: 1_000, packetsSent: 100 }]]),
+      new Map([["out", { id: "out", type: "outbound-rtp", kind: "audio", timestamp: 3_000, bytesSent: 22_000, headerBytesSent: 2_200, packetsSent: 220 }]]),
     ];
     const remoteReports = [
-      new Map([["in", { id: "in", type: "inbound-rtp", kind: "audio", timestamp: 1_000, bytesReceived: 8_000, packetsReceived: 80, packetsLost: 1 }]]),
-      new Map([["in", { id: "in", type: "inbound-rtp", kind: "audio", timestamp: 3_000, bytesReceived: 24_000, packetsReceived: 240, packetsLost: 3 }]]),
+      new Map([["in", { id: "in", type: "inbound-rtp", kind: "audio", timestamp: 1_000, bytesReceived: 8_000, headerBytesReceived: 800, packetsReceived: 80, packetsLost: 1 }]]),
+      new Map([["in", { id: "in", type: "inbound-rtp", kind: "audio", timestamp: 3_000, bytesReceived: 24_000, headerBytesReceived: 2_400, packetsReceived: 240, packetsLost: 3 }]]),
     ];
     const client = new BrowserLiveKitClient({
       selection: { agent: "support" },
@@ -382,12 +383,19 @@ describe("BrowserLiveKitClient", () => {
       clearLevelInterval: () => {},
       setStatsInterval: callback => { tick = callback; return 9; },
       clearStatsInterval: timer => { clearedTimer = timer; },
-      now: () => 10_000,
+      now: () => nowMs,
     });
     await client.connect();
     await Bun.sleep(0);
 
-    const audio = { autoplay: false, setAttribute: () => {}, remove: () => {} } as unknown as HTMLMediaElement;
+    const audioListeners = new Map<string, () => void>();
+    const audio = {
+      autoplay: false,
+      setAttribute: () => {},
+      remove: () => {},
+      addEventListener: (event: string, listener: () => void) => audioListeners.set(event, listener),
+      removeEventListener: (event: string) => audioListeners.delete(event),
+    } as unknown as HTMLMediaElement;
     const remoteTrack = {
       kind: "audio",
       attach: () => audio,
@@ -396,13 +404,29 @@ describe("BrowserLiveKitClient", () => {
     };
     room.emit(RoomEvent.TrackSubscribed, remoteTrack, {}, { identity: "agent-runtime" });
     await Bun.sleep(0);
+    const secondAudio = {
+      autoplay: false, setAttribute: () => {}, remove: () => {},
+      addEventListener: () => {}, removeEventListener: () => {},
+    } as unknown as HTMLMediaElement;
+    room.emit(RoomEvent.TrackSubscribed, {
+      ...remoteTrack,
+      attach: () => secondAudio,
+    }, {}, { identity: "agent-runtime" });
+    await Bun.sleep(0);
+    audioListeners.get("playing")?.();
+    audioListeners.get("waiting")?.();
+    nowMs = 10_080;
+    audioListeners.get("playing")?.();
     statsIndex = 1;
     tick?.();
     await Bun.sleep(0);
 
     expect(telemetry).toEqual(expect.arrayContaining([
-      expect.objectContaining({ stage: "browser.webrtc", direction: "uplink", bitrateKbps: 48 }),
-      expect.objectContaining({ stage: "browser.webrtc", direction: "downlink", bitrateKbps: 64 }),
+      expect.objectContaining({ stage: "browser.webrtc", direction: "uplink", streamId: "out", bitrateKbps: 48, rtpBitrateKbps: 52.8 }),
+      expect.objectContaining({ stage: "browser.webrtc", direction: "downlink", streamId: "in", bitrateKbps: 64, rtpBitrateKbps: 70.4, rtpBytesDelta: 17_600 }),
+      expect.objectContaining({ stage: "browser.webrtc.aggregate", direction: "downlink", rtpBitrateKbps: 140.8, streamCount: 2 }),
+      expect.objectContaining({ stage: "browser.playback", state: "playing" }),
+      expect.objectContaining({ stage: "browser.underrun", durationMs: 80 }),
     ]));
     await client.close();
     expect(clearedTimer).toBe(9);

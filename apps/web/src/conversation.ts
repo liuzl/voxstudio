@@ -212,6 +212,11 @@ export class ConversationController {
       else this.mic?.setMuted(muted);
       if (this.stopped || operation !== this.muteOperation) return;
       useStudio.getState().setMuted(muted);
+      this.recordBrowserMedia({
+        stage: "browser.mute",
+        atMs: performance.timeOrigin + performance.now(),
+        muted,
+      });
       // Muting suppresses frames at the capture node, so the meter would freeze mid-level.
       if (muted) useStudio.getState().setMicLevel(0);
     } catch (error) {

@@ -270,6 +270,26 @@ describe("media delay attribution", () => {
     });
   });
 
+  test("keeps cumulative per-stream RTP transfer after raw WebRTC samples roll over", () => {
+    const recorder = new MediaTraceRecorder(() => 10_000);
+    for (let index = 0; index < 6_000; index += 1) {
+      recorder.observeBrowser({
+        stage: "browser.webrtc",
+        atMs: index,
+        direction: "downlink",
+        streamId: "agent-track",
+        bytes: (index + 1) * 90,
+        bytesDelta: 90,
+        headerBytes: (index + 1) * 10,
+        headerBytesDelta: 10,
+        rtpBytesDelta: 100,
+        packets: index + 1,
+      });
+    }
+    expect(recorder.summary().downlinkRtpBytes).toBe(600_000);
+    expect((recorder.export() as { events: unknown[] }).events).toHaveLength(5_000);
+  });
+
   test("aggregates WebRTC transport health and retains it in the metadata-only trace", () => {
     const recorder = new MediaTraceRecorder(() => 5_000);
     recorder.observeBrowser({
@@ -277,19 +297,26 @@ describe("media delay attribution", () => {
     });
     recorder.observeBrowser({
       stage: "browser.webrtc", atMs: 1_000, direction: "uplink",
-      bytes: 10_000, packets: 100, packetsLost: 1,
+      streamId: "up", bytes: 10_000, bytesDelta: 10_000, packets: 100, packetsLost: 1,
       bitrateKbps: 36.2, packetLossPct: 0.7, roundTripTimeMs: 48.4,
       codec: "audio/opus", sampleRate: 48_000,
     });
     recorder.observeBrowser({
       stage: "browser.webrtc", atMs: 1_000, direction: "downlink",
-      bytes: 12_000, packets: 120, packetsLost: 2,
-      bitrateKbps: 42.6, packetLossPct: 1.2, jitterMs: 14.3,
+      streamId: "down", bytes: 12_000, bytesDelta: 12_000,
+      headerBytes: 1_200, headerBytesDelta: 1_200, rtpBytesDelta: 13_200,
+      packets: 120, packetsLost: 2,
+      bitrateKbps: 42.6, rtpBitrateKbps: 47.1, packetLossPct: 1.2, jitterMs: 14.3,
       roundTripTimeMs: 49.1, jitterBufferMs: 38.2,
       jitterBufferTargetMs: 52.3, jitterBufferMinimumMs: 20.1,
       concealedSamplesDelta: 120, concealmentEventsDelta: 2,
       codec: "audio/opus", sampleRate: 48_000,
     });
+    recorder.observeBrowser({
+      stage: "browser.webrtc.aggregate", atMs: 1_000, direction: "downlink",
+      rtpBitrateKbps: 47.1, streamCount: 1,
+    });
+    recorder.observeBrowser({ stage: "browser.playback", atMs: 1_100, state: "playing" });
 
     const summary = recorder.summary();
     expect(summary).toMatchObject({
@@ -297,10 +324,13 @@ describe("media delay attribution", () => {
       codec: "opus",
       sampleRate: 48_000,
       webrtcSamples: 2,
+      playbackObservations: 1,
       uplinkBitrateKbps: 36.2,
       uplinkBitrateP95Kbps: 37,
       downlinkBitrateKbps: 42.6,
       downlinkBitrateP95Kbps: 43,
+      downlinkRtpBitrateP95Kbps: 48,
+      downlinkRtpBytes: 13_200,
       webrtcRttP95Ms: 50,
       downlinkJitterP95Ms: 15,
       downlinkJitterBufferP95Ms: 39,
@@ -311,7 +341,7 @@ describe("media delay attribution", () => {
     });
     expect(summary.uplinkPacketLossP95Pct).toBeCloseTo(0.7);
     expect(summary.downlinkPacketLossP95Pct).toBeCloseTo(1.2);
-    expect(formatWebRtcDiagnostics(summary)).toBe("WebRTC · Opus 48kHz · ↑ 36 kbps · ↓ 43 kbps · ↑loss 0.7% · ↓loss 1.2% · jitter 14ms · RTT 49ms");
+    expect(formatWebRtcDiagnostics(summary)).toBe("WebRTC · Opus 48kHz · ↑ 36 kbps · ↓ 47 kbps · ↑loss 0.7% · ↓loss 1.2% · jitter 14ms · RTT 49ms");
     const exported = recorder.export() as {
       privacy: string;
       events: { event: { stage: string } }[];

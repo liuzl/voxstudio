@@ -1,0 +1,15 @@
+{
+  "schema": "voxstudio.media-network-evidence.v2",
+  "runId": "macos-chrome-healthy-soak",
+  "source": "Network shaper/controller export captured immediately before this run",
+  "capturedAt": "2026-08-05T00:00:00.000Z",
+  "device": "macos_chrome",
+  "route": "same_wifi",
+  "profile": {
+    "downlinkKbps": "unshaped",
+    "rttMs": 20,
+    "jitterMs": 0,
+    "packetLossPct": 0,
+    "packetLossDirection": "bidirectional"
+  }
+}

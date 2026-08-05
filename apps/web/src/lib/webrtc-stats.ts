@@ -3,10 +3,22 @@ export type WebRtcStatsDirection = "uplink" | "downlink";
 export interface WebRtcStatsSample {
   atMs: number;
   direction: WebRtcStatsDirection;
+  /** Browser RTCStats id for the selected RTP stream; required to audit track replacement. */
+  streamId?: string;
   bytes: number;
+  /** RTP payload bytes received/sent since this stream epoch began. */
+  bytesDelta: number;
+  /** Cumulative RTP header bytes when exposed by the browser. */
+  headerBytes?: number;
+  /** RTP header bytes since this stream epoch began. */
+  headerBytesDelta?: number;
+  /** Payload plus RTP header bytes for billing reconciliation. */
+  rtpBytesDelta?: number;
   packets: number;
   packetsLost?: number;
   bitrateKbps?: number;
+  /** Payload plus RTP header bitrate; unlike bitrateKbps this includes exposed RTP overhead. */
+  rtpBitrateKbps?: number;
   packetLossPct?: number;
   jitterMs?: number;
   roundTripTimeMs?: number;
@@ -27,6 +39,7 @@ interface Counters {
   streamId?: string;
   timestamp: number;
   bytes: number;
+  headerBytes?: number;
   packets: number;
   packetsLost?: number;
   jitterBufferDelay?: number;
@@ -95,6 +108,7 @@ export class WebRtcStatsSampler {
     const ssrc = finite(primary.ssrc);
     const streamId = text(primary.id) ?? (ssrc === undefined ? undefined : `ssrc:${ssrc}`);
     const bytes = Math.max(0, finite(direction === "uplink" ? primary.bytesSent : primary.bytesReceived) ?? 0);
+    const headerBytes = finite(direction === "uplink" ? primary.headerBytesSent : primary.headerBytesReceived);
     const packets = Math.max(0, finite(direction === "uplink" ? primary.packetsSent : primary.packetsReceived) ?? 0);
     const packetsLost = finite(remote?.packetsLost ?? primary.packetsLost);
     const jitterBufferDelay = finite(primary.jitterBufferDelay);
@@ -107,6 +121,7 @@ export class WebRtcStatsSampler {
       ...(streamId === undefined ? {} : { streamId }),
       timestamp: finite(primary.timestamp) ?? atMs,
       bytes,
+      ...(headerBytes === undefined ? {} : { headerBytes: Math.max(0, headerBytes) }),
       packets,
       ...(packetsLost === undefined ? {} : { packetsLost }),
       ...(jitterBufferDelay === undefined ? {} : { jitterBufferDelay }),
@@ -123,7 +138,18 @@ export class WebRtcStatsSampler {
       : undefined;
     this.previous.set(direction, counters);
     const elapsedMs = previous === undefined ? 0 : counters.timestamp - previous.timestamp;
-    const bytesDelta = previous === undefined ? -1 : counters.bytes - previous.bytes;
+    const rawBytesDelta = previous === undefined ? counters.bytes : counters.bytes - previous.bytes;
+    // A counter reset begins a new epoch. Its current value represents traffic already
+    // received in that epoch and must not disappear from billing reconciliation.
+    const bytesDelta = rawBytesDelta < 0 ? counters.bytes : rawBytesDelta;
+    const rawHeaderBytesDelta = counters.headerBytes === undefined
+      ? undefined
+      : previous?.headerBytes === undefined
+        ? counters.headerBytes
+        : counters.headerBytes - previous.headerBytes;
+    const headerBytesDelta = rawHeaderBytesDelta === undefined
+      ? undefined
+      : rawHeaderBytesDelta < 0 ? counters.headerBytes : rawHeaderBytesDelta;
     const packetsDelta = previous === undefined ? -1 : counters.packets - previous.packets;
     const lostDelta = previous?.packetsLost === undefined || counters.packetsLost === undefined
       ? undefined
@@ -148,10 +174,18 @@ export class WebRtcStatsSampler {
     return {
       atMs,
       direction,
+      ...(streamId === undefined ? {} : { streamId }),
       bytes,
+      bytesDelta,
+      ...(counters.headerBytes === undefined ? {} : { headerBytes: counters.headerBytes }),
+      ...(headerBytesDelta === undefined ? {} : { headerBytesDelta }),
+      ...(headerBytesDelta === undefined ? {} : { rtpBytesDelta: bytesDelta + headerBytesDelta }),
       packets,
       ...(packetsLost === undefined ? {} : { packetsLost }),
-      ...(elapsedMs <= 0 || bytesDelta < 0 ? {} : { bitrateKbps: bytesDelta * 8 / elapsedMs }),
+      ...(elapsedMs <= 0 || rawBytesDelta < 0 ? {} : { bitrateKbps: rawBytesDelta * 8 / elapsedMs }),
+      ...(elapsedMs <= 0 || rawBytesDelta < 0 || previous?.headerBytes === undefined
+        || rawHeaderBytesDelta === undefined || rawHeaderBytesDelta < 0
+        ? {} : { rtpBitrateKbps: (rawBytesDelta + rawHeaderBytesDelta) * 8 / elapsedMs }),
       ...(lossDenominator <= 0 || lostDelta === undefined ? {} : { packetLossPct: Math.min(100, lostDelta * 100 / lossDenominator) }),
       ...(jitterSeconds === undefined ? {} : { jitterMs: Math.max(0, jitterSeconds * 1_000) }),
       ...(rttSeconds === undefined ? {} : { roundTripTimeMs: Math.max(0, rttSeconds * 1_000) }),

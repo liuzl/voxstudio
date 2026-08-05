@@ -9,10 +9,13 @@ export type BrowserMediaTelemetryEvent =
   | { stage: "browser.enqueue"; atMs: number; frameId?: number; bufferBeforeMs: number; bufferAfterMs: number; targetBufferMs: number }
   | { stage: "browser.render"; atMs: number; frameId?: number; scheduledAtMs: number; latenessMs: number; bufferDepthMs: number; estimated: boolean }
   | { stage: "browser.underrun"; atMs: number; frameId?: number; durationMs: number }
+  | { stage: "browser.playback"; atMs: number; state: "playing" }
   | { stage: "browser.stop"; atMs: number; reason: "interrupted" | "closed"; sourceCount: number; operationMs: number }
   | { stage: "browser.context"; atMs: number; state: AudioContextState; sampleRate: number; outputLatencyMs?: number }
   | { stage: "browser.route"; atMs: number; deviceId?: string; label?: string; trackState?: MediaStreamTrackState; recoveries: number }
+  | { stage: "browser.mute"; atMs: number; muted: boolean }
   | { stage: "browser.transport"; atMs: number; transport: "websocket" | "webrtc"; fallbackReason?: MediaTransportFallbackReason }
+  | { stage: "browser.webrtc.aggregate"; atMs: number; direction: "downlink"; rtpBitrateKbps: number; streamCount: number }
   | ({ stage: "browser.webrtc" } & WebRtcStatsSample)
   | {
       stage: "browser.clock_sync";
@@ -49,6 +52,7 @@ export interface MediaDiagnostics {
   interruptionStopP95Ms: number | undefined;
   closedStops: number;
   renderObservations: number;
+  playbackObservations: number;
   estimatedRenders: number;
   rttSamples: number;
   rttP50Ms: number | undefined;
@@ -61,6 +65,9 @@ export interface MediaDiagnostics {
   uplinkBitrateP95Kbps: number | undefined;
   downlinkBitrateKbps: number | undefined;
   downlinkBitrateP95Kbps: number | undefined;
+  downlinkRtpBitrateKbps: number | undefined;
+  downlinkRtpBitrateP95Kbps: number | undefined;
+  downlinkRtpBytes: number;
   uplinkPacketLossPct: number | undefined;
   uplinkPacketLossP95Pct: number | undefined;
   downlinkPacketLossPct: number | undefined;
@@ -98,7 +105,8 @@ export function formatMediaTransportDetails(diagnostics: MediaDiagnostics): stri
   }
   if (diagnostics.transport === "webrtc") {
     if (diagnostics.uplinkBitrateKbps !== undefined) parts.push(`↑ ${Math.round(diagnostics.uplinkBitrateKbps)} kbps`);
-    if (diagnostics.downlinkBitrateKbps !== undefined) parts.push(`↓ ${Math.round(diagnostics.downlinkBitrateKbps)} kbps`);
+    const downlinkBitrate = diagnostics.downlinkRtpBitrateKbps ?? diagnostics.downlinkBitrateKbps;
+    if (downlinkBitrate !== undefined) parts.push(`↓ ${Math.round(downlinkBitrate)} kbps`);
     if (diagnostics.uplinkPacketLossPct !== undefined) parts.push(`↑loss ${diagnostics.uplinkPacketLossPct.toFixed(1)}%`);
     if (diagnostics.downlinkPacketLossPct !== undefined) parts.push(`↓loss ${diagnostics.downlinkPacketLossPct.toFixed(1)}%`);
     if (diagnostics.downlinkJitterMs !== undefined) parts.push(`jitter ${Math.round(diagnostics.downlinkJitterMs)}ms`);
@@ -229,6 +237,7 @@ export class MediaTraceRecorder {
   private readonly rttJitters = new FixedHistogram(1, 2_000);
   private readonly uplinkBitrates = new FixedHistogram(1, 1_000);
   private readonly downlinkBitrates = new FixedHistogram(1, 1_000);
+  private readonly downlinkRtpBitrates = new FixedHistogram(1, 1_000);
   private readonly uplinkLoss = new FixedHistogram(0.1, 100);
   private readonly downlinkLoss = new FixedHistogram(0.1, 100);
   private readonly webRtcRtts = new FixedHistogram(1, 2_000);
@@ -252,6 +261,7 @@ export class MediaTraceRecorder {
     this.rttJitters.reset();
     this.uplinkBitrates.reset();
     this.downlinkBitrates.reset();
+    this.downlinkRtpBitrates.reset();
     this.uplinkLoss.reset();
     this.downlinkLoss.reset();
     this.webRtcRtts.reset();
@@ -347,6 +357,11 @@ export class MediaTraceRecorder {
         underruns: this.diagnostics.underruns + 1,
         underrunMs: this.diagnostics.underrunMs + event.durationMs,
       };
+    } else if (event.stage === "browser.playback") {
+      this.diagnostics = {
+        ...this.diagnostics,
+        playbackObservations: this.diagnostics.playbackObservations + 1,
+      };
     } else if (event.stage === "browser.render") {
       this.bufferDepths.observe(event.bufferDepthMs);
       this.diagnostics = {
@@ -382,6 +397,13 @@ export class MediaTraceRecorder {
         transport: event.transport,
         transportFallbackReason: event.fallbackReason,
       };
+    } else if (event.stage === "browser.webrtc.aggregate") {
+      this.downlinkRtpBitrates.observe(event.rtpBitrateKbps);
+      this.diagnostics = {
+        ...this.diagnostics,
+        downlinkRtpBitrateKbps: event.rtpBitrateKbps,
+        downlinkRtpBitrateP95Kbps: this.downlinkRtpBitrates.percentile(0.95),
+      };
     } else if (event.stage === "browser.webrtc") {
       const uplink = event.direction === "uplink";
       if (event.bitrateKbps !== undefined) (uplink ? this.uplinkBitrates : this.downlinkBitrates).observe(event.bitrateKbps);
@@ -405,6 +427,9 @@ export class MediaTraceRecorder {
         ...(!uplink && event.bitrateKbps !== undefined ? {
           downlinkBitrateKbps: event.bitrateKbps,
           downlinkBitrateP95Kbps: this.downlinkBitrates.percentile(0.95),
+        } : {}),
+        ...(!uplink && event.rtpBytesDelta !== undefined ? {
+          downlinkRtpBytes: this.diagnostics.downlinkRtpBytes + event.rtpBytesDelta,
         } : {}),
         ...(uplink && event.packetLossPct !== undefined ? {
           uplinkPacketLossPct: event.packetLossPct,
@@ -629,6 +654,7 @@ export function emptyMediaDiagnostics(): MediaDiagnostics {
     interruptionStopP95Ms: undefined,
     closedStops: 0,
     renderObservations: 0,
+    playbackObservations: 0,
     estimatedRenders: 0,
     rttSamples: 0,
     rttP50Ms: undefined,
@@ -641,6 +667,9 @@ export function emptyMediaDiagnostics(): MediaDiagnostics {
     uplinkBitrateP95Kbps: undefined,
     downlinkBitrateKbps: undefined,
     downlinkBitrateP95Kbps: undefined,
+    downlinkRtpBitrateKbps: undefined,
+    downlinkRtpBitrateP95Kbps: undefined,
+    downlinkRtpBytes: 0,
     uplinkPacketLossPct: undefined,
     uplinkPacketLossP95Pct: undefined,
     downlinkPacketLossPct: undefined,

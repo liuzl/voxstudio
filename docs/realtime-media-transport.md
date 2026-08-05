@@ -17,7 +17,9 @@ room lifecycle to the existing `GatewaySession`. When `/healthz` advertises
 one processed microphone track, subscribe to the Agent-side track, and use reliable data
 messages for protocol-v1 events and controls. Deployments without the complete
 signer/adapter capability keep the existing WebSocket path. A real LiveKit
-deployment/device gate is still required before Phase 3A is considered delivered.
+deployment/device gate is still required before Phase 3A is considered delivered. The
+strict Phase 3 report generator is implemented so those device, network, lifecycle,
+and billing runs can be retained as auditable evidence rather than informal notes.
 
 This document turns the remote/mobile audio investigation into an implementation
 contract. It refines the transport portion of
@@ -605,7 +607,10 @@ create a false delta. Counter resets, delayed RTCP fields, and RTP stream-identi
 produce a new baseline instead of a bitrate or loss spike. The bounded browser
 diagnostics retain current and p95 values, and the raw
 normalized samples share the existing metadata-only `voxstudio.media-trace.v2` event
-timeline. Conversation and Agent-preview footers show an explicit WebRTC/WebSocket badge,
+timeline. The attached WebRTC audio element also records successful playback starts and
+post-start `waiting`/`stalled` recovery durations, so a reported zero-underrun soak is
+based on observed native playback rather than a default counter. Conversation and
+Agent-preview footers show an explicit WebRTC/WebSocket badge,
 a compact live summary, and classified LiveKit fallback reasons before exposing the same
 trace download; neither trace nor UI retains audio or transcript content.
 Unit coverage spans raw RTC report normalization, multi-stage diagnostics/export, timer
@@ -656,14 +661,17 @@ comparable. Test at least:
 | Packet loss for WebRTC | 0%, 1%, 3% |
 | Devices | iPhone Safari, Android Chrome, macOS Chrome and Safari |
 | Routes | same-Wi-Fi direct, cellular/direct overlay, relayed/DERP where available |
-| Interaction | uninterrupted reply, barge-in, rapid revision, mute/unmute, route change |
+| Interaction | uninterrupted reply, barge-in, rapid revision, mute/unmute, route change, reconnect |
 
 Initial promotion thresholds, subject to measured calibration:
 
 - zero underruns in ten minutes on the declared healthy-network profile;
-- Opus Agent-audio downlink at or below 80 kbps including protocol overhead, with a
+- Opus Agent-audio downlink at or below 80 kbps including the browser-exposed RTP
+  payload and header bytes, with a
   48 kbps codec target in WebSocket v2;
-- ordinary target buffer 200–350 ms and p95 no greater than 600 ms;
+- WebSocket v2's application renderer targets 200–350 ms; WebRTC leaves its adaptive
+  target to the browser, while measured jitter-buffer p95 must remain no greater than
+  600 ms;
 - p95 interruption-to-silence no greater than 150 ms;
 - no audible stale audio after a stream is interrupted or superseded;
 - no unbounded queue; a session fails loudly if queued audio exceeds its ceiling;
@@ -676,6 +684,62 @@ Initial promotion thresholds, subject to measured calibration:
 The gate report records browser/OS, route, selected devices, codec, effective bitrate,
 network shaping, and raw metric distributions. “Sounds fine” is useful final validation
 but not sufficient evidence for promotion.
+
+### Phase 3 WebRTC gate runner
+
+The Phase 3 evaluator consumes Studio's existing metadata-only media traces rather than
+capturing audio or transcripts:
+
+```bash
+cp apps/realtime-gateway/tools/media-phase3-manifest.example.json media-phase3-manifest.json
+mkdir -p evidence traces
+# Copy and edit one v2 network record for every manifest run.
+cp apps/realtime-gateway/tools/media-phase3-network-evidence.example.json \
+  evidence/macos-chrome-healthy-soak.json
+# LiveKit Cloud only: fill this from an isolated test project's usage export.
+cp apps/realtime-gateway/tools/media-phase3-billing-evidence.example.json \
+  evidence/livekit-cloud-billing.json
+bun run gate:media-phase3 -- --manifest media-phase3-manifest.json \
+  --output media-phase3-report.json
+```
+
+Set `deployment` to `livekit_cloud` for Phase 3A or `self_hosted` for Phase 3B. A cloud
+manifest must reference billing evidence; a self-hosted manifest omits it. The cloud
+test project must contain no unrelated rooms during the evidence window. The evaluator
+reconciles its participant minutes against two participants per measured room and its
+downstream transfer against explicit per-stream RTP payload-plus-header deltas, with
+rounding and lower-layer protocol-overhead tolerances. Every sample carries the browser's
+RTP stream identity. A replacement track or counter reset begins a new byte epoch whose
+initial bytes are retained, so overlapping old/new tracks cannot be subtracted from one
+another. Their per-stream RTP rates are summed within each browser polling interval before
+the 80 kbps ceiling is evaluated.
+
+Every run must remain on WebRTC without compatibility fallback, negotiate Opus/48 kHz,
+contain both uplink and downlink RTC samples plus an observed native playback start, and accumulate at least 30 seconds of real
+Agent audio. The evaluator enforces the 80 kbps RTP Agent-audio ceiling, a 600 ms measured
+jitter-buffer ceiling, a one-second application queue ceiling with no dropped frames,
+direction-explicit shaped RTT/jitter/loss ranges, distinct trace/evidence digests, and the
+complete device/route/network/interaction matrix. Each network profile declares whether
+packet loss was applied to uplink, downlink, or both; the runner checks only the declared
+direction and checks each side independently for bidirectional shaping. Barge-in and rapid-revision rows require ten
+external interruption-to-silence measurements at p95 no greater than 150 ms. Route-change
+and reconnect rows require explicit recovery observations. Mute/unmute rows require both
+an operator pass and a successful mute-then-unmute transition retained in the trace. Every row also records whether
+audio stayed fresh without audible dropouts, controls remained responsive, voice quality
+passed, and the browser released its microphone after session end. The healthy run is ten
+minutes of accumulated audio on the unshaped same-Wi-Fi, 20 ms RTT, zero-jitter/loss
+profile with zero browser underruns and no concealment events when the browser exposes the
+latter counter.
+
+As with Phase 2, the network evidence must be captured within 15 minutes of its trace and
+match the declared device, route, bandwidth, RTT, jitter, loss, and loss direction. The runner does not
+create network shaping or infer audible quality. It fails closed when a browser omits a
+required RTC statistic or an operator observation is missing. Concealment counters remain
+optional because Safari does not guarantee them; when present, the healthy run requires
+zero concealment events, while the mandatory no-dropout observation covers every browser.
+Phase 3 evidence must therefore be captured with a build that emits `streamId`,
+`rtpBytesDelta`, the non-rolling `downlinkRtpBytes` aggregate, native playback observations,
+and mute transitions; older v2 traces fail closed and must be recaptured.
 
 ### Phase 2 gate runner
 

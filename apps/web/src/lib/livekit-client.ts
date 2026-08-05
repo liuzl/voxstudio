@@ -12,7 +12,7 @@ import { issueLiveKitBootstrap, type LiveKitBootstrapResponse } from "./api";
 import type { EndpointCapability } from "./audio";
 import type { ConnectionState } from "./client";
 import type { BrowserMediaTelemetryEvent } from "./media-telemetry";
-import { WebRtcStatsSampler, type RtcStatsReportLike, type WebRtcStatsDirection } from "./webrtc-stats";
+import { WebRtcStatsSampler, type RtcStatsReportLike, type WebRtcStatsDirection, type WebRtcStatsSample } from "./webrtc-stats";
 
 export const liveKitControlTopic = "voxstudio.control";
 export const liveKitEventTopic = "voxstudio.events";
@@ -56,7 +56,7 @@ export interface BrowserLiveKitClientOptions {
   onConnectionChange(state: ConnectionState): void;
   onCapabilityChange(capability: EndpointCapability): void;
   onMicLevel(level: number): void;
-  onMediaTelemetry?(event: Extract<BrowserMediaTelemetryEvent, { stage: "browser.webrtc" }>): void;
+  onMediaTelemetry?(event: BrowserMediaTelemetryEvent): void;
   onDisconnected?(): void;
   issueBootstrap?(selection: BrowserLiveKitClientOptions["selection"]): Promise<LiveKitBootstrapResponse>;
   makeRoom?(): LiveKitRoomLike;
@@ -124,6 +124,7 @@ export class BrowserLiveKitClient {
   private bootstrap: LiveKitBootstrapResponse | undefined;
   private localTrack: LocalAudioTrackLike | undefined;
   private readonly remoteElements = new Map<RemoteAudioTrackLike, HTMLMediaElement>();
+  private readonly remotePlaybackCleanup = new Map<RemoteAudioTrackLike, () => void>();
   private sessionId: string | undefined;
   private levelTimer: number | undefined;
   private statsTimer: number | undefined;
@@ -247,10 +248,12 @@ export class BrowserLiveKitClient {
     this.options.onMicLevel(0);
     this.stopLocalTrack();
     for (const [track, element] of this.remoteElements) {
+      this.remotePlaybackCleanup.get(track)?.();
       track.detach(element);
       element.remove();
     }
     this.remoteElements.clear();
+    this.remotePlaybackCleanup.clear();
     await this.room.disconnect().catch(() => {});
     this.options.onConnectionChange("disconnected");
   }
@@ -259,22 +262,34 @@ export class BrowserLiveKitClient {
     if (!this.connected || this.closed || this.statsPolling || this.options.onMediaTelemetry === undefined) return;
     this.statsPolling = true;
     const atMs = this.options.now?.() ?? performance.timeOrigin + performance.now();
-    const collect = async (track: LocalAudioTrackLike | RemoteAudioTrackLike, direction: WebRtcStatsDirection): Promise<void> => {
+    const collect = async (track: LocalAudioTrackLike | RemoteAudioTrackLike, direction: WebRtcStatsDirection): Promise<WebRtcStatsSample | undefined> => {
       const report = await track.getRTCStatsReport?.();
-      if (report === undefined || this.closed) return;
+      if (report === undefined || this.closed) return undefined;
       let sampler = this.statsSamplers.get(track);
       if (sampler === undefined) {
         sampler = new WebRtcStatsSampler();
         this.statsSamplers.set(track, sampler);
       }
-      const sample = sampler.sample(report as unknown as RtcStatsReportLike, direction, atMs);
-      if (sample !== undefined) this.options.onMediaTelemetry?.({ stage: "browser.webrtc", ...sample });
+      return sampler.sample(report as unknown as RtcStatsReportLike, direction, atMs);
     };
     try {
-      await Promise.allSettled([
+      const results = await Promise.allSettled([
         ...(this.localTrack === undefined ? [] : [collect(this.localTrack, "uplink")]),
         ...[...this.remoteElements.keys()].map(track => collect(track, "downlink")),
       ]);
+      const samples = results.flatMap(result => result.status === "fulfilled" && result.value !== undefined ? [result.value] : []);
+      for (const sample of samples) this.options.onMediaTelemetry?.({ stage: "browser.webrtc", ...sample });
+      const downlinkRates = samples.flatMap(sample => sample.direction === "downlink" && sample.rtpBitrateKbps !== undefined
+        ? [sample.rtpBitrateKbps] : []);
+      if (downlinkRates.length > 0) {
+        this.options.onMediaTelemetry?.({
+          stage: "browser.webrtc.aggregate",
+          atMs,
+          direction: "downlink",
+          rtpBitrateKbps: downlinkRates.reduce((total, value) => total + value, 0),
+          streamCount: downlinkRates.length,
+        });
+      }
     } finally {
       this.statsPolling = false;
     }
@@ -315,6 +330,7 @@ export class BrowserLiveKitClient {
         const element = track.attach();
         element.autoplay = true;
         element.setAttribute("playsinline", "true");
+        this.observeRemotePlayback(track, element);
         (this.options.appendAudioElement ?? (audio => document.body.append(audio)))(element);
         this.remoteElements.set(track, element);
         void this.pollWebRtcStats();
@@ -323,6 +339,8 @@ export class BrowserLiveKitClient {
         const track = args[0] as RemoteAudioTrackLike;
         const element = this.remoteElements.get(track);
         if (element === undefined) return;
+        this.remotePlaybackCleanup.get(track)?.();
+        this.remotePlaybackCleanup.delete(track);
         track.detach(element);
         element.remove();
         this.remoteElements.delete(track);
@@ -341,6 +359,37 @@ export class BrowserLiveKitClient {
           // Data packets are untrusted transport input. Ignore malformed events.
         }
       });
+  }
+
+  private observeRemotePlayback(track: RemoteAudioTrackLike, element: HTMLMediaElement): void {
+    if (this.options.onMediaTelemetry === undefined) return;
+    let played = false;
+    let stalledAtMs: number | undefined;
+    const now = (): number => this.options.now?.() ?? performance.timeOrigin + performance.now();
+    const onWaiting = (): void => {
+      if (played && stalledAtMs === undefined) stalledAtMs = now();
+    };
+    const onPlaying = (): void => {
+      const atMs = now();
+      if (played && stalledAtMs !== undefined) {
+        this.options.onMediaTelemetry?.({
+          stage: "browser.underrun",
+          atMs,
+          durationMs: Math.max(0, atMs - stalledAtMs),
+        });
+      }
+      played = true;
+      stalledAtMs = undefined;
+      this.options.onMediaTelemetry?.({ stage: "browser.playback", atMs, state: "playing" });
+    };
+    element.addEventListener?.("waiting", onWaiting);
+    element.addEventListener?.("stalled", onWaiting);
+    element.addEventListener?.("playing", onPlaying);
+    this.remotePlaybackCleanup.set(track, () => {
+      element.removeEventListener?.("waiting", onWaiting);
+      element.removeEventListener?.("stalled", onWaiting);
+      element.removeEventListener?.("playing", onPlaying);
+    });
   }
 
   private async command(payload: Record<string, unknown>): Promise<void> {

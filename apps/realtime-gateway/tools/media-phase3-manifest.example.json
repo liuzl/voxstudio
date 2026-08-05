@@ -1,0 +1,95 @@
+{
+  "schema": "voxstudio.media-phase3-manifest.v1",
+  "deployment": "livekit_cloud",
+  "billingEvidence": "evidence/livekit-cloud-billing.json",
+  "runs": [
+    {
+      "id": "macos-chrome-healthy-soak",
+      "trace": "traces/macos-chrome-healthy-soak.json",
+      "networkEvidence": "evidence/macos-chrome-healthy-soak.json",
+      "device": "macos_chrome",
+      "route": "same_wifi",
+      "network": { "downlinkKbps": "unshaped", "rttMs": 20, "jitterMs": 0, "packetLossPct": 0, "packetLossDirection": "bidirectional" },
+      "interactions": ["uninterrupted", "barge_in"],
+      "healthyNetwork": true,
+      "observations": {
+        "staleAudioHeard": false,
+        "audioDropoutsHeard": false,
+        "controlsResponsive": true,
+        "voiceQualityPassed": true,
+        "microphoneReleasedAfterEnd": true,
+        "interruptionToSilenceP95Ms": 80,
+        "interruptionSamples": 12
+      }
+    },
+    {
+      "id": "iphone-cellular-reconnect",
+      "trace": "traces/iphone-cellular-reconnect.json",
+      "networkEvidence": "evidence/iphone-cellular-reconnect.json",
+      "device": "iphone_safari",
+      "route": "cellular_overlay",
+      "network": { "downlinkKbps": 256, "rttMs": 100, "jitterMs": 20, "packetLossPct": 1, "packetLossDirection": "downlink" },
+      "interactions": ["rapid_revision", "reconnect"],
+      "observations": {
+        "staleAudioHeard": false,
+        "audioDropoutsHeard": false,
+        "controlsResponsive": true,
+        "voiceQualityPassed": true,
+        "microphoneReleasedAfterEnd": true,
+        "interruptionToSilenceP95Ms": 110,
+        "interruptionSamples": 12,
+        "reconnectRecovered": true
+      }
+    },
+    {
+      "id": "android-relayed",
+      "trace": "traces/android-relayed.json",
+      "networkEvidence": "evidence/android-relayed.json",
+      "device": "android_chrome",
+      "route": "relayed_derp",
+      "network": { "downlinkKbps": 512, "rttMs": 300, "jitterMs": 50, "packetLossPct": 3, "packetLossDirection": "downlink" },
+      "interactions": ["mute_unmute"],
+      "observations": {
+        "staleAudioHeard": false,
+        "audioDropoutsHeard": false,
+        "controlsResponsive": true,
+        "voiceQualityPassed": true,
+        "microphoneReleasedAfterEnd": true,
+        "muteUnmutePassed": true
+      }
+    },
+    {
+      "id": "macos-safari-route-change",
+      "trace": "traces/macos-safari-route-change.json",
+      "networkEvidence": "evidence/macos-safari-route-change.json",
+      "device": "macos_safari",
+      "route": "same_wifi",
+      "network": { "downlinkKbps": 1024, "rttMs": 20, "jitterMs": 100, "packetLossPct": 0, "packetLossDirection": "downlink" },
+      "interactions": ["route_change"],
+      "observations": {
+        "staleAudioHeard": false,
+        "audioDropoutsHeard": false,
+        "controlsResponsive": true,
+        "voiceQualityPassed": true,
+        "microphoneReleasedAfterEnd": true,
+        "routeChangeRecovered": true
+      }
+    },
+    {
+      "id": "macos-chrome-2048",
+      "trace": "traces/macos-chrome-2048.json",
+      "networkEvidence": "evidence/macos-chrome-2048.json",
+      "device": "macos_chrome",
+      "route": "same_wifi",
+      "network": { "downlinkKbps": 2048, "rttMs": 20, "jitterMs": 0, "packetLossPct": 0, "packetLossDirection": "downlink" },
+      "interactions": ["uninterrupted"],
+      "observations": {
+        "staleAudioHeard": false,
+        "audioDropoutsHeard": false,
+        "controlsResponsive": true,
+        "voiceQualityPassed": true,
+        "microphoneReleasedAfterEnd": true
+      }
+    }
+  ]
+}
