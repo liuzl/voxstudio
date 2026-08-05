@@ -1,5 +1,8 @@
 import type { GatewayEvent, MediaPlaybackCodec } from "@voxstudio/realtime-gateway/protocol";
 import { monotonicEpochMs, type AudioFrameDelivery } from "./client";
+import type { WebRtcStatsSample } from "./webrtc-stats";
+
+export type MediaTransportFallbackReason = "livekit_service_unavailable" | "livekit_room_connection_failed";
 
 export type BrowserMediaTelemetryEvent =
   | { stage: "browser.receive"; atMs: number; frameId?: number; bytes: number; decodedAtMs: number }
@@ -9,6 +12,8 @@ export type BrowserMediaTelemetryEvent =
   | { stage: "browser.stop"; atMs: number; reason: "interrupted" | "closed"; sourceCount: number; operationMs: number }
   | { stage: "browser.context"; atMs: number; state: AudioContextState; sampleRate: number; outputLatencyMs?: number }
   | { stage: "browser.route"; atMs: number; deviceId?: string; label?: string; trackState?: MediaStreamTrackState; recoveries: number }
+  | { stage: "browser.transport"; atMs: number; transport: "websocket" | "webrtc"; fallbackReason?: MediaTransportFallbackReason }
+  | ({ stage: "browser.webrtc" } & WebRtcStatsSample)
   | {
       stage: "browser.clock_sync";
       atMs: number;
@@ -20,6 +25,8 @@ export type BrowserMediaTelemetryEvent =
     };
 
 export interface MediaDiagnostics {
+  transport: "websocket" | "webrtc" | undefined;
+  transportFallbackReason: MediaTransportFallbackReason | undefined;
   codec: MediaPlaybackCodec | undefined;
   sampleRate: number | undefined;
   mediaFormatChanges: number;
@@ -49,6 +56,67 @@ export interface MediaDiagnostics {
   rttJitterP95Ms: number | undefined;
   contextState: AudioContextState | undefined;
   contextSampleRate: number | undefined;
+  webrtcSamples: number;
+  uplinkBitrateKbps: number | undefined;
+  uplinkBitrateP95Kbps: number | undefined;
+  downlinkBitrateKbps: number | undefined;
+  downlinkBitrateP95Kbps: number | undefined;
+  uplinkPacketLossPct: number | undefined;
+  uplinkPacketLossP95Pct: number | undefined;
+  downlinkPacketLossPct: number | undefined;
+  downlinkPacketLossP95Pct: number | undefined;
+  webrtcRttMs: number | undefined;
+  webrtcRttP95Ms: number | undefined;
+  downlinkJitterMs: number | undefined;
+  downlinkJitterP95Ms: number | undefined;
+  downlinkJitterBufferMs: number | undefined;
+  downlinkJitterBufferP95Ms: number | undefined;
+  downlinkJitterBufferTargetMs: number | undefined;
+  downlinkJitterBufferTargetP95Ms: number | undefined;
+  downlinkJitterBufferMinimumMs: number | undefined;
+  downlinkJitterBufferMinimumP95Ms: number | undefined;
+  concealedSamples: number;
+  concealmentEvents: number;
+}
+
+/** Compact, shared summary for the conversation footer and Agent preview panel. */
+export function formatWebRtcDiagnostics(diagnostics: MediaDiagnostics): string {
+  const details = formatMediaTransportDetails(diagnostics);
+  return details === "" ? "WebRTC" : `WebRTC · ${details}`;
+}
+
+export function formatMediaTransportDetails(diagnostics: MediaDiagnostics): string {
+  const parts: string[] = [];
+  if (diagnostics.codec === "opus") {
+    parts.push(`Opus${diagnostics.sampleRate === undefined ? "" : ` ${Math.round(diagnostics.sampleRate / 1_000)}kHz`}`);
+  } else if (diagnostics.transport === "websocket") {
+    parts.push(diagnostics.codec === "pcm_s16le"
+      ? `PCM16${diagnostics.sampleRate === undefined ? "" : ` ${Math.round(diagnostics.sampleRate / 1_000)}kHz`}`
+      : diagnostics.codec === "pcm_f32le"
+        ? `PCM f32${diagnostics.sampleRate === undefined ? "" : ` ${Math.round(diagnostics.sampleRate / 1_000)}kHz`}`
+        : "PCM");
+  }
+  if (diagnostics.transport === "webrtc") {
+    if (diagnostics.uplinkBitrateKbps !== undefined) parts.push(`↑ ${Math.round(diagnostics.uplinkBitrateKbps)} kbps`);
+    if (diagnostics.downlinkBitrateKbps !== undefined) parts.push(`↓ ${Math.round(diagnostics.downlinkBitrateKbps)} kbps`);
+    if (diagnostics.uplinkPacketLossPct !== undefined) parts.push(`↑loss ${diagnostics.uplinkPacketLossPct.toFixed(1)}%`);
+    if (diagnostics.downlinkPacketLossPct !== undefined) parts.push(`↓loss ${diagnostics.downlinkPacketLossPct.toFixed(1)}%`);
+    if (diagnostics.downlinkJitterMs !== undefined) parts.push(`jitter ${Math.round(diagnostics.downlinkJitterMs)}ms`);
+    if (diagnostics.webrtcRttMs !== undefined) parts.push(`RTT ${Math.round(diagnostics.webrtcRttMs)}ms`);
+  } else if (diagnostics.transport === "websocket" && diagnostics.frames > 0) {
+    parts.push(`${Math.round(diagnostics.bufferDepthMs)}ms buffer`, `underrun ${diagnostics.underruns}`);
+    if (diagnostics.rttMs !== undefined) parts.push(`RTT ${Math.round(diagnostics.rttMs)}ms`);
+  }
+  return parts.join(" · ");
+}
+
+export function mediaTransportFallbackMessage(reason: MediaTransportFallbackReason | undefined):
+  | "LiveKit 服务不可用，已回退到 WebSocket"
+  | "LiveKit 房间连接失败，已回退到 WebSocket"
+  | undefined {
+  if (reason === "livekit_service_unavailable") return "LiveKit 服务不可用，已回退到 WebSocket";
+  if (reason === "livekit_room_connection_failed") return "LiveKit 房间连接失败，已回退到 WebSocket";
+  return undefined;
 }
 
 export interface MediaAttributionSample {
@@ -159,6 +227,15 @@ export class MediaTraceRecorder {
   private readonly interruptionStops = new FixedHistogram(1, 1_000);
   private readonly rtts = new FixedHistogram(1, 2_000);
   private readonly rttJitters = new FixedHistogram(1, 2_000);
+  private readonly uplinkBitrates = new FixedHistogram(1, 1_000);
+  private readonly downlinkBitrates = new FixedHistogram(1, 1_000);
+  private readonly uplinkLoss = new FixedHistogram(0.1, 100);
+  private readonly downlinkLoss = new FixedHistogram(0.1, 100);
+  private readonly webRtcRtts = new FixedHistogram(1, 2_000);
+  private readonly downlinkJitters = new FixedHistogram(1, 1_000);
+  private readonly downlinkJitterBuffers = new FixedHistogram(1, 2_000);
+  private readonly downlinkJitterBufferTargets = new FixedHistogram(1, 2_000);
+  private readonly downlinkJitterBufferMinimums = new FixedHistogram(1, 2_000);
   private previousRttMs: number | undefined;
 
   constructor(private readonly now: () => number = monotonicEpochMs) {
@@ -173,6 +250,15 @@ export class MediaTraceRecorder {
     this.interruptionStops.reset();
     this.rtts.reset();
     this.rttJitters.reset();
+    this.uplinkBitrates.reset();
+    this.downlinkBitrates.reset();
+    this.uplinkLoss.reset();
+    this.downlinkLoss.reset();
+    this.webRtcRtts.reset();
+    this.downlinkJitters.reset();
+    this.downlinkJitterBuffers.reset();
+    this.downlinkJitterBufferTargets.reset();
+    this.downlinkJitterBufferMinimums.reset();
     this.previousRttMs = undefined;
     this.startedAtMs = this.now();
   }
@@ -182,13 +268,13 @@ export class MediaTraceRecorder {
     if (!event.type.startsWith("media.")) return;
     this.push({ clock: "server", event });
     if (event.type === "media.frame") {
+      const browserDecodesFrame = this.diagnostics.transport !== "webrtc";
       this.diagnostics = {
         ...this.diagnostics,
         mediaFormatChanges: this.diagnostics.mediaFormatChanges
-          + (this.diagnostics.frames > 0
+          + (browserDecodesFrame && this.diagnostics.frames > 0
             && (this.diagnostics.codec !== event.codec || this.diagnostics.sampleRate !== event.sampleRate) ? 1 : 0),
-        codec: event.codec,
-        sampleRate: event.sampleRate,
+        ...(browserDecodesFrame ? { codec: event.codec, sampleRate: event.sampleRate } : {}),
         frames: this.diagnostics.frames + 1,
         bytes: this.diagnostics.bytes + event.bytes,
         audioMs: this.diagnostics.audioMs + event.audioMs,
@@ -289,6 +375,67 @@ export class MediaTraceRecorder {
         ...this.diagnostics,
         contextState: event.state,
         contextSampleRate: event.sampleRate,
+      };
+    } else if (event.stage === "browser.transport") {
+      this.diagnostics = {
+        ...this.diagnostics,
+        transport: event.transport,
+        transportFallbackReason: event.fallbackReason,
+      };
+    } else if (event.stage === "browser.webrtc") {
+      const uplink = event.direction === "uplink";
+      if (event.bitrateKbps !== undefined) (uplink ? this.uplinkBitrates : this.downlinkBitrates).observe(event.bitrateKbps);
+      if (event.packetLossPct !== undefined) (uplink ? this.uplinkLoss : this.downlinkLoss).observe(event.packetLossPct);
+      if (event.roundTripTimeMs !== undefined) this.webRtcRtts.observe(event.roundTripTimeMs);
+      if (!uplink && event.jitterMs !== undefined) this.downlinkJitters.observe(event.jitterMs);
+      if (!uplink && event.jitterBufferMs !== undefined) this.downlinkJitterBuffers.observe(event.jitterBufferMs);
+      if (!uplink && event.jitterBufferTargetMs !== undefined) this.downlinkJitterBufferTargets.observe(event.jitterBufferTargetMs);
+      if (!uplink && event.jitterBufferMinimumMs !== undefined) this.downlinkJitterBufferMinimums.observe(event.jitterBufferMinimumMs);
+      const opus = event.codec?.toLowerCase().includes("opus");
+      this.diagnostics = {
+        ...this.diagnostics,
+        transport: "webrtc",
+        webrtcSamples: this.diagnostics.webrtcSamples + 1,
+        ...(opus ? { codec: "opus" as const } : {}),
+        ...(event.sampleRate !== undefined ? { sampleRate: event.sampleRate } : {}),
+        ...(uplink && event.bitrateKbps !== undefined ? {
+          uplinkBitrateKbps: event.bitrateKbps,
+          uplinkBitrateP95Kbps: this.uplinkBitrates.percentile(0.95),
+        } : {}),
+        ...(!uplink && event.bitrateKbps !== undefined ? {
+          downlinkBitrateKbps: event.bitrateKbps,
+          downlinkBitrateP95Kbps: this.downlinkBitrates.percentile(0.95),
+        } : {}),
+        ...(uplink && event.packetLossPct !== undefined ? {
+          uplinkPacketLossPct: event.packetLossPct,
+          uplinkPacketLossP95Pct: this.uplinkLoss.percentile(0.95),
+        } : {}),
+        ...(!uplink && event.packetLossPct !== undefined ? {
+          downlinkPacketLossPct: event.packetLossPct,
+          downlinkPacketLossP95Pct: this.downlinkLoss.percentile(0.95),
+        } : {}),
+        ...(event.roundTripTimeMs === undefined ? {} : {
+          webrtcRttMs: event.roundTripTimeMs,
+          webrtcRttP95Ms: this.webRtcRtts.percentile(0.95),
+        }),
+        ...(uplink || event.jitterMs === undefined ? {} : {
+          downlinkJitterMs: event.jitterMs,
+          downlinkJitterP95Ms: this.downlinkJitters.percentile(0.95),
+        }),
+        ...(uplink || event.jitterBufferMs === undefined ? {} : {
+          downlinkJitterBufferMs: event.jitterBufferMs,
+          downlinkJitterBufferP95Ms: this.downlinkJitterBuffers.percentile(0.95),
+        }),
+        ...(uplink || event.jitterBufferTargetMs === undefined ? {} : {
+          downlinkJitterBufferTargetMs: event.jitterBufferTargetMs,
+          downlinkJitterBufferTargetP95Ms: this.downlinkJitterBufferTargets.percentile(0.95),
+        }),
+        ...(uplink || event.jitterBufferMinimumMs === undefined ? {} : {
+          downlinkJitterBufferMinimumMs: event.jitterBufferMinimumMs,
+          downlinkJitterBufferMinimumP95Ms: this.downlinkJitterBufferMinimums.percentile(0.95),
+        }),
+        concealedSamples: this.diagnostics.concealedSamples + (event.concealedSamplesDelta ?? 0),
+        concealmentEvents: this.diagnostics.concealmentEvents + (event.concealmentEventsDelta ?? 0),
       };
     }
   }
@@ -458,6 +605,8 @@ export class MediaTraceRecorder {
 
 export function emptyMediaDiagnostics(): MediaDiagnostics {
   return {
+    transport: undefined,
+    transportFallbackReason: undefined,
     codec: undefined,
     sampleRate: undefined,
     mediaFormatChanges: 0,
@@ -487,5 +636,26 @@ export function emptyMediaDiagnostics(): MediaDiagnostics {
     rttJitterP95Ms: undefined,
     contextState: undefined,
     contextSampleRate: undefined,
+    webrtcSamples: 0,
+    uplinkBitrateKbps: undefined,
+    uplinkBitrateP95Kbps: undefined,
+    downlinkBitrateKbps: undefined,
+    downlinkBitrateP95Kbps: undefined,
+    uplinkPacketLossPct: undefined,
+    uplinkPacketLossP95Pct: undefined,
+    downlinkPacketLossPct: undefined,
+    downlinkPacketLossP95Pct: undefined,
+    webrtcRttMs: undefined,
+    webrtcRttP95Ms: undefined,
+    downlinkJitterMs: undefined,
+    downlinkJitterP95Ms: undefined,
+    downlinkJitterBufferMs: undefined,
+    downlinkJitterBufferP95Ms: undefined,
+    downlinkJitterBufferTargetMs: undefined,
+    downlinkJitterBufferTargetP95Ms: undefined,
+    downlinkJitterBufferMinimumMs: undefined,
+    downlinkJitterBufferMinimumP95Ms: undefined,
+    concealedSamples: 0,
+    concealmentEvents: 0,
   };
 }

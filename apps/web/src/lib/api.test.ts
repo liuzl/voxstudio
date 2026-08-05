@@ -127,6 +127,28 @@ describe("Agent API", () => {
     });
   });
 
+  test("requests a room-scoped LiveKit grant for an ordinary Studio conversation", async () => {
+    let body: unknown;
+    stubFetch((_input, init) => {
+      body = JSON.parse(String(init?.body));
+      return Response.json({
+        server_url: "wss://media.example",
+        participant_token: "jwt",
+        room_name: "vox-room",
+        participant_identity: "web-user",
+        expires_at: "2026-08-05T00:05:00.000Z",
+      });
+    });
+    const result = await issueLiveKitBootstrap({
+      language: "auto",
+      voice: "shuber",
+      ttsEngine: "tts",
+      turnTaking: "speculative",
+    });
+    expect(result.agent).toBeUndefined();
+    expect(body).toEqual({ language: "auto", voice: "shuber", ttsEngine: "tts", turnTaking: "speculative" });
+  });
+
   test("carries revisions through create, update, publish, and delete", async () => {
     const calls: Array<{ path: string; method: string; body?: unknown }> = [];
     stubFetch((input, init) => {

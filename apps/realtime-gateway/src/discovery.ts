@@ -201,7 +201,7 @@ export function llmsTxt(options: DiscoveryOptions): string {
 - GET|POST /v1/voices, GET|DELETE /v1/voices/{id} — the caller's voice bank
 - POST /v1/design-profiles — reproducible designed voice
 ${options.library ? "- GET /v1/library, GET|PATCH|DELETE /v1/library/{id}, GET /v1/library/{id}/audio, POST /v1/library/{id}/promote — captures\n" : "- /v1/library — not enabled on this deployment (404 library_disabled)\n"}- WS /v1/realtime — live session protocol; same auth header
-${options.livekit === true ? "- POST /v1/realtime/livekit/token — atomically bind an owner-scoped Agent and mint its short-lived browser participant token\n" : ""}
+${options.livekit === true ? "- POST /v1/realtime/livekit/token — bind an Agent or ordinary Studio session and mint its short-lived browser participant token\n" : ""}
 
 ## Quota
 
@@ -667,7 +667,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
       "/v1/realtime/livekit/token": {
         post: {
           summary: "Mint a short-lived LiveKit browser participant token",
-          description: "Atomically resolves an owner-scoped Agent, registers that immutable bootstrap with the deployed media adapter, then creates a unique opaque room and participant identity. The token expires in at most ten minutes and permits only microphone publication, subscription, and data messages.",
+          description: "Atomically registers either an owner-scoped Agent selection or an ordinary Studio conversation with the deployed media adapter, then creates a unique opaque room and participant identity. The token expires in at most ten minutes and permits only microphone publication, subscription, and data messages.",
           requestBody: {
             required: true,
             content: {
@@ -679,8 +679,16 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
                     agentSource: { type: "string", enum: ["published", "draft"], default: "published" },
                     agentRevision: { type: "integer", minimum: 1, description: "Required exact revision for a draft preview." },
                     agentVersion: { type: "integer", minimum: 1, description: "Optional exact immutable published version." },
+                    language: { type: "string", description: "Ordinary Studio conversation language hint." },
+                    voice: { type: "string", description: "Ordinary Studio conversation output voice." },
+                    asrEngine: { type: "string" },
+                    llmEngine: { type: "string" },
+                    ttsEngine: { type: "string" },
+                    studioTools: { type: "boolean" },
+                    welcome: { type: "string" },
+                    nudgeAfterSeconds: { type: "number", minimum: 0 },
+                    turnTaking: { type: "string", enum: ["conservative", "speculative"] },
                   },
-                  required: ["agent"],
                   additionalProperties: false,
                 },
               },
@@ -712,12 +720,12 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
                         required: ["agentId", "source"],
                       },
                     },
-                    required: ["server_url", "participant_token", "room_name", "participant_identity", "expires_at", "agent"],
+                    required: ["server_url", "participant_token", "room_name", "participant_identity", "expires_at"],
                   },
                 },
               },
             },
-            "400": errorResponse("The Agent selection is malformed (`bad_request` or `agent_invalid`)."),
+            "400": errorResponse("The Agent or Studio session selection is malformed (`bad_request` or `agent_invalid`)."),
             "403": errorResponse("An ambient browser request came from an untrusted Origin (`forbidden_origin`)."),
             "404": errorResponse("The selected Agent does not exist for this owner (`agent_not_found`)."),
             "409": errorResponse("The Agent is unpublished or its requested revision/version is stale."),

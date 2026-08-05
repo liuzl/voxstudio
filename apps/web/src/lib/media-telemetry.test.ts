@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test";
 import type { GatewayEvent } from "@voxstudio/realtime-gateway/protocol";
 import {
   attributeMediaDelay,
+  formatMediaTransportDetails,
+  formatWebRtcDiagnostics,
+  mediaTransportFallbackMessage,
   MediaTraceRecorder,
   type MediaAttributionSample,
   type MediaDelayLayer,
@@ -265,5 +268,125 @@ describe("media delay attribution", () => {
       rttP95Ms: 70,
       rttJitterP95Ms: 40,
     });
+  });
+
+  test("aggregates WebRTC transport health and retains it in the metadata-only trace", () => {
+    const recorder = new MediaTraceRecorder(() => 5_000);
+    recorder.observeBrowser({
+      stage: "browser.transport", atMs: 900, transport: "webrtc",
+    });
+    recorder.observeBrowser({
+      stage: "browser.webrtc", atMs: 1_000, direction: "uplink",
+      bytes: 10_000, packets: 100, packetsLost: 1,
+      bitrateKbps: 36.2, packetLossPct: 0.7, roundTripTimeMs: 48.4,
+      codec: "audio/opus", sampleRate: 48_000,
+    });
+    recorder.observeBrowser({
+      stage: "browser.webrtc", atMs: 1_000, direction: "downlink",
+      bytes: 12_000, packets: 120, packetsLost: 2,
+      bitrateKbps: 42.6, packetLossPct: 1.2, jitterMs: 14.3,
+      roundTripTimeMs: 49.1, jitterBufferMs: 38.2,
+      jitterBufferTargetMs: 52.3, jitterBufferMinimumMs: 20.1,
+      concealedSamplesDelta: 120, concealmentEventsDelta: 2,
+      codec: "audio/opus", sampleRate: 48_000,
+    });
+
+    const summary = recorder.summary();
+    expect(summary).toMatchObject({
+      transport: "webrtc",
+      codec: "opus",
+      sampleRate: 48_000,
+      webrtcSamples: 2,
+      uplinkBitrateKbps: 36.2,
+      uplinkBitrateP95Kbps: 37,
+      downlinkBitrateKbps: 42.6,
+      downlinkBitrateP95Kbps: 43,
+      webrtcRttP95Ms: 50,
+      downlinkJitterP95Ms: 15,
+      downlinkJitterBufferP95Ms: 39,
+      downlinkJitterBufferTargetP95Ms: 53,
+      downlinkJitterBufferMinimumP95Ms: 21,
+      concealedSamples: 120,
+      concealmentEvents: 2,
+    });
+    expect(summary.uplinkPacketLossP95Pct).toBeCloseTo(0.7);
+    expect(summary.downlinkPacketLossP95Pct).toBeCloseTo(1.2);
+    expect(formatWebRtcDiagnostics(summary)).toBe("WebRTC · Opus 48kHz · ↑ 36 kbps · ↓ 43 kbps · ↑loss 0.7% · ↓loss 1.2% · jitter 14ms · RTT 49ms");
+    const exported = recorder.export() as {
+      privacy: string;
+      events: { event: { stage: string } }[];
+      timeline: { stage: string }[];
+    };
+    expect(exported.privacy).toBe("metadata_only");
+    expect(exported.events.filter(entry => entry.event.stage === "browser.webrtc")).toHaveLength(2);
+    expect(exported.timeline.filter(entry => entry.stage === "browser.webrtc")).toHaveLength(2);
+
+    // media.frame describes production timing on both transports. LiveKit forwards the
+    // same metadata over its data channel, so it must not relabel WebRTC as WebSocket.
+    recorder.observeGateway({
+      v: 1,
+      sequence: 1,
+      sessionId: "s-1",
+      timestampMs: 1_100,
+      type: "media.frame",
+      frameId: 1,
+      streamId: "stream-1",
+      mediaSequence: 0,
+      timestampSamples: 0,
+      turnId: "t-1",
+      revision: 0,
+      codec: "pcm_s16le",
+      sampleRate: 24_000,
+      channels: 1,
+      bytes: 960,
+      audioMs: 20,
+      producedAtMs: 1_090,
+      enqueuedAtMs: 1_095,
+    });
+    expect(recorder.summary()).toMatchObject({ transport: "webrtc", codec: "opus", sampleRate: 48_000 });
+
+    recorder.reset();
+    expect(recorder.summary()).toMatchObject({ transport: undefined, webrtcSamples: 0, concealedSamples: 0 });
+  });
+
+  test("makes an explicit WebSocket fallback and its safe reason visible before audio arrives", () => {
+    const recorder = new MediaTraceRecorder(() => 2_000);
+    recorder.observeBrowser({
+      stage: "browser.transport",
+      atMs: 1_000,
+      transport: "websocket",
+      fallbackReason: "livekit_room_connection_failed",
+    });
+    expect(recorder.summary()).toMatchObject({
+      transport: "websocket",
+      transportFallbackReason: "livekit_room_connection_failed",
+      frames: 0,
+    });
+    expect(formatMediaTransportDetails(recorder.summary())).toBe("PCM");
+    expect(mediaTransportFallbackMessage(recorder.summary().transportFallbackReason))
+      .toBe("LiveKit 房间连接失败，已回退到 WebSocket");
+
+    recorder.observeGateway({
+      v: 1,
+      sequence: 1,
+      sessionId: "s-1",
+      timestampMs: 1_100,
+      type: "media.frame",
+      frameId: 1,
+      streamId: "stream-1",
+      mediaSequence: 0,
+      timestampSamples: 0,
+      turnId: "t-1",
+      revision: 0,
+      codec: "pcm_s16le",
+      sampleRate: 24_000,
+      channels: 1,
+      bytes: 960,
+      audioMs: 20,
+      producedAtMs: 1_090,
+      enqueuedAtMs: 1_095,
+    });
+    expect(formatMediaTransportDetails(recorder.summary())).toBe("PCM16 24kHz · 0ms buffer · underrun 0");
+    expect(recorder.summary().transportFallbackReason).toBe("livekit_room_connection_failed");
   });
 });

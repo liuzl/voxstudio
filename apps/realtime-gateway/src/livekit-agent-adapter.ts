@@ -20,8 +20,10 @@ export interface LiveKitAgentBootstrap {
   expiresAt: string;
   ownerUserId: string;
   start: SessionStartOptions;
-  spec: AgentSpec;
-  agent: TraceAgentIdentity;
+  /** Present when this room is bound to a saved Agent; ordinary Studio sessions omit it. */
+  spec?: AgentSpec;
+  /** Immutable trace identity for Agent sessions; ordinary Studio sessions are unbound. */
+  agent?: TraceAgentIdentity;
   /** Releases the gateway's pending-bootstrap reservation. Must be idempotent. */
   onClosed?: () => void;
 }

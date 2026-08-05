@@ -12,6 +12,8 @@ export const agentBuilderMessages = {
   "麦克风恢复失败：{message}": "Microphone recovery failed: {message}",
   "麦克风静音切换失败：{message}": "Could not change microphone mute state: {message}",
   "WebRTC 暂时不可用，已切换到兼容模式": "WebRTC is temporarily unavailable. Switched to compatibility mode.",
+  "LiveKit 服务不可用，已回退到 WebSocket": "LiveKit service unavailable; fell back to WebSocket.",
+  "LiveKit 房间连接失败，已回退到 WebSocket": "LiveKit room connection failed; fell back to WebSocket.",
   "系统默认输入": "System default input",
   "输入设备": "Input device",
   "输入已暂停": "Input paused",

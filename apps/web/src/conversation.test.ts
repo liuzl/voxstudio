@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { GatewayApiError } from "./lib/api";
-import { mayFallbackFromLiveKit } from "./conversation";
+import { liveKitFallbackReason, mayFallbackFromLiveKit } from "./conversation";
 
 function failure(
   phase: "bootstrap" | "room connect" | "microphone capture" | "microphone publish",
@@ -18,5 +18,11 @@ describe("LiveKit compatibility fallback", () => {
     expect(mayFallbackFromLiveKit(failure("bootstrap", new GatewayApiError("unauthorized", 401)))).toBe(false);
     expect(mayFallbackFromLiveKit(failure("microphone capture", new Error("denied")))).toBe(false);
     expect(mayFallbackFromLiveKit(failure("microphone publish", new Error("denied")))).toBe(false);
+  });
+
+  test("classifies only safe, user-visible fallback reasons", () => {
+    expect(liveKitFallbackReason(failure("room connect", new Error("network down")))).toBe("livekit_room_connection_failed");
+    expect(liveKitFallbackReason(failure("bootstrap", new GatewayApiError("unavailable", 503)))).toBe("livekit_service_unavailable");
+    expect(liveKitFallbackReason(failure("bootstrap", new GatewayApiError("capacity", 429)))).toBeUndefined();
   });
 });

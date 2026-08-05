@@ -5,7 +5,11 @@ import { MicCapture, SpeakerOutput } from "./lib/audio";
 import { GatewayClient } from "./lib/client";
 import { gatewayRealtimeUrl } from "./lib/gateway-auth";
 import type { BrowserLiveKitClient } from "./lib/livekit-client";
-import { MediaTraceRecorder, type BrowserMediaTelemetryEvent } from "./lib/media-telemetry";
+import {
+  MediaTraceRecorder,
+  type BrowserMediaTelemetryEvent,
+  type MediaTransportFallbackReason,
+} from "./lib/media-telemetry";
 import { preparedLiveKitClient } from "./lib/useGatewayHealth";
 import { useStudio } from "./store";
 
@@ -24,6 +28,13 @@ export function mayFallbackFromLiveKit(error: unknown): boolean {
   // Authentication, validation, quota, and capacity refusals apply to the conversation,
   // not just to WebRTC. Only transport/service failures should enter compatibility mode.
   return !(error.cause instanceof GatewayApiError) || error.cause.status >= 500;
+}
+
+export function liveKitFallbackReason(error: unknown): MediaTransportFallbackReason | undefined {
+  if (!mayFallbackFromLiveKit(error)) return undefined;
+  return (error as Error & { liveKitPhase?: unknown }).liveKitPhase === "room connect"
+    ? "livekit_room_connection_failed"
+    : "livekit_service_unavailable";
 }
 
 function downloadTracePayload(payload: Record<string, unknown>): void {
@@ -56,15 +67,45 @@ export class ConversationController {
     const store = useStudio.getState();
     this.mediaTrace.reset();
     store.resetMediaDiagnostics();
-    const LiveKitClient = overrides?.agent ? preparedLiveKitClient() : undefined;
-    if (overrides?.agent && LiveKitClient) {
+    const ordinaryBehavior: SessionStartOptions = {
+      // The ASR hint stays "auto": measured identical to "zh" on the SenseVoice slot
+      // and remains neutral if the conversation ASR is routed elsewhere.
+      language: "auto",
+      ...(store.voice ? { voice: store.voice } : {}),
+      ...(store.conversationAsrEngine ? { asrEngine: store.conversationAsrEngine } : {}),
+      ...(store.conversationLlmEngine ? { llmEngine: store.conversationLlmEngine } : {}),
+      ...(store.conversationTtsEngine ? { ttsEngine: store.conversationTtsEngine } : {}),
+      turnTaking: "speculative",
+      ...(store.welcome.trim() ? { welcome: store.welcome.trim() } : {}),
+      ...(store.nudgeAfterSeconds > 0 ? { nudgeAfterSeconds: store.nudgeAfterSeconds } : {}),
+      ...(store.studioTools ? { studioTools: true } : {}),
+    };
+    const webSocketStart: SessionStartOptions = overrides?.agent ? {
+      // Agent preview/runtime options are a complete behavior snapshot. Only endpoint
+      // capabilities are added here; local conversation prefs must not override it.
+      bargeIn: true,
+      playbackAck: true,
+      mediaTelemetry: true,
+      media: webMediaV2,
+      ...overrides,
+    } : {
+      ...ordinaryBehavior,
+      bargeIn: true,
+      playbackAck: true,
+      mediaTelemetry: true,
+      media: webMediaV2,
+    };
+    const liveKitSelection: SessionStartOptions = overrides?.agent ? {
+      agent: overrides.agent,
+      ...(overrides.agentSource === undefined ? {} : { agentSource: overrides.agentSource }),
+      ...(overrides.agentRevision === undefined ? {} : { agentRevision: overrides.agentRevision }),
+      ...(overrides.agentVersion === undefined ? {} : { agentVersion: overrides.agentVersion }),
+    } : ordinaryBehavior;
+    let fallbackReason: MediaTransportFallbackReason | undefined;
+    const LiveKitClient = preparedLiveKitClient();
+    if (LiveKitClient) {
       const client = new LiveKitClient({
-        selection: {
-          agent: overrides.agent,
-          ...(overrides.agentSource === undefined ? {} : { agentSource: overrides.agentSource }),
-          ...(overrides.agentRevision === undefined ? {} : { agentRevision: overrides.agentRevision }),
-          ...(overrides.agentVersion === undefined ? {} : { agentVersion: overrides.agentVersion }),
-        },
+        selection: liveKitSelection,
         inputDeviceId,
         onEvent: event => this.handleEvent(event),
         onConnectionChange: state => useStudio.getState().setConnection(state),
@@ -72,6 +113,7 @@ export class ConversationController {
           useStudio.getState().setCapability(endpoint);
           this.recordRoute(endpoint);
         },
+        onMediaTelemetry: event => this.recordBrowserMedia(event),
         onMicLevel: level => useStudio.getState().setMicLevel(level),
         onDisconnected: () => {
           if (!this.stopped) void stopConversation();
@@ -83,46 +125,30 @@ export class ConversationController {
       try {
         await client.connect();
         if (this.stopped) throw new Error("conversation start cancelled");
+        this.recordBrowserMedia({
+          stage: "browser.transport",
+          atMs: performance.timeOrigin + performance.now(),
+          transport: "webrtc",
+        });
         useStudio.getState().setActive(true);
         return;
       } catch (error) {
         this.client = undefined;
         this.livekit = undefined;
         if (!mayFallbackFromLiveKit(error) || this.stopped) throw error;
+        fallbackReason = liveKitFallbackReason(error);
         store.toast("info", t("WebRTC 暂时不可用，已切换到兼容模式"));
       }
     }
+    this.recordBrowserMedia({
+      stage: "browser.transport",
+      atMs: performance.timeOrigin + performance.now(),
+      transport: "websocket",
+      ...(fallbackReason === undefined ? {} : { fallbackReason }),
+    });
     const client = new GatewayClient({
       url: gatewayRealtimeUrl(),
-      startOptions: overrides?.agent ? {
-        // Agent preview/runtime options are already a complete behavior snapshot on the
-        // gateway. Only endpoint capabilities belong here; local conversation prefs must
-        // not silently override the saved Agent's voice, prompt, or greeting.
-        bargeIn: true,
-        playbackAck: true,
-        mediaTelemetry: true,
-        media: webMediaV2,
-        ...overrides,
-      } : {
-        // The ASR hint stays "auto": measured identical to "zh" on the SenseVoice slot
-        // (2026-07-17, pure-zh / code-switched / pure-en all byte-equal), and neutral if
-        // the conversation ASR is ever routed to an engine that does care.
-        language: "auto",
-        ...(store.voice ? { voice: store.voice } : {}),
-        ...(store.conversationAsrEngine ? { asrEngine: store.conversationAsrEngine } : {}),
-        ...(store.conversationLlmEngine ? { llmEngine: store.conversationLlmEngine } : {}),
-        ...(store.conversationTtsEngine ? { ttsEngine: store.conversationTtsEngine } : {}),
-        // The browser endpoint negotiates AEC in getUserMedia, so barge-in is on and the
-        // endpoint owns the audible-playback clock.
-        bargeIn: true,
-        playbackAck: true,
-        mediaTelemetry: true,
-        media: webMediaV2,
-        turnTaking: "speculative",
-        ...(store.welcome.trim() ? { welcome: store.welcome.trim() } : {}),
-        ...(store.nudgeAfterSeconds > 0 ? { nudgeAfterSeconds: store.nudgeAfterSeconds } : {}),
-        ...(store.studioTools ? { studioTools: true } : {}),
-      },
+      startOptions: webSocketStart,
       onEvent: event => this.handleEvent(event),
       onAudio: (samples, delivery) => {
         this.mediaTrace.observeDelivery(samples, delivery);

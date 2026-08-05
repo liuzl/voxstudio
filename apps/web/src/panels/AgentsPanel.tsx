@@ -33,7 +33,7 @@ import {
   X,
 } from "lucide-react";
 import { PageHeader, pageShellClass, primaryButton, secondaryButton } from "../components/StudioPage";
-import { conversationControls, startConversation, stopConversation } from "../conversation";
+import { conversationControls, downloadMediaTrace, startConversation, stopConversation } from "../conversation";
 import { resolveLocale, useI18n, useT, type MessageKey, type UiLocale } from "../i18n";
 import {
   auditAgent,
@@ -56,6 +56,7 @@ import {
   type VoiceEntry,
 } from "../lib/api";
 import type { ConnectionState } from "../lib/client";
+import { formatMediaTransportDetails, mediaTransportFallbackMessage } from "../lib/media-telemetry";
 import { useStudio } from "../store";
 import { AgentConversations } from "./AgentConversations";
 
@@ -691,6 +692,10 @@ export function validateAgentDraftDependencies(
 }
 
 export type AgentPreviewSource = { type: "draft" } | { type: "published"; version: number };
+
+export function agentPreviewTraceKey(source: AgentPreviewSource, draftRevision: number): string {
+  return source.type === "draft" ? `draft:${draftRevision}` : `published:${source.version}`;
+}
 
 export function agentPreviewOptions(record: AgentRecord, source: AgentPreviewSource) {
   return source.type === "draft"
@@ -1373,9 +1378,13 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
   const turns = useStudio(state => state.turns);
   const muted = useStudio(state => state.muted);
   const micLevel = useStudio(state => state.micLevel);
+  const media = useStudio(state => state.mediaDiagnostics);
+  const mediaDetails = formatMediaTransportDetails(media);
+  const fallbackMessage = mediaTransportFallbackMessage(media.transportFallbackReason);
   const clearHistory = useStudio(state => state.clearHistory);
   const toast = useStudio(state => state.toast);
   const [starting, setStarting] = useState(false);
+  const [previewTraceKey, setPreviewTraceKey] = useState<string>();
   const [hasUnseen, setHasUnseen] = useState(false);
   const previewOwned = useRef(false);
   const previewStarting = useRef(false);
@@ -1437,6 +1446,7 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
     const current = () => mounted.current && operationGeneration.current === generation;
     previewStarting.current = true;
     setStarting(true);
+    setPreviewTraceKey(undefined);
     try {
       const saved = source.type === "draft" && dirty ? await onSave() : record;
       if (!saved) return;
@@ -1447,6 +1457,7 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
       await startConversation(agentPreviewOptions(saved, source));
       if (!current()) return;
       previewOwned.current = true;
+      setPreviewTraceKey(agentPreviewTraceKey(source, saved.revision));
     } catch (error) {
       if (current()) toast("error", error instanceof Error ? error.message : String(error));
     } finally {
@@ -1475,6 +1486,7 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
     try {
       const saved = source.type === "draft" && dirty ? await onSave() : record;
       if (!saved || !current()) return;
+      setPreviewTraceKey(undefined);
       previewOwned.current = false;
       await stopConversation();
       if (!current()) return;
@@ -1484,6 +1496,7 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
       await startConversation(agentPreviewOptions(saved, source));
       if (!current()) return;
       previewOwned.current = true;
+      setPreviewTraceKey(agentPreviewTraceKey(source, saved.revision));
     } catch (error) {
       if (current()) toast("error", error instanceof Error ? error.message : String(error));
     } finally {
@@ -1549,6 +1562,24 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
       <span className="sr-only" aria-live="polite" aria-atomic="true">{liveAnnouncement}</span>
 
       <footer className="shrink-0 border-t border-edge-faint bg-canvas p-4">
+        {previewTraceKey === agentPreviewTraceKey(source, record.revision) && media.transport !== undefined ? (
+          <div className="mb-3 space-y-1.5 rounded-lg border border-edge-faint bg-surface px-2.5 py-2 text-[9px] text-fg-faint">
+            <div className="flex items-center gap-2">
+              <span className={`shrink-0 rounded-full border px-2 py-0.5 font-medium ${media.transport === "webrtc" ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/10 dark:text-emerald-300" : "border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-500/25 dark:bg-sky-500/10 dark:text-sky-300"}`}>{media.transport === "webrtc" ? "WebRTC" : "WebSocket"}</span>
+              <span className="min-w-0 flex-1 truncate" title={mediaDetails}>{mediaDetails}</span>
+              <button
+                type="button"
+                onClick={downloadMediaTrace}
+                className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-1 hover:bg-fill-hover hover:text-fg-secondary"
+                title="Metadata only; no audio or transcript content"
+                aria-label={`media trace · ${t("下载")}`}
+              >
+                <Download className="size-3" /> trace
+              </button>
+            </div>
+            {fallbackMessage ? <p className="truncate text-amber-600 dark:text-amber-300" title={t(fallbackMessage)}>{t(fallbackMessage)}</p> : null}
+          </div>
+        ) : null}
         <div className="mb-3 flex items-center justify-between text-[10px] text-fg-faint">
           <span className="flex items-center gap-2"><span className={`size-1.5 rounded-full ${previewConnected ? "bg-emerald-400" : isPreview ? "bg-amber-400" : "bg-edge-hover"}`} />{isPreview ? stateLabel : t("麦克风将在开始后启用")}</span>
           <span className={`flex h-3 items-end gap-[2px] ${muted ? "opacity-35" : ""}`}>{[0.15, 0.3, 0.5, 0.7, 0.9].map((threshold, index) => <span key={threshold} className={`w-[2px] rounded-full transition ${!muted && micLevel >= threshold ? "bg-emerald-400" : "bg-edge-hover"}`} style={{ height: `${4 + index * 2}px` }} />)}</span>

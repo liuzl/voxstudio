@@ -1206,7 +1206,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           return problem(404, "livekit_disabled", "this deployment has no LiveKit signing configuration");
         }
         if (options.livekitAdapter === undefined) {
-          return problem(503, "livekit_adapter_unavailable", "the LiveKit Agent media adapter is not available");
+          return problem(503, "livekit_adapter_unavailable", "the LiveKit media adapter is not available");
         }
         // Browser sessions and the credential-less self-hosted owner are ambient
         // authority, so token issuance receives the same Origin discipline as registry
@@ -1219,10 +1219,15 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         }
         const input = await request.json().catch(() => null) as unknown;
         if (typeof input !== "object" || input === null || Array.isArray(input)) {
-          return problem(400, "bad_request", "expected a JSON Agent selection");
+          return problem(400, "bad_request", "expected a JSON session selection");
         }
         const selection = input as Record<string, unknown>;
-        const selectionKeys = new Set(["agent", "agentSource", "agentRevision", "agentVersion"]);
+        const agentSelectionKeys = new Set(["agent", "agentSource", "agentRevision", "agentVersion"]);
+        const studioSelectionKeys = new Set([
+          "language", "voice", "asrEngine", "llmEngine", "ttsEngine",
+          "studioTools", "welcome", "nudgeAfterSeconds", "turnTaking",
+        ]);
+        const selectionKeys = selection.agent === undefined ? studioSelectionKeys : agentSelectionKeys;
         const unknownField = Object.keys(selection).find(key => !selectionKeys.has(key));
         if (unknownField !== undefined) {
           return problem(400, "bad_request", `unknown LiveKit bootstrap field ${unknownField}`);
@@ -1233,17 +1238,10 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
             v: protocolVersion,
             type: "session.start",
             idempotencyKey: crypto.randomUUID(),
-            options: {
-              agent: selection.agent,
-              agentSource: selection.agentSource,
-              agentRevision: selection.agentRevision,
-              agentVersion: selection.agentVersion,
-            },
+            options: selection,
           }));
-          if (command.type !== "session.start" || command.options?.agent === undefined) {
-            return problem(400, "bad_request", "agent is required");
-          }
-          requested = command.options;
+          if (command.type !== "session.start") return problem(400, "bad_request", "invalid session bootstrap");
+          requested = command.options ?? {};
         } catch (error) {
           if (!(error instanceof ProtocolError)) throw error;
           return problem(400, "bad_request", error.message);
@@ -1259,16 +1257,25 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           const code = error.code === "not_found" ? "agent_not_found" : `agent_${error.code}`;
           return problem(status, code, error.message);
         }
-        if (resolved.spec === undefined || resolved.trace === undefined) {
-          return problem(500, "agent_resolution_failed", "the selected Agent did not resolve to an immutable bootstrap");
+        if ((resolved.spec === undefined) !== (resolved.trace === undefined)) {
+          return problem(500, "agent_resolution_failed", "the selected session did not resolve to a consistent bootstrap");
         }
         // LiveKit publishes a browser microphone with AEC/NS/AGC and keeps that track
         // flowing while the Agent audio track plays. Mirror the browser WebSocket
         // preview contract here: without this explicit opt-in the shared conversation
         // kernel deliberately suppresses input during playback, so WebRTC would sound
         // full-duplex while silently losing voice barge-in.
+        // The rtc-node adapter consumes raw float32 from GatewaySession and publishes
+        // native WebRTC audio. A browser Media-v2 offer describes the WebSocket wire and
+        // must not make the adapter reinterpret PCM16 bytes as float32 samples.
+        const {
+          media: _webSocketMedia,
+          playbackAck: _browserPlaybackAck,
+          mediaTelemetry: _browserMediaTelemetry,
+          ...transportIndependentStart
+        } = resolved.start;
         const liveKitStart: SessionStartOptions = {
-          ...resolved.start,
+          ...transportIndependentStart,
           bargeIn: true,
           playbackAck: true,
           mediaTelemetry: true,
@@ -1300,8 +1307,8 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
             expiresAt: bootstrap.expires_at,
             ownerUserId: ctx.userId,
             start: liveKitStart,
-            spec: resolved.spec,
-            agent: resolved.trace,
+            ...(resolved.spec === undefined ? {} : { spec: resolved.spec }),
+            ...(resolved.trace === undefined ? {} : { agent: resolved.trace }),
             onClosed: release,
           }, async sink => {
             const command: GatewayCommand = {
@@ -1352,9 +1359,12 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
               },
             }, { status: 429, headers: { "retry-after": "1" } });
           }
-          return problem(503, "livekit_adapter_unavailable", "the LiveKit Agent media adapter refused the bootstrap");
+          return problem(503, "livekit_adapter_unavailable", "the LiveKit media adapter refused the bootstrap");
         }
-        return Response.json({ ...bootstrap, agent: resolved.trace }, {
+        return Response.json({
+          ...bootstrap,
+          ...(resolved.trace === undefined ? {} : { agent: resolved.trace }),
+        }, {
           // A participant JWT is a bearer credential. POST responses are rarely cached,
           // but making the boundary explicit protects against an over-eager proxy or SW.
           headers: { "cache-control": "no-store", pragma: "no-cache" },

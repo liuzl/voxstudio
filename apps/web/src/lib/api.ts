@@ -237,7 +237,7 @@ export interface LiveKitBootstrapResponse {
   room_name: string;
   participant_identity: string;
   expires_at: string;
-  agent: {
+  agent?: {
     agentId: string;
     source: "draft" | "published";
     revision?: number;
@@ -246,11 +246,10 @@ export interface LiveKitBootstrapResponse {
   };
 }
 
-/** Exchange an authenticated Agent selection for one short-lived, room-scoped grant. */
-export async function issueLiveKitBootstrap(selection: Pick<
-  import("@voxstudio/realtime-gateway/protocol").SessionStartOptions,
-  "agent" | "agentSource" | "agentRevision" | "agentVersion"
->): Promise<LiveKitBootstrapResponse> {
+/** Exchange validated session options for one short-lived, room-scoped grant. */
+export async function issueLiveKitBootstrap(
+  selection: import("@voxstudio/realtime-gateway/protocol").SessionStartOptions,
+): Promise<LiveKitBootstrapResponse> {
   return agentJson(await gatewayFetch("/v1/realtime/livekit/token", {
     method: "POST",
     headers: { "content-type": "application/json" },

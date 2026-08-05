@@ -20,6 +20,7 @@ export interface LocalAudioTrack {
   mute(): Promise<unknown>;
   unmute(): Promise<unknown>;
   stop(): void;
+  getRTCStatsReport(): Promise<RTCStatsReport | undefined>;
 }
 
 export declare const AudioPresets: {

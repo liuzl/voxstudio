@@ -17,6 +17,7 @@ import { ConversationRoutePicker } from "../components/EngineRoutePicker";
 import { PageHeader, SectionCard, StatusBadge, primaryButton, secondaryButton } from "../components/StudioPage";
 import { conversationControls, downloadMediaTrace, startConversation, stopConversation } from "../conversation";
 import { listAudioInputDevices, type AudioInputDevice } from "../lib/audio";
+import { formatMediaTransportDetails, mediaTransportFallbackMessage } from "../lib/media-telemetry";
 import { useGatewayHealth } from "../lib/useGatewayHealth";
 import { useStudio, type TurnView } from "../store";
 import { useT, type MessageKey } from "../i18n";
@@ -337,11 +338,9 @@ export function ConversationPanel() {
   const notices = useStudio(state => state.notices);
   const capability = useStudio(state => state.capability);
   const media = useStudio(state => state.mediaDiagnostics);
-  const mediaFormat = media.codec === "pcm_s16le"
-    ? `PCM16${media.sampleRate === undefined ? "" : ` ${Math.round(media.sampleRate / 1_000)}kHz`}`
-    : media.codec === "opus"
-      ? `Opus${media.sampleRate === undefined ? "" : ` ${Math.round(media.sampleRate / 1_000)}kHz`}`
-      : "PCM f32";
+  const mediaDetails = formatMediaTransportDetails(media);
+  const fallbackMessage = mediaTransportFallbackMessage(media.transportFallbackReason);
+  const hasMediaEvidence = media.transport !== undefined || media.frames > 0 || media.webrtcSamples > 0;
   const toast = useStudio(state => state.toast);
   const scroller = useRef<HTMLDivElement>(null);
 
@@ -494,17 +493,21 @@ export function ConversationPanel() {
           {lastNotice && (
             <span className={`truncate ${lastNotice.kind === "error" ? "text-red-300" : ""}`}>{lastNotice.text}</span>
           )}
-          {media.frames > 0 && (
-            <span className="ml-auto hidden shrink-0 md:inline">
-              {mediaFormat} · {Math.round(media.bufferDepthMs)}ms buffer · underrun {media.underruns}
-              {media.rttMs === undefined ? "" : ` · RTT ${Math.round(media.rttMs)}ms`}
+          {hasMediaEvidence && (
+            <span
+              className={`ml-auto shrink-0 rounded-full border px-2 py-0.5 font-medium ${media.transport === "webrtc" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : "border-sky-500/30 bg-sky-500/10 text-sky-300"}`}
+              title={fallbackMessage === undefined ? undefined : t(fallbackMessage)}
+            >
+              {media.transport === "webrtc" ? "WebRTC" : "WebSocket"}
             </span>
           )}
-          {media.frames > 0 && (
+          {mediaDetails && <span className="hidden shrink-0 md:inline">{mediaDetails}</span>}
+          {fallbackMessage && <span className="hidden min-w-0 truncate text-amber-300 lg:inline">{t(fallbackMessage)}</span>}
+          {hasMediaEvidence && (
             <button
               type="button"
               onClick={downloadMediaTrace}
-              className="ml-auto inline-flex shrink-0 items-center gap-1 hover:text-ink-300 md:ml-0"
+              className="inline-flex shrink-0 items-center gap-1 hover:text-ink-300"
               title="Metadata only; no audio or transcript content"
               aria-label={`media trace · ${t("下载")}`}
             >

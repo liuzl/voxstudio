@@ -5,6 +5,7 @@ import {
   agentDemoPinState,
   agentExportYaml,
   agentPreviewOptions,
+  agentPreviewTraceKey,
   agentRecordFromDraft,
   displayTime,
   draftFrom,
@@ -103,6 +104,12 @@ describe("Agent preview connection status", () => {
       agentSource: "published",
       agentVersion: 3,
     });
+  });
+
+  test("keys retained media diagnostics to the exact preview source", () => {
+    expect(agentPreviewTraceKey({ type: "draft" }, 7)).toBe("draft:7");
+    expect(agentPreviewTraceKey({ type: "draft" }, 8)).not.toBe(agentPreviewTraceKey({ type: "draft" }, 7));
+    expect(agentPreviewTraceKey({ type: "published", version: 3 }, 99)).toBe("published:3");
   });
 });
 

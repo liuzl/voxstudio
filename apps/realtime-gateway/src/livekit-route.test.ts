@@ -140,6 +140,52 @@ describe("POST /v1/realtime/livekit/token", () => {
     });
   });
 
+  test("bootstraps an ordinary Studio conversation without inventing an Agent binding", async () => {
+    let accepted: LiveKitAgentBootstrap | undefined;
+    gateway = startGateway({
+      config,
+      port: 0,
+      livekit,
+      agentsDir,
+      livekitAdapter: adapter(bootstrap => { accepted = bootstrap; }),
+    });
+    const response = await fetch(new URL("/v1/realtime/livekit/token", gateway.url), {
+      method: "POST",
+      body: JSON.stringify({
+        language: "auto",
+        voice: "shuber",
+        ttsEngine: "tts",
+        turnTaking: "speculative",
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(accepted).toMatchObject({
+      ownerUserId: "owner",
+      start: {
+        language: "auto",
+        voice: "shuber",
+        ttsEngine: "tts",
+        turnTaking: "speculative",
+        bargeIn: true,
+        playbackAck: true,
+        mediaTelemetry: true,
+      },
+    });
+    expect(accepted?.spec).toBeUndefined();
+    expect(accepted?.agent).toBeUndefined();
+    expect((await response.json() as { agent?: unknown }).agent).toBeUndefined();
+  });
+
+  test("does not pass a WebSocket media offer into the native LiveKit adapter", async () => {
+    gateway = startGateway({ config, port: 0, livekit, agentsDir, livekitAdapter: adapter() });
+    const response = await fetch(new URL("/v1/realtime/livekit/token", gateway.url), {
+      method: "POST",
+      body: JSON.stringify({ media: { version: 2, playback: [] } }),
+    });
+    expect(response.status).toBe(400);
+    expect((await response.json() as { error: { code: string } }).error.code).toBe("bad_request");
+  });
+
   test("applies same-origin protection to ambient browser authority", async () => {
     gateway = startGateway({ config, port: 0, livekit, agentsDir, livekitAdapter: adapter() });
     const url = new URL("/v1/realtime/livekit/token", gateway.url);

@@ -11,6 +11,8 @@ import {
 import { issueLiveKitBootstrap, type LiveKitBootstrapResponse } from "./api";
 import type { EndpointCapability } from "./audio";
 import type { ConnectionState } from "./client";
+import type { BrowserMediaTelemetryEvent } from "./media-telemetry";
+import { WebRtcStatsSampler, type RtcStatsReportLike, type WebRtcStatsDirection } from "./webrtc-stats";
 
 export const liveKitControlTopic = "voxstudio.control";
 export const liveKitEventTopic = "voxstudio.events";
@@ -23,6 +25,7 @@ interface RemoteAudioTrackLike {
   kind: string;
   attach(): HTMLMediaElement;
   detach(element: HTMLMediaElement): unknown;
+  getRTCStatsReport?(): Promise<RTCStatsReport | undefined>;
 }
 
 interface LocalAudioTrackLike {
@@ -30,6 +33,7 @@ interface LocalAudioTrackLike {
   mute(): Promise<unknown>;
   unmute(): Promise<unknown>;
   stop(): void;
+  getRTCStatsReport?(): Promise<RTCStatsReport | undefined>;
 }
 
 export interface LiveKitRoomLike {
@@ -46,12 +50,13 @@ export interface LiveKitRoomLike {
 }
 
 export interface BrowserLiveKitClientOptions {
-  selection: Pick<SessionStartOptions, "agent" | "agentSource" | "agentRevision" | "agentVersion">;
+  selection: SessionStartOptions;
   inputDeviceId?: string;
   onEvent(event: GatewayEvent): void;
   onConnectionChange(state: ConnectionState): void;
   onCapabilityChange(capability: EndpointCapability): void;
   onMicLevel(level: number): void;
+  onMediaTelemetry?(event: Extract<BrowserMediaTelemetryEvent, { stage: "browser.webrtc" }>): void;
   onDisconnected?(): void;
   issueBootstrap?(selection: BrowserLiveKitClientOptions["selection"]): Promise<LiveKitBootstrapResponse>;
   makeRoom?(): LiveKitRoomLike;
@@ -60,6 +65,9 @@ export interface BrowserLiveKitClientOptions {
   newIdempotencyKey?(): string;
   setLevelInterval?(callback: () => void, milliseconds: number): number;
   clearLevelInterval?(timer: number): void;
+  setStatsInterval?(callback: () => void, milliseconds: number): number;
+  clearStatsInterval?(timer: number): void;
+  now?(): number;
 }
 
 function isGatewayEvent(value: unknown): value is GatewayEvent {
@@ -118,6 +126,9 @@ export class BrowserLiveKitClient {
   private readonly remoteElements = new Map<RemoteAudioTrackLike, HTMLMediaElement>();
   private sessionId: string | undefined;
   private levelTimer: number | undefined;
+  private statsTimer: number | undefined;
+  private statsPolling = false;
+  private readonly statsSamplers = new WeakMap<object, WebRtcStatsSampler>();
   private closed = false;
   private connected = false;
 
@@ -176,6 +187,11 @@ export class BrowserLiveKitClient {
       this.options.onConnectionChange("connected");
       const set = this.options.setLevelInterval ?? ((callback, milliseconds) => window.setInterval(callback, milliseconds));
       this.levelTimer = set(() => this.options.onMicLevel(Math.min(1, this.room.localParticipant.audioLevel * 2.5)), 120);
+      if (this.options.onMediaTelemetry !== undefined) {
+        const setStats = this.options.setStatsInterval ?? ((callback, milliseconds) => window.setInterval(callback, milliseconds));
+        this.statsTimer = setStats(() => { void this.pollWebRtcStats(); }, 2_000);
+        void this.pollWebRtcStats();
+      }
     } catch (error) {
       await this.close();
       if (error instanceof Error && error.message === "conversation start cancelled") throw error;
@@ -224,6 +240,10 @@ export class BrowserLiveKitClient {
       (this.options.clearLevelInterval ?? (timer => window.clearInterval(timer)))(this.levelTimer);
       this.levelTimer = undefined;
     }
+    if (this.statsTimer !== undefined) {
+      (this.options.clearStatsInterval ?? (timer => window.clearInterval(timer)))(this.statsTimer);
+      this.statsTimer = undefined;
+    }
     this.options.onMicLevel(0);
     this.stopLocalTrack();
     for (const [track, element] of this.remoteElements) {
@@ -233,6 +253,31 @@ export class BrowserLiveKitClient {
     this.remoteElements.clear();
     await this.room.disconnect().catch(() => {});
     this.options.onConnectionChange("disconnected");
+  }
+
+  private async pollWebRtcStats(): Promise<void> {
+    if (!this.connected || this.closed || this.statsPolling || this.options.onMediaTelemetry === undefined) return;
+    this.statsPolling = true;
+    const atMs = this.options.now?.() ?? performance.timeOrigin + performance.now();
+    const collect = async (track: LocalAudioTrackLike | RemoteAudioTrackLike, direction: WebRtcStatsDirection): Promise<void> => {
+      const report = await track.getRTCStatsReport?.();
+      if (report === undefined || this.closed) return;
+      let sampler = this.statsSamplers.get(track);
+      if (sampler === undefined) {
+        sampler = new WebRtcStatsSampler();
+        this.statsSamplers.set(track, sampler);
+      }
+      const sample = sampler.sample(report as unknown as RtcStatsReportLike, direction, atMs);
+      if (sample !== undefined) this.options.onMediaTelemetry?.({ stage: "browser.webrtc", ...sample });
+    };
+    try {
+      await Promise.allSettled([
+        ...(this.localTrack === undefined ? [] : [collect(this.localTrack, "uplink")]),
+        ...[...this.remoteElements.keys()].map(track => collect(track, "downlink")),
+      ]);
+    } finally {
+      this.statsPolling = false;
+    }
   }
 
   private stopLocalTrack(): void {
@@ -268,6 +313,7 @@ export class BrowserLiveKitClient {
         element.setAttribute("playsinline", "true");
         (this.options.appendAudioElement ?? (audio => document.body.append(audio)))(element);
         this.remoteElements.set(track, element);
+        void this.pollWebRtcStats();
       })
       .on(RoomEvent.TrackUnsubscribed, (...args) => {
         const track = args[0] as RemoteAudioTrackLike;

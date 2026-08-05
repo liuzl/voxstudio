@@ -301,4 +301,66 @@ describe("BrowserLiveKitClient", () => {
     expect(levels).toEqual([]);
     await client.close();
   });
+
+  test("samples normalized uplink and downlink WebRTC statistics on a bounded interval", async () => {
+    const room = new FakeRoom();
+    let tick: (() => void) | undefined;
+    let statsIndex = 0;
+    let clearedTimer: number | undefined;
+    const telemetry: Parameters<NonNullable<ConstructorParameters<typeof BrowserLiveKitClient>[0]["onMediaTelemetry"]>>[0][] = [];
+    const localReports = [
+      new Map([["out", { id: "out", type: "outbound-rtp", kind: "audio", timestamp: 1_000, bytesSent: 10_000, packetsSent: 100 }]]),
+      new Map([["out", { id: "out", type: "outbound-rtp", kind: "audio", timestamp: 3_000, bytesSent: 22_000, packetsSent: 220 }]]),
+    ];
+    const remoteReports = [
+      new Map([["in", { id: "in", type: "inbound-rtp", kind: "audio", timestamp: 1_000, bytesReceived: 8_000, packetsReceived: 80, packetsLost: 1 }]]),
+      new Map([["in", { id: "in", type: "inbound-rtp", kind: "audio", timestamp: 3_000, bytesReceived: 24_000, packetsReceived: 240, packetsLost: 3 }]]),
+    ];
+    const client = new BrowserLiveKitClient({
+      selection: { agent: "support" },
+      onEvent: () => {},
+      onConnectionChange: () => {},
+      onCapabilityChange: () => {},
+      onMicLevel: () => {},
+      onMediaTelemetry: sample => telemetry.push(sample),
+      issueBootstrap: async () => ({
+        server_url: "wss://media.example", participant_token: "jwt", room_name: "room",
+        participant_identity: "web", expires_at: "2026-08-05T00:05:00.000Z",
+        agent: { agentId: "support", source: "published", version: 1 },
+      }),
+      makeRoom: () => room,
+      createAudioTrack: async () => ({
+        mediaStreamTrack: fakeMediaTrack(), mute: async () => {}, unmute: async () => {}, stop: () => {},
+        getRTCStatsReport: async () => localReports[statsIndex] as unknown as RTCStatsReport,
+      }),
+      appendAudioElement: () => {},
+      setLevelInterval: () => 1,
+      clearLevelInterval: () => {},
+      setStatsInterval: callback => { tick = callback; return 9; },
+      clearStatsInterval: timer => { clearedTimer = timer; },
+      now: () => 10_000,
+    });
+    await client.connect();
+    await Bun.sleep(0);
+
+    const audio = { autoplay: false, setAttribute: () => {}, remove: () => {} } as unknown as HTMLMediaElement;
+    const remoteTrack = {
+      kind: "audio",
+      attach: () => audio,
+      detach: () => {},
+      getRTCStatsReport: async () => remoteReports[statsIndex] as unknown as RTCStatsReport,
+    };
+    room.emit(RoomEvent.TrackSubscribed, remoteTrack, {}, { identity: "agent-runtime" });
+    await Bun.sleep(0);
+    statsIndex = 1;
+    tick?.();
+    await Bun.sleep(0);
+
+    expect(telemetry).toEqual(expect.arrayContaining([
+      expect.objectContaining({ stage: "browser.webrtc", direction: "uplink", bitrateKbps: 48 }),
+      expect.objectContaining({ stage: "browser.webrtc", direction: "downlink", bitrateKbps: 64 }),
+    ]));
+    await client.close();
+    expect(clearedTimer).toBe(9);
+  });
 });

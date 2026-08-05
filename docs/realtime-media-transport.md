@@ -8,16 +8,16 @@ renderer. Studio advertises it only after worklet initialization succeeds. The b
 long-run metrics and strict Phase 2 report generator are implemented; the actual device
 and shaped-network runs are still required before the slice is considered delivered.
 The Phase 3A bootstrap, server media adapter, and browser client are implemented. An
-authenticated, same-origin-guarded boundary resolves an owner-scoped Agent, claims the
-room with an isolated rtc-node programmatic participant, and only then mints a unique
-five-minute browser grant. The adapter maps the expected microphone participant, PCM,
-control data, interruption, playout draining, and room lifecycle to the existing
-`GatewaySession`. When `/healthz` advertises `deployment.livekit: true`, Agent Builder's
-Try it live publishes one processed microphone track, subscribes to the Agent track, and
-uses reliable data messages for protocol-v1 events and controls. Deployments without the
-complete signer/adapter capability keep the existing WebSocket path. A real LiveKit
-deployment/device gate and WebRTC statistics are still required before Phase 3A is
-considered delivered.
+authenticated, same-origin-guarded boundary resolves either an owner-scoped Agent or an
+ordinary Studio conversation, claims the room with an isolated rtc-node programmatic
+participant, and only then mints a unique five-minute browser grant. The adapter maps the
+expected microphone participant, PCM, control data, interruption, playout draining, and
+room lifecycle to the existing `GatewaySession`. When `/healthz` advertises
+`deployment.livekit: true`, both Agent Builder's Try it live and Live conversation publish
+one processed microphone track, subscribe to the Agent-side track, and use reliable data
+messages for protocol-v1 events and controls. Deployments without the complete
+signer/adapter capability keep the existing WebSocket path. A real LiveKit
+deployment/device gate is still required before Phase 3A is considered delivered.
 
 This document turns the remote/mobile audio investigation into an implementation
 contract. It refines the transport portion of
@@ -539,9 +539,11 @@ Bootstrap/security and server-adapter slice implemented 2026-08-05. `VOX_LIVEKIT
 `VOX_LIVEKIT_API_KEY`, and `VOX_LIVEKIT_API_SECRET` configure only the server-side
 signer. `/healthz` advertises the authenticated `POST /v1/realtime/livekit/token`
 capability only after the rtc-node media adapter is also wired. The CLI and standalone gateway wire that
-adapter whenever the complete environment contract is present. The endpoint requires an owner-scoped Agent selection,
-resolves the exact draft revision or immutable published version, and makes the adapter
-accept that binding before returning a token. An absent or rejecting adapter yields 503,
+adapter whenever the complete environment contract is present. The endpoint accepts an
+owner-scoped Agent selection or the bounded behavior fields used by Live conversation.
+Agent selections resolve the exact draft revision or immutable published version; ordinary
+Studio sessions remain deliberately unbound, matching their WebSocket trace/retention
+semantics. The adapter accepts either binding before returning a token. An absent or rejecting adapter yields 503,
 so a browser never receives an orphan-room credential. Token signing itself is not an
 engine-time quota operation; the adapter creates and charges the real conversation only
 when the expected browser microphone participant joins. An abandoned token consumes no
@@ -588,9 +590,26 @@ that fallback. Capacity/quota failures that occur after the browser joins are pu
 protocol `command.rejected` events before the native room closes. Ending a test stops the
 local microphone before best-effort control delivery, and the mute UI changes only after
 the native track operation succeeds.
-Remaining Phase 3A work is WebRTC statistics, LiveKit Cloud Build deployment, and the
-real-device/network/billing gate below. Reconnect and route-change behavior must be
-validated by that gate rather than claimed from unit tests.
+WebRTC statistics implemented 2026-08-05. While a LiveKit conversation is connected,
+the browser samples the published microphone and every subscribed Agent audio track at
+a bounded two-second interval using the SDK's `getRTCStatsReport()` surface. Standard
+RTP counters are normalized into per-interval bitrate and packet-loss percentages;
+jitter, round-trip time, actual/target/minimum jitter-buffer delay, concealed samples,
+concealment events, codec, and sample rate remain optional when a browser omits them.
+Each track has independent counter state so a reconnect or replacement track cannot
+create a false delta. Counter resets, delayed RTCP fields, and RTP stream-identity changes
+produce a new baseline instead of a bitrate or loss spike. The bounded browser
+diagnostics retain current and p95 values, and the raw
+normalized samples share the existing metadata-only `voxstudio.media-trace.v2` event
+timeline. Conversation and Agent-preview footers show an explicit WebRTC/WebSocket badge,
+a compact live summary, and classified LiveKit fallback reasons before exposing the same
+trace download; neither trace nor UI retains audio or transcript content.
+Unit coverage spans raw RTC report normalization, multi-stage diagnostics/export, timer
+lifecycle, and real client uplink/downlink collection.
+
+Remaining Phase 3A work is LiveKit Cloud Build deployment and the real-device/network/
+billing gate below. Reconnect and route-change behavior must be validated by that gate
+rather than claimed from unit tests.
 
 Gate: remote/mobile WebRTC passes audio continuity, double-talk, interruption, route
 change, reconnect, and authorization tests without changing the shared conversation
