@@ -4,8 +4,9 @@ Status: Accepted implementation plan, 2026-08-04. Research, current-state
 measurement, Phase 0 observability, and Phase 1 legacy PCM hardening are delivered.
 The Phase 1 iPhone/Tailnet device gate passed on 2026-08-04. The Phase 2 PCM16 slice is
 implemented behind explicit negotiation, including its continuous AudioWorklet
-renderer. Studio advertises it only after worklet initialization succeeds; desktop and
-iPhone promotion gates are still required before the slice is considered delivered.
+renderer. Studio advertises it only after worklet initialization succeeds. The bounded
+long-run metrics and strict Phase 2 report generator are implemented; the actual device
+and shaped-network runs are still required before the slice is considered delivered.
 
 This document turns the remote/mobile audio investigation into an implementation
 contract. It refines the transport portion of
@@ -445,6 +446,13 @@ operations, dropping sampled events with an operational warning before observabi
 grow without bound. The real-device shaped-network matrix remains a promotion gate for
 Phase 1/3 rather than being claimed by unit tests.
 
+Operational stdout is intentionally lower-volume than telemetry. Per-frame
+`media.frame`/`media.socket` and periodic `media.pong` events are not printed. The
+five-second ping acknowledgement remains as a low-rate clock heartbeat. A rendition
+produces one summary with frame count, audio duration, status, and stale-frame count;
+backpressure drains and failures remain visible immediately. Full frame detail remains
+available on the wire and in the bounded metadata-only trace export.
+
 ### Phase 1 — Legacy PCM hardening
 
 - cap gateway-to-browser f32 messages to approximately 240 ms;
@@ -577,6 +585,67 @@ Initial promotion thresholds, subject to measured calibration:
 The gate report records browser/OS, route, selected devices, codec, effective bitrate,
 network shaping, and raw metric distributions. “Sounds fine” is useful final validation
 but not sufficient evidence for promotion.
+
+### Phase 2 gate runner
+
+The formal evaluator is run from the repository root:
+
+```bash
+cp apps/realtime-gateway/tools/media-phase2-manifest.example.json media-phase2-manifest.json
+mkdir -p evidence traces
+# Copy and edit the network-evidence example once for every manifest run.
+cp apps/realtime-gateway/tools/media-phase2-network-evidence.example.json \
+  evidence/macos-chrome-healthy-soak.json
+bun run gate:media-phase2 -- --manifest media-phase2-manifest.json \
+  --output media-phase2-report.json
+```
+
+Each manifest row names a media trace downloaded from Studio plus the device, route,
+shaped-network target, exercised interactions, and three observations that cannot be
+inferred safely from transport metadata: stale audio, control responsiveness, and voice
+quality. Every row also references a separate network-evidence JSON record. Capture it
+from the active shaper/controller or fill it from the operator's exact shaper settings
+immediately before the run; its run id, browser/device class, route, profile, and capture
+time must match the run. Evidence capture must fall within 15 minutes of the trace
+window. Trace and evidence paths are resolved relative to the manifest.
+
+Barge-in and rapid-revision rows additionally carry at least ten externally measured
+interruption samples and their `interruptionToSilenceP95Ms`; the browser stop-call
+duration is useful diagnostics but is not, by itself, proof that the speaker became
+silent. Network shaping and real-device operation remain external to this evaluator;
+declaring a profile in the manifest does not create one. The gate cross-checks declared
+RTT and jitter against the trace's bounded RTT distributions, while the external record
+is the evidence for a downlink cap that browser telemetry cannot infer reliably.
+
+The command exits non-zero unless all runs pass and the manifest covers every required
+device, route, downlink, RTT, jitter, and interaction point. It also requires one marked
+healthy-network run with at least ten minutes of both wall time and accumulated media,
+zero underruns, at least 27,000 real render observations, and at least 100 RTT samples.
+The healthy row is fixed to same-Wi-Fi, unshaped, 20 ms RTT, and zero added jitter; a
+constrained or relayed row cannot be relabeled as the healthy soak.
+
+Per run the gate enforces Media v2 PCM16/24 kHz without mid-run format changes, at least
+30 seconds of accumulated media, at least 1,500 media frames, at least 1,350 real render
+observations, at least 90% render coverage, and at least five RTT samples. It also
+requires no dropped frames, a maximum 1,000 ms application media queue, p95 browser
+buffer depth no greater than 600 ms, and render-thread observations rather than
+estimates. Barge-in and rapid-revision runs need at least ten internal stop measurements
+and ten external audible-silence measurements; both p95 values must be no greater than
+150 ms. A normal session close is counted separately and is never accepted as an
+interruption sample.
+
+Every trace must have a distinct non-empty session id, trace file SHA-256, and manifest
+path. Every network record must likewise have a distinct path and SHA-256. The generated
+report stores those digests, so copying one successful trace or one shaper record across
+the matrix fails even if it is renamed. Wall-clock duration alone is insufficient: an
+idle tab with one rendered packet cannot satisfy either the ordinary run or ten-minute
+soak.
+
+Long runs do not depend on retaining every raw frame. Studio maintains fixed-memory
+histograms and counters for buffer-depth p95, interruption-stop p95, RTT p50/p95,
+RTT-delta jitter p95, render observations, backpressure, queue peak, drops, and underruns
+while keeping the downloadable raw event window bounded at 5,000 entries. Older trace
+files without these aggregates fail closed and must not be used for promotion.
 
 ## Alternatives not selected
 

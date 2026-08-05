@@ -1,0 +1,80 @@
+{
+  "schema": "voxstudio.media-phase2-manifest.v1",
+  "runs": [
+    {
+      "id": "macos-chrome-healthy-soak",
+      "trace": "traces/macos-chrome-healthy-soak.json",
+      "networkEvidence": "evidence/macos-chrome-healthy-soak.json",
+      "device": "macos_chrome",
+      "route": "same_wifi",
+      "network": { "downlinkKbps": "unshaped", "rttMs": 20, "jitterMs": 0 },
+      "interactions": ["uninterrupted", "barge_in"],
+      "healthyNetwork": true,
+      "observations": {
+        "staleAudioHeard": false,
+        "controlsResponsive": true,
+        "voiceQualityPassed": true,
+        "interruptionToSilenceP95Ms": 80,
+        "interruptionSamples": 12
+      }
+    },
+    {
+      "id": "iphone-cellular",
+      "trace": "traces/iphone-cellular.json",
+      "networkEvidence": "evidence/iphone-cellular.json",
+      "device": "iphone_safari",
+      "route": "cellular_overlay",
+      "network": { "downlinkKbps": 256, "rttMs": 100, "jitterMs": 20 },
+      "interactions": ["rapid_revision"],
+      "observations": {
+        "staleAudioHeard": false,
+        "controlsResponsive": true,
+        "voiceQualityPassed": true,
+        "interruptionToSilenceP95Ms": 120,
+        "interruptionSamples": 12
+      }
+    },
+    {
+      "id": "android-relayed",
+      "trace": "traces/android-relayed.json",
+      "networkEvidence": "evidence/android-relayed.json",
+      "device": "android_chrome",
+      "route": "relayed_derp",
+      "network": { "downlinkKbps": 512, "rttMs": 300, "jitterMs": 50 },
+      "interactions": ["mute_unmute"],
+      "observations": {
+        "staleAudioHeard": false,
+        "controlsResponsive": true,
+        "voiceQualityPassed": true
+      }
+    },
+    {
+      "id": "macos-safari-route-change",
+      "trace": "traces/macos-safari-route-change.json",
+      "networkEvidence": "evidence/macos-safari-route-change.json",
+      "device": "macos_safari",
+      "route": "same_wifi",
+      "network": { "downlinkKbps": 1024, "rttMs": 20, "jitterMs": 100 },
+      "interactions": ["route_change"],
+      "observations": {
+        "staleAudioHeard": false,
+        "controlsResponsive": true,
+        "voiceQualityPassed": true
+      }
+    },
+    {
+      "id": "macos-chrome-2048",
+      "trace": "traces/macos-chrome-2048.json",
+      "networkEvidence": "evidence/macos-chrome-2048.json",
+      "device": "macos_chrome",
+      "route": "same_wifi",
+      "network": { "downlinkKbps": 2048, "rttMs": 20, "jitterMs": 0 },
+      "interactions": ["uninterrupted"],
+      "observations": {
+        "staleAudioHeard": false,
+        "controlsResponsive": true,
+        "voiceQualityPassed": true
+      }
+    }
+  ]
+}

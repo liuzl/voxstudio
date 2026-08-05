@@ -22,6 +22,7 @@ export type BrowserMediaTelemetryEvent =
 export interface MediaDiagnostics {
   codec: MediaPlaybackCodec | undefined;
   sampleRate: number | undefined;
+  mediaFormatChanges: number;
   frames: number;
   bytes: number;
   audioMs: number;
@@ -33,7 +34,19 @@ export interface MediaDiagnostics {
   serverClockOffsetMs: number | undefined;
   firstAudibleMs: number | undefined;
   highWaterBytes: number;
+  maxQueuedAudioMs: number;
   droppedFrames: number;
+  backpressureEvents: number;
+  bufferDepthP95Ms: number | undefined;
+  interruptionStops: number;
+  interruptionStopP95Ms: number | undefined;
+  closedStops: number;
+  renderObservations: number;
+  estimatedRenders: number;
+  rttSamples: number;
+  rttP50Ms: number | undefined;
+  rttP95Ms: number | undefined;
+  rttJitterP95Ms: number | undefined;
   contextState: AudioContextState | undefined;
   contextSampleRate: number | undefined;
 }
@@ -73,6 +86,39 @@ export function attributeMediaDelay(
 
 const maxEvents = 5_000;
 
+/** Fixed-memory histogram used by long device runs whose raw trace is intentionally capped. */
+class FixedHistogram {
+  private readonly counts: Uint32Array;
+  private total = 0;
+
+  constructor(private readonly step: number, private readonly maximum: number) {
+    this.counts = new Uint32Array(Math.ceil(maximum / step) + 2);
+  }
+
+  observe(value: number): void {
+    if (!Number.isFinite(value) || value < 0) return;
+    const bucket = Math.min(this.counts.length - 1, Math.ceil(value / this.step));
+    this.counts[bucket] = (this.counts[bucket] ?? 0) + 1;
+    this.total += 1;
+  }
+
+  percentile(quantile: number): number | undefined {
+    if (this.total === 0) return undefined;
+    const target = Math.max(1, Math.ceil(this.total * quantile));
+    let seen = 0;
+    for (let index = 0; index < this.counts.length; index += 1) {
+      seen += this.counts[index] ?? 0;
+      if (seen >= target) return Math.min(this.maximum + this.step, index * this.step);
+    }
+    return this.maximum + this.step;
+  }
+
+  reset(): void {
+    this.counts.fill(0);
+    this.total = 0;
+  }
+}
+
 type MediaTraceEntry =
   | { clock: "server"; event: GatewayEvent }
   | { clock: "client"; event: BrowserMediaTelemetryEvent };
@@ -109,6 +155,11 @@ export class MediaTraceRecorder {
   private readonly entries: MediaTraceEntry[] = [];
   private diagnostics: MediaDiagnostics = emptyMediaDiagnostics();
   private sessionId: string | undefined;
+  private readonly bufferDepths = new FixedHistogram(5, 2_000);
+  private readonly interruptionStops = new FixedHistogram(1, 1_000);
+  private readonly rtts = new FixedHistogram(1, 2_000);
+  private readonly rttJitters = new FixedHistogram(1, 2_000);
+  private previousRttMs: number | undefined;
 
   constructor(private readonly now: () => number = monotonicEpochMs) {
     this.startedAtMs = this.now();
@@ -118,6 +169,11 @@ export class MediaTraceRecorder {
     this.entries.length = 0;
     this.diagnostics = emptyMediaDiagnostics();
     this.sessionId = undefined;
+    this.bufferDepths.reset();
+    this.interruptionStops.reset();
+    this.rtts.reset();
+    this.rttJitters.reset();
+    this.previousRttMs = undefined;
     this.startedAtMs = this.now();
   }
 
@@ -128,6 +184,9 @@ export class MediaTraceRecorder {
     if (event.type === "media.frame") {
       this.diagnostics = {
         ...this.diagnostics,
+        mediaFormatChanges: this.diagnostics.mediaFormatChanges
+          + (this.diagnostics.frames > 0
+            && (this.diagnostics.codec !== event.codec || this.diagnostics.sampleRate !== event.sampleRate) ? 1 : 0),
         codec: event.codec,
         sampleRate: event.sampleRate,
         frames: this.diagnostics.frames + 1,
@@ -138,14 +197,31 @@ export class MediaTraceRecorder {
       this.diagnostics = {
         ...this.diagnostics,
         highWaterBytes: Math.max(this.diagnostics.highWaterBytes, event.highWaterBytes),
+        maxQueuedAudioMs: Math.max(this.diagnostics.maxQueuedAudioMs, event.queuedAudioMs),
         droppedFrames: this.diagnostics.droppedFrames + (event.dropped ? 1 : 0),
+      };
+    } else if (event.type === "media.socket.drain") {
+      this.diagnostics = {
+        ...this.diagnostics,
+        backpressureEvents: this.diagnostics.backpressureEvents + 1,
       };
     } else if (event.type === "media.pong") {
       const clientReceivedAtMs = this.now();
       const rttMs = Math.max(0, clientReceivedAtMs - event.clientSentAtMs - (event.serverSentAtMs - event.serverReceivedAtMs));
       const serverClockOffsetMs = ((event.serverReceivedAtMs - event.clientSentAtMs)
         + (event.serverSentAtMs - clientReceivedAtMs)) / 2;
-      this.diagnostics = { ...this.diagnostics, rttMs, serverClockOffsetMs };
+      this.rtts.observe(rttMs);
+      if (this.previousRttMs !== undefined) this.rttJitters.observe(Math.abs(rttMs - this.previousRttMs));
+      this.previousRttMs = rttMs;
+      this.diagnostics = {
+        ...this.diagnostics,
+        rttMs,
+        serverClockOffsetMs,
+        rttSamples: this.diagnostics.rttSamples + 1,
+        rttP50Ms: this.rtts.percentile(0.5),
+        rttP95Ms: this.rtts.percentile(0.95),
+        rttJitterP95Ms: this.rttJitters.percentile(0.95),
+      };
       this.push({
         clock: "client",
         event: {
@@ -186,13 +262,28 @@ export class MediaTraceRecorder {
         underrunMs: this.diagnostics.underrunMs + event.durationMs,
       };
     } else if (event.stage === "browser.render") {
+      this.bufferDepths.observe(event.bufferDepthMs);
       this.diagnostics = {
         ...this.diagnostics,
         bufferDepthMs: event.bufferDepthMs,
+        bufferDepthP95Ms: this.bufferDepths.percentile(0.95),
+        renderObservations: this.diagnostics.renderObservations + 1,
+        estimatedRenders: this.diagnostics.estimatedRenders + (event.estimated ? 1 : 0),
         ...(this.diagnostics.firstAudibleMs === undefined
           ? { firstAudibleMs: Math.max(0, event.atMs - this.startedAtMs) }
           : {}),
       };
+    } else if (event.stage === "browser.stop") {
+      if (event.reason === "interrupted") {
+        this.interruptionStops.observe(event.operationMs);
+        this.diagnostics = {
+          ...this.diagnostics,
+          interruptionStops: this.diagnostics.interruptionStops + 1,
+          interruptionStopP95Ms: this.interruptionStops.percentile(0.95),
+        };
+      } else {
+        this.diagnostics = { ...this.diagnostics, closedStops: this.diagnostics.closedStops + 1 };
+      }
     } else if (event.stage === "browser.context") {
       this.diagnostics = {
         ...this.diagnostics,
@@ -369,6 +460,7 @@ export function emptyMediaDiagnostics(): MediaDiagnostics {
   return {
     codec: undefined,
     sampleRate: undefined,
+    mediaFormatChanges: 0,
     frames: 0,
     bytes: 0,
     audioMs: 0,
@@ -380,7 +472,19 @@ export function emptyMediaDiagnostics(): MediaDiagnostics {
     serverClockOffsetMs: undefined,
     firstAudibleMs: undefined,
     highWaterBytes: 0,
+    maxQueuedAudioMs: 0,
     droppedFrames: 0,
+    backpressureEvents: 0,
+    bufferDepthP95Ms: undefined,
+    interruptionStops: 0,
+    interruptionStopP95Ms: undefined,
+    closedStops: 0,
+    renderObservations: 0,
+    estimatedRenders: 0,
+    rttSamples: 0,
+    rttP50Ms: undefined,
+    rttP95Ms: undefined,
+    rttJitterP95Ms: undefined,
     contextState: undefined,
     contextSampleRate: undefined,
   };

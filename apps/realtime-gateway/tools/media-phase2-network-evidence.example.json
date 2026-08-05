@@ -1,0 +1,13 @@
+{
+  "schema": "voxstudio.media-network-evidence.v1",
+  "runId": "macos-chrome-healthy-soak",
+  "source": "macOS Network Link Conditioner: Wi-Fi, 100% bandwidth, zero added loss; captured by operator before starting this run",
+  "capturedAt": "2026-08-05T00:00:00.000Z",
+  "device": "macos_chrome",
+  "route": "same_wifi",
+  "profile": {
+    "downlinkKbps": "unshaped",
+    "rttMs": 20,
+    "jitterMs": 0
+  }
+}

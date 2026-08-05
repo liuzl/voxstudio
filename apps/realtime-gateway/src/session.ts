@@ -141,6 +141,38 @@ const mediaV2Pcm16Playback = {
   packetDurationMs: 20,
 } as const satisfies MediaPlaybackConfiguration;
 
+/**
+ * Formats the deliberately low-volume operational session log. Media telemetry stays
+ * available on the wire and in trace exports; writing every 20 ms frame to a terminal
+ * would turn one healthy session into roughly one hundred log lines per second.
+ */
+export function formatOperationalEventLog(sessionId: string, event: GatewayEvent): string | undefined {
+  const prefix = `session ${sessionId.slice(0, 8)} #${event.sequence}`;
+  if (event.type === "error" || event.type === "session.notice" || event.type === "command.rejected") {
+    const detail = "message" in event ? event.message : "reason" in event ? event.reason : "";
+    return `${prefix} ${event.type}: ${detail}`;
+  }
+  if (event.type === "response.text.delta"
+      || event.type === "media.frame"
+      || event.type === "media.socket"
+      || event.type === "media.pong") {
+    return undefined;
+  }
+  if (event.type === "command.accepted" && event.commandType === "media.ping") {
+    return `${prefix} command.accepted media.ping`;
+  }
+  if (event.type === "media.socket.drain") {
+    return `${prefix} media.socket.drain duration=${Math.round(event.durationMs)}ms high_water=${event.highWaterBytes}B`;
+  }
+  if (event.type === "media.rendition") {
+    return `${prefix} media.rendition turn ${event.turnId.slice(0, 8)} ${event.status}`
+      + ` frames=${event.frames} audio=${Math.round(event.audioMs)}ms stale=${event.staleFramesDiscarded}`;
+  }
+  const turn = "turnId" in event ? ` turn ${event.turnId.slice(0, 8)}` : "";
+  const state = event.type === "session.state" ? ` ${event.state}` : "";
+  return `${prefix} ${event.type}${turn}${state}`;
+}
+
 type MediaBackpressureOutcome = "drained" | "detached" | "cancelled" | "timeout";
 
 class MediaTransportError extends Error {
@@ -730,17 +762,8 @@ export class GatewaySession {
       sessionId: this.id,
       timestampMs: Date.now(),
     };
-    if (this.options.log) {
-      // Milestones and problems only — never transcript text (the privacy rules).
-      if (payload.type === "error" || payload.type === "session.notice" || payload.type === "command.rejected") {
-        const detail = "message" in payload ? payload.message : "reason" in payload ? payload.reason : "";
-        this.options.log(`session ${this.id.slice(0, 8)} #${event.sequence} ${payload.type}: ${detail}`);
-      } else if (payload.type !== "response.text.delta") {
-        const turn = "turnId" in payload ? ` turn ${payload.turnId.slice(0, 8)}` : "";
-        const state = payload.type === "session.state" ? ` ${payload.state}` : "";
-        this.options.log(`session ${this.id.slice(0, 8)} #${event.sequence} ${payload.type}${turn}${state}`);
-      }
-    }
+    const operationalLog = this.options.log === undefined ? undefined : formatOperationalEventLog(this.id, event);
+    if (operationalLog !== undefined) this.options.log?.(operationalLog);
     beforeSocketSend?.(event);
     // A detached session keeps running; events during the gap are not buffered because the
     // reconnecting client resynchronizes from the snapshot, not from a replay.
