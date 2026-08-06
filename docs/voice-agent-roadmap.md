@@ -282,9 +282,14 @@ speech without aborting execution, steering is ordered and at-most-once, explici
 cancel is terminal and reported exactly once, milestones coalesce and are
 preempted by direct answers, late events never mutate a finished run, and events
 that race an explicit cancel are dropped in favor of the cancellation outcome.
-Gateway session wiring (mapping the speech sink to queueAgentSpeech/interrupt)
-and the measured 150 ms audible-stop gate on real playback remain before Phase A
-is complete.
+The gateway speech-sink wiring has landed too
+(`apps/realtime-gateway/src/agent-speech-sink.ts`): `speak` maps to
+`queueAgentSpeech`, `cancelQueued` to a new `clearQueuedAgentSpeech` conversation
+seam, and `stop` clears the queue and interrupts playback — verified end to end
+with the fake executor narrating through the real conversation channel. The
+measured 150 ms audible-stop gate on real playback remains before Phase A is
+complete; session-level executor integration (controller creation behind an
+agent-mode flag, protocol events, Web UI state) is Phase B.
 
 ### Phase B — executor adapter with a fake backend
 
@@ -411,7 +416,7 @@ Re-evaluate when:
 | Qwen3-ASR final revision tier | shipped |
 | Executor lifecycle contract | accepted; pure state model and race tests landed |
 | Sandbox/tool-broker security baseline | accepted; real isolated runner remains Phase D |
-| Gateway/player composition controller | landed (`agent-run-controller.ts` + deterministic tests); session wiring pending |
+| Gateway/player composition controller | landed (`agent-run-controller.ts` + `agent-speech-sink.ts`; fake-executor run narrates through the real conversation channel); session executor integration pending |
 | Vox executor adapter | types, fake executor, fake ToolRunner, and invocation ledger landed |
 | Gateway/session executor integration | not started |
 | pi production dependency | not added |

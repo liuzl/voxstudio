@@ -179,6 +179,8 @@ export interface ConversationControls {
   /** Submit an already-transcribed user turn; false means the session is not idle. */
   submitUserText(text: string): boolean;
   queueAgentSpeech(text: string, overrides?: { voice?: string; speed?: number }): void;
+  /** Drop queued agent speech that has not started; current playback continues. */
+  clearQueuedAgentSpeech(): void;
   /** Queued agent speech not yet spoken — surfaces defer an end_call teardown past it. */
   pendingAgentSpeech(): number;
 }
@@ -681,6 +683,7 @@ export async function runConversation(
     queueAgentSpeech: (text, overrides) => {
       if (text.trim() !== "") agentSpeechQueue.push({ text: text.trim(), ...(overrides === undefined ? {} : { overrides }) });
     },
+    clearQueuedAgentSpeech: () => { agentSpeechQueue.length = 0; },
     pendingAgentSpeech: () => agentSpeechQueue.length,
   });
 

@@ -279,6 +279,51 @@ describe("runConversation", () => {
     expect(session.state).toBe("listening");
   });
 
+  test("clearQueuedAgentSpeech drops queued narration without starting playback", async () => {
+    const session = new DuplexSession();
+    session.start();
+    let controls: Parameters<NonNullable<Parameters<typeof runConversation>[1]["onControls"]>>[0] | undefined;
+    let releaseFrames = (): void => {};
+    const frameGate = new Promise<void>(resolve => { releaseFrames = resolve; });
+    const turns: string[] = [];
+    const replies: string[] = [];
+    const played: number[] = [];
+
+    const running = runConversation({
+      session,
+      vad: new EnergyVadSegmenter({ sampleRate: 16_000, threshold: 0.1, minSpeechMs: 40, silenceMs: 20 }),
+      frames: (async function* () { await frameGate; })(),
+      createPlayer: () => ({
+        write: async audio => { played.push(audio.samples.length); },
+        close: async () => {},
+      }),
+      asr: { transcribe: async () => ({ text: "" }) },
+      llm: { chatStream: async function* () {} },
+      tts: { speech: async () => new Uint8Array(writeWav(new Float32Array(24_000).fill(0.1), 24_000)) },
+    }, {
+      language: "zh", chunking, ttsDefaults, voice: "demo",
+      allowBargeIn: true, turnTaking: "conservative", reopenMs: 7_000,
+      onControls: value => { controls = value; },
+    }, {
+      onTranscript: text => turns.push(text),
+      onReply: text => { replies.push(text); releaseFrames(); },
+    });
+
+    controls?.queueAgentSpeech("进度一");
+    controls?.queueAgentSpeech("进度二");
+    expect(controls?.pendingAgentSpeech()).toBe(2);
+    controls?.clearQueuedAgentSpeech();
+    expect(controls?.pendingAgentSpeech()).toBe(0);
+
+    releaseFrames();
+    await running;
+
+    expect(turns).toEqual([]);
+    expect(replies).toEqual([]);
+    expect(played).toEqual([]);
+    expect(session.state).toBe("listening");
+  });
+
   test("discards asynchronous VAD events that finish after a typed replacement", async () => {
     const session = new DuplexSession();
     session.start();
