@@ -494,8 +494,9 @@ stage component does not require sharing the entire page theme.
    forces content and audio off. `--trace-audio input|output|both` and
    `--trace-max-bytes` now enable the conversation-only private Media Store, canonical
    input/output WAV retention, protected download, and cascade deletion described in
-   [conversation-retention.md](./conversation-retention.md). Shared Library assets,
-   revision-aware replay UI, and only then measured statistics remain.
+   [conversation-retention.md](./conversation-retention.md). Revision-aware replay UI
+   is delivered on top of that store (2026-08-06). Shared Library assets and measured
+   statistics remain.
 6. **Portal reuse — not started**: curated public Agent and hardened demo
    experience after the preview component has passed desktop/mobile and
    real-browser gates.

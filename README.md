@@ -1,6 +1,6 @@
 # voxstudio
 
-Self-hosted, **multilingual voice I/O studio** with support for Chinese and other languages. ASR + LLM + TTS engines sit behind **one OpenAI-compatible contract**, with a core orchestration layer and thin apps (CLI / Web / MCP / mobile client).
+Self-hosted, **multilingual voice I/O studio** with support for Chinese and other languages. ASR + LLM + TTS engines sit behind **one OpenAI-compatible contract**, with a core orchestration layer and thin apps (CLI / Web / MCP; desktop/mobile planned).
 
 > Design lineage: benchmarked against [VoxWeaver Studio](https://github.com/nicekate/VOXWEAVER-STUDIO) and [Voicebox](https://github.com/jamiepine/voicebox). Focus = **multilingual speech, fully self-hosted deployment, and one swappable engine contract**.
 
@@ -267,9 +267,12 @@ explicit retention opt-in: every finalized utterance archived with its raw trans
 play, re-transcribe, correct inline into a `.ref.txt` the ASR reference workflow scores
 directly, promote to a clone voice sample; `--library-max-bytes 512M` bounds retained
 audio by evicting the oldest uncorrected, unpromoted captures — curated work is never
-auto-deleted), and engine settings with live health. Retained-audio trace replay now has
-an accepted storage/privacy design but remains unimplemented; Statistics, VoiceStage,
-remaining preview controls, and Portal reuse remain planned;
+auto-deleted), and engine settings with live health. Retained-audio replay is delivered end
+to end — directional input/output WAVs, protected downloads, and revision-aware replay
+controls; the remaining retention follow-ups (shared Library media, policy snapshots,
+account-deletion coordination, legacy migration tooling, and compressed replay
+derivatives) plus Statistics, VoiceStage, remaining preview controls, and Portal reuse
+remain planned;
 its real-browser
 double-talk/barge-in gate and route-change handling remain separate measured delivery
 phases.

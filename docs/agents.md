@@ -44,8 +44,9 @@ content retention is a second opt-in, and the current implementation does not
 store trace audio unless `--trace-audio input|output|both` is explicitly enabled.
 The conversation-only private Media Store, directional byte ceiling, output-prefix
 semantics, owner-checked download, and conversation deletion are delivered. Shared
-Library assets, policy snapshots, account/legacy lifecycle tooling, and replay UI remain
-under the accepted contract in [conversation-retention.md](./conversation-retention.md).
+Library media references, conversation policy snapshots, account-deletion coordination,
+legacy migration tooling, and compressed replay derivatives remain under the accepted
+contract in [conversation-retention.md](./conversation-retention.md).
 Statistics, response feedback, the remaining preview failure/retry controls,
 and the later independent Full Preview described in
 [agent-builder-ui.md](./agent-builder-ui.md) remain next.
@@ -170,10 +171,11 @@ sharing, and knowledge attachments (RAG hangs off `AgentSpec` later).
    draft/publish, and Try it live; the conversation trace viewer ties owner-scoped call
    history to the exact Agent revision/version that served it. Trace persistence is off
    by default (`--traces DIR`); `--trace-content` independently enables transcript and
-   tool payload retention, demo mode forces that content off, and audio remains out of
-   the current Trace Store. The next storage slice implements the accepted
-   [conversation retention and media architecture](./conversation-retention.md),
-   followed by replay UI and measured statistics.
+   tool payload retention, and demo mode forces content and audio off. The accepted
+   [conversation retention and media architecture](./conversation-retention.md) is
+   delivered: the conversation-only private Media Store (`--trace-audio input|output|both`
+   with a directional byte ceiling), protected download, cascade deletion, and
+   revision-aware replay UI. Measured statistics remain.
 4. **Later — conditional.** Organizations and multi-principal sharing;
    knowledge attachments per agent; agent switching mid-call as a session tool,
    if real usage asks for it.

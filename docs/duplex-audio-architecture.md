@@ -3,9 +3,10 @@
 Status: Accepted, 2026-07-12; a living architecture document since. Delivered so far:
 the session kernel, the shared conversation loop, the realtime gateway and Web Studio
 realtime, the OpenAI Realtime dialect ([openai-realtime-adapter.md](./openai-realtime-adapter.md)),
-and the first-chunk clause fast path (§Turn timing). LiveKit remote transport stays
-planned. The codec, packetization, buffering, backpressure, and remote-transport
-migration plan is specified in
+and the first-chunk clause fast path (§Turn timing). LiveKit remote transport is
+implemented as the agent-preview path; production delivery awaits its
+real-device/network/lifecycle gate. The codec, packetization, buffering,
+backpressure, and remote-transport migration plan is specified in
 [realtime-media-transport.md](./realtime-media-transport.md); deployment/provider
 research is isolated in the dated
 [media-provider evaluation](../research/reports/2026-08-04-realtime-media-provider-evaluation.md).
@@ -69,14 +70,16 @@ flowchart LR
   MAC -->|"PCM/event IPC"| CONV
   HEADSET -->|"PCM/event IPC"| CONV
   BROWSER -->|"16 kHz PCM frames"| GW --> CONV
-  BROWSER -.->|"LiveKit/WebRTC (planned: remote deployment)"| GW
+  BROWSER -.->|"LiveKit/WebRTC (agent preview; delivery gate pending)"| GW
   CONV --> DS
   CONV --> PIPE
 ```
 
 The browser lane above is the implemented one (the WebSocket gateway of the
-realtime section below); LiveKit remains the planned transport for remote
-deployment per decision 4.
+realtime section below); LiveKit is the remote transport per decision 4 —
+implemented as the agent-preview path, with Phase 3A delivery still pending its
+LiveKit deployment and real-device/network/lifecycle gates (see
+[realtime-media-transport.md](./realtime-media-transport.md)).
 
 `DuplexSession` is platform-neutral code. It consumes clean, timestamped input
 PCM frames and emits output PCM frames plus state events. It has no Bun,

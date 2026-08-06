@@ -9,6 +9,11 @@
 > Historical snapshot: measurements, test counts, shipped capabilities, and open-work
 > statements below describe commit `bd48313` on the report date. Later repository changes
 > belong in a new report version rather than being silently folded into these results.
+> For the repository state after that date, see the living documents — the
+> [README](../README.md), [voice-agent-roadmap](./voice-agent-roadmap.md),
+> [realtime-media-transport](./realtime-media-transport.md),
+> [conversation-retention](./conversation-retention.md), [agents](./agents.md), and
+> [web-studio](./web-studio.md).
 >
 > This file is the report's single source of truth (Markdown). The distributable HTML is not committed; build it on demand: `bun run build:report` → `docs/technical-report.html` (inlined styles and pre-rendered figures, offline self-contained). See Appendix B for version history.
 
