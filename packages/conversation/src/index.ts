@@ -160,6 +160,12 @@ export interface ConversationOptions {
   /** What the silence nudge says (docs/conversation-etiquette.md; fixed text in phase 1). */
   nudgeText?: string;
   /**
+   * Agent mode: finalized user turns are delivered here instead of the LLM reply
+   * pipeline. The loop keeps VAD/ASR/turn ownership and synthesizes nothing for
+   * these turns; executor narration through `queueAgentSpeech` is the only speech.
+   */
+  onAgentInput?: (text: string, turn: DuplexTurn) => void | Promise<void>;
+  /**
    * Term → reading substitutions applied at the TTS boundary only; captions keep the
    * spelling. Read at each synthesis, so a tool may mutate the map mid-session
    * (remember_pronunciation, docs/voice-studio-control.md) and the next reply obeys it.
@@ -356,6 +362,14 @@ export async function runConversation(
         transcript = input.text;
       }
       callbacks.onTranscript?.(transcript, turn);
+      if (options.onAgentInput !== undefined) {
+        // Agent mode: the utterance is executor input, not an LLM turn. The loop
+        // keeps turn ownership but synthesizes no reply; narration arrives only
+        // from the executor through queueAgentSpeech.
+        await options.onAgentInput(transcript, turn);
+        if (!turn.signal.aborted) session.complete(turn.id);
+        return;
+      }
       // The reply pipelines: sentences flow into TTS while the model is still generating,
       // so first audio no longer waits for the full completion. The turn stays `thinking`
       // (still reopenable under the speculative policy) until the first piece exists.

@@ -324,6 +324,53 @@ describe("runConversation", () => {
     expect(session.state).toBe("listening");
   });
 
+  test("agent mode delivers finalized turns to onAgentInput and synthesizes nothing", async () => {
+    const session = new DuplexSession();
+    session.start();
+    let controls: Parameters<NonNullable<Parameters<typeof runConversation>[1]["onControls"]>>[0] | undefined;
+    let releaseFrames = (): void => {};
+    const frameGate = new Promise<void>(resolve => { releaseFrames = resolve; });
+    const inputs: { text: string; turnId: string }[] = [];
+    const replies: string[] = [];
+    const played: number[] = [];
+    let llmCalls = 0;
+
+    const running = runConversation({
+      session,
+      vad: new EnergyVadSegmenter({ sampleRate: 16_000, threshold: 0.1, minSpeechMs: 40, silenceMs: 20 }),
+      frames: (async function* () { await frameGate; })(),
+      createPlayer: () => ({
+        write: async audio => { played.push(audio.samples.length); },
+        close: async () => {},
+      }),
+      asr: { transcribe: async () => ({ text: "" }) },
+      llm: { chatStream: async function* () { llmCalls += 1; } },
+      tts: { speech: async () => new Uint8Array(writeWav(new Float32Array(24_000).fill(0.1), 24_000)) },
+    }, {
+      language: "zh", chunking, ttsDefaults, voice: "demo",
+      allowBargeIn: true, turnTaking: "conservative", reopenMs: 7_000,
+      onControls: value => { controls = value; },
+      onAgentInput: (text, turn) => { inputs.push({ text, turnId: turn.id }); },
+    }, {
+      onTranscript: () => {},
+      onReply: text => { replies.push(text); },
+    });
+
+    expect(controls?.submitUserText("第一个任务")).toBe(true);
+    await Promise.resolve();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(controls?.submitUserText("补充说明")).toBe(true);
+    releaseFrames();
+    await running;
+
+    expect(inputs.map(entry => entry.text)).toEqual(["第一个任务", "补充说明"]);
+    expect(inputs[0]?.turnId).not.toBe(inputs[1]?.turnId);
+    expect(llmCalls).toBe(0);
+    expect(played).toEqual([]);
+    expect(replies).toEqual([]);
+    expect(session.state).toBe("listening");
+  });
+
   test("discards asynchronous VAD events that finish after a typed replacement", async () => {
     const session = new DuplexSession();
     session.start();

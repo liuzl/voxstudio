@@ -47,6 +47,12 @@ export interface SessionStartOptions {
   voice?: string;
   /** Speech may interrupt playback. Enable only on an echo-cancelled endpoint. Default false. */
   bargeIn?: boolean;
+  /**
+   * Route finalized user turns to the session-scoped executor run instead of the
+   * ordinary LLM reply pipeline (docs/voice-agent-roadmap.md Phase B). Default
+   * false; agent narration and progress come from the run, not the turn loop.
+   */
+  agentMode?: boolean;
   turnTaking?: "conservative" | "speculative";
   reopenMs?: number;
   vad?: "energy" | "silero";
@@ -94,6 +100,7 @@ export type GatewayCommand =
   | (CommandBase & { type: "session.snapshot.request" })
   | (CommandBase & { type: "turn.text"; text: string })
   | (CommandBase & { type: "turn.interrupt"; turnId: string })
+  | (CommandBase & { type: "agent.cancel"; reason?: string })
   | (CommandBase & { type: "playback.complete"; turnId: string })
   | (CommandBase & { type: "media.ping"; clientSentAtMs: number })
   | (CommandBase & { type: "session.stop" });
@@ -181,6 +188,10 @@ export type GatewayEventPayload =
       serverSentAtMs: number;
     }
   | { type: "session.snapshot"; state: DuplexState; currentTurnId?: string; lastSequence: number }
+  | { type: "agent.run.started"; runId: string }
+  | { type: "agent.run.progress"; runId: string; summary: string }
+  | { type: "agent.run.answer"; runId: string; text: string }
+  | { type: "agent.run.terminal"; runId: string; state: "completed" | "failed" | "cancelled" }
   | { type: "tool.call"; turnId: string; name: string; arguments: Record<string, unknown> }
   | { type: "tool.result"; turnId: string; name: string; ok: boolean; result?: unknown }
   | { type: "tool.pending"; turnId: string; name: string; arguments: Record<string, unknown> }
@@ -279,6 +290,8 @@ function parseStartOptions(value: unknown): SessionStartOptions {
   if (!isRecord(value)) throw new ProtocolError("options must be an object");
   const bargeIn = value.bargeIn;
   if (bargeIn !== undefined && typeof bargeIn !== "boolean") throw new ProtocolError("bargeIn must be a boolean");
+  const agentMode = value.agentMode;
+  if (agentMode !== undefined && typeof agentMode !== "boolean") throw new ProtocolError("agentMode must be a boolean");
   const playbackAck = value.playbackAck;
   if (playbackAck !== undefined && typeof playbackAck !== "boolean") throw new ProtocolError("playbackAck must be a boolean");
   const mediaTelemetry = value.mediaTelemetry;
@@ -338,6 +351,7 @@ function parseStartOptions(value: unknown): SessionStartOptions {
   if (ttsEngine !== undefined) options.ttsEngine = ttsEngine;
   if (maxTokens !== undefined) options.maxTokens = maxTokens;
   if (voice !== undefined) options.voice = voice;
+  if (agentMode !== undefined) options.agentMode = agentMode;
   if (bargeIn !== undefined) options.bargeIn = bargeIn;
   if (playbackAck !== undefined) options.playbackAck = playbackAck;
   if (mediaTelemetry !== undefined) options.mediaTelemetry = mediaTelemetry;
@@ -385,6 +399,17 @@ export function parseCommand(text: string): GatewayCommand {
       if (!submitted) throw new ProtocolError("turn.text text must not be empty");
       if (submitted.length > 8_000) throw new ProtocolError("turn.text text must be at most 8000 characters");
       return { v: protocolVersion, type, idempotencyKey, text: submitted };
+    }
+    case "agent.cancel": {
+      const reason = value.reason;
+      if (reason !== undefined) {
+        if (typeof reason !== "string") throw new ProtocolError("agent.cancel reason must be a string");
+        const submitted = reason.trim();
+        if (!submitted) throw new ProtocolError("agent.cancel reason must not be empty");
+        if (submitted.length > 200) throw new ProtocolError("agent.cancel reason must be at most 200 characters");
+        return { v: protocolVersion, type, idempotencyKey, reason: submitted };
+      }
+      return { v: protocolVersion, type, idempotencyKey };
     }
     case "media.ping": {
       const clientSentAtMs = value.clientSentAtMs;

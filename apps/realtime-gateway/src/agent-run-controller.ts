@@ -62,7 +62,7 @@ export interface AgentRunControllerOptions {
 
 const defaultMilestoneIntervalMs = 5_000;
 
-function defaultMilestoneText(event: AgentEvent): string | undefined {
+export function defaultMilestoneText(event: AgentEvent): string | undefined {
   switch (event.type) {
     case "tool.started":
       return `正在${event.name}…`;
@@ -88,6 +88,11 @@ export class AgentRunController {
   readonly run: AgentRun;
   /** Resolves when the run's event stream ended and the controller drained it. */
   readonly drained: Promise<void>;
+
+  /** True once the run reached a terminal state; steer() is rejected and events are dead. */
+  get isTerminal(): boolean {
+    return this.terminal;
+  }
 
   private readonly speech: AgentSpeechSink;
   private readonly now: () => number;

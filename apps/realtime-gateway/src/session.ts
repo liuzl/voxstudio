@@ -1,5 +1,6 @@
 import { type PcmStreamDecoder, AsrClient, LlmClient, TtsClient, type Fetch } from "@voxstudio/clients";
 import { encodePcm16, LinearResampler } from "@voxstudio/audio";
+import { FakeAgentExecutor, type AgentEvent, type AgentExecutor } from "@voxstudio/agent-executor";
 import type { AgentSpec } from "@voxstudio/agents";
 import { engine, enginesOfKind, roleInstance } from "@voxstudio/config";
 import {
@@ -20,6 +21,7 @@ import {
 import type { EngineKind, ResolvedEngineConfig, SpeechInput, VoxConfig } from "@voxstudio/contracts";
 import {
   DuplexSession,
+  type DuplexTurn,
   type SpeechProbabilityModel,
   type VadSegmenter,
 } from "@voxstudio/duplex-session";
@@ -33,6 +35,8 @@ import {
   type SessionStartOptions,
 } from "./protocol";
 import { encodeMediaV2Frame, mediaV2FlagStart } from "./media-v2";
+import { AgentRunController, defaultMilestoneText } from "./agent-run-controller";
+import { createAgentSpeechSink } from "./agent-speech-sink";
 
 /** Where a session's outbound traffic goes: the WebSocket currently attached to it. */
 export interface SinkSendObservation {
@@ -74,6 +78,12 @@ export interface GatewaySessionOptions {
   deploymentDefaultVoice?: string;
   /** Resolved Agent behavior for overlays that are not direct realtime wire fields. */
   agentSpec?: AgentSpec;
+  /**
+   * Executor backend for agent-mode sessions (docs/voice-agent-roadmap.md
+   * Phase B). Absent, sessions use the deterministic fake executor; Phase C
+   * injects a pi-backed adapter behind the same boundary.
+   */
+  agentExecutor?: AgentExecutor;
   /**
    * Asks whether this conversation may spend one more turn (docs/auth.md phase 4).
    * Called once per conversational turn, when the user's utterance is finalized and
@@ -301,10 +311,16 @@ export class GatewaySession {
   /** Set by the end_call tool: hang up after the current turn finishes audibly. */
   private endAfterTurn = false;
   private controls: ConversationControls | undefined;
+  /** Agent-mode runs owned by this session, in start order (Phase B). */
+  private readonly agentControllers: AgentRunController[] = [];
+  /** Settles once the session and every agent run it owns have fully drained. */
+  private readonly donePromise: Promise<void>;
+  private resolveDone!: () => void;
   /** Conversation-referent bookkeeping for the Studio tools; in-memory only, never retained. */
   private readonly referents = createStudioReferents();
   constructor(options: GatewaySessionOptions) {
     this.options = options;
+    this.donePromise = new Promise<void>(resolve => { this.resolveDone = resolve; });
     this.duplex = new DuplexSession({
       ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
       onEvent: event => {
@@ -320,6 +336,12 @@ export class GatewaySession {
           // in the same breath): its own completed turn re-arrives here, queue empty.
           queueMicrotask(() => { this.stop(); });
         }
+        // A confirmed barge-in stops agent narration only; execution keeps running.
+        // The loop has already interrupted the speaking turn, so this is just the
+        // controller's mouth gate — never a second interrupt of the user's own turn.
+        if (payload.type === "turn.interrupted" && payload.reason === "barge_in") {
+          this.agentControllers.at(-1)?.stopSpeech();
+        }
       },
     });
     this.id = this.duplex.sessionId;
@@ -327,7 +349,11 @@ export class GatewaySession {
   }
 
   get done(): Promise<void> {
-    return this.conversation ?? Promise.resolve();
+    // One stable promise settled by stop(): bounded shutdown drains the loop and
+    // every session-scoped agent run before it settles, so a caller that captured
+    // `done` at session-open (the LiveKit adapter) never closes the sink mid-drain
+    // and drops the run's terminal event or final narration.
+    return this.donePromise;
   }
 
   get failureCode(): string | undefined {
@@ -352,6 +378,55 @@ export class GatewaySession {
     const engineVoice = map(input.voice);
     if (engineVoice === null) throw new TypeError(`unknown voice ${input.voice}`);
     return { ...input, voice: engineVoice };
+  }
+
+  /**
+   * Agent mode (Phase B): the first finalized user turn starts the session-scoped
+   * run; later turns steer it. Inputs are ordered and at-most-once by turn id, so
+   * a reconnect that replays a turn cannot steer the same input twice.
+   */
+  private async onAgentInput(text: string, turn: DuplexTurn): Promise<void> {
+    const current = this.agentControllers.at(-1);
+    if (current !== undefined && !current.isTerminal) {
+      await current.steer({ inputId: turn.id, text });
+      return;
+    }
+    // No live run, or the previous run reached a terminal state: this input starts a
+    // fresh run. The lifecycle contract rejects steering a finished run, so a follow-up
+    // question begins a new run instead of failing the turn.
+    const executor = this.options.agentExecutor ?? new FakeAgentExecutor();
+    const runId = crypto.randomUUID();
+    const controller = new AgentRunController({
+      executor,
+      speech: createAgentSpeechSink(this.controls!, () => {
+        // Stop audible narration only, never the user's fresh barge-in turn: the
+        // loop already interrupted the narration turn by the time this runs.
+        if (this.duplex.state === "speaking") this.duplex.interrupt("barge_in");
+      }),
+      input: { inputId: turn.id, text },
+      context: { runId, sessionId: this.id, userId: this.owner },
+      onEvent: event => this.emitAgentRunEvent(runId, event),
+      onTerminal: state => this.emit({ type: "agent.run.terminal", runId, state }),
+    });
+    this.agentControllers.push(controller);
+    this.emit({ type: "agent.run.started", runId });
+  }
+
+  /** Protocol fan-out for the agent run: progress and answers, never post-terminal. */
+  private emitAgentRunEvent(runId: string, event: AgentEvent): void {
+    switch (event.type) {
+      case "text.final":
+        this.emit({ type: "agent.run.answer", runId, text: event.text });
+        break;
+      case "tool.started":
+      case "tool.progress": {
+        const summary = defaultMilestoneText(event);
+        if (summary !== undefined) this.emit({ type: "agent.run.progress", runId, summary });
+        break;
+      }
+      default:
+        break;
+    }
   }
 
   async start(start: SessionStartOptions, sink: EventSink): Promise<void> {
@@ -418,6 +493,11 @@ export class GatewaySession {
         ? { pronunciations: { ...config.pronunciations, ...this.options.agentSpec?.pronunciations } } : {}),
     } as Parameters<typeof runConversation>[1];
     conversationOptions.onControls = handle => { this.controls = handle; };
+    if (start.agentMode === true) {
+      // Agent mode: finalized user turns (audio or typed) become executor inputs
+      // instead of LLM replies; narration comes only from the run.
+      conversationOptions.onAgentInput = (text, turn) => this.onAgentInput(text, turn);
+    }
     conversationOptions.keyterms = createKeytermProvider({
       configTerms: [...config.keyterms, ...(this.options.agentSpec?.keyterms ?? [])],
       listVoices: async () => await this.options.listVoices?.() ?? [],
@@ -654,6 +734,21 @@ export class GatewaySession {
         this.duplex.interrupt("cancel");
         return;
       }
+      case "agent.cancel": {
+        const controller = this.agentControllers.at(-1);
+        if (controller === undefined) {
+          this.emit({
+            type: "command.rejected",
+            reason: "no_active_agent_run",
+            commandType: command.type,
+            idempotencyKey: command.idempotencyKey,
+          });
+          return;
+        }
+        this.accept(command);
+        void controller.cancel(command.reason ?? "user_cancelled");
+        return;
+      }
       case "playback.complete":
         // The endpoint's audible clock: the reply for this turn has finished rendering.
         // Arrival before the server-side close() starts waiting is a legal race, so the
@@ -855,6 +950,12 @@ export class GatewaySession {
     }
     this.frames.end();
     this.duplex.close();
+    // Agent mode: hang-up and shutdown cancel every session-scoped run with bounded
+    // cleanup. Each controller drains its event stream before `done` settles, so the
+    // run's terminal event and any last narration reach the sink while it is open.
+    const drains = this.agentControllers.map(controller => controller.endSession("session_ended"));
+    void Promise.all([this.conversation ?? Promise.resolve(), ...drains])
+      .then(() => this.resolveDone(), () => this.resolveDone());
     this.options.onClosed?.(this);
   }
 

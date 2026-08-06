@@ -310,7 +310,12 @@ Promotion gates:
 
 Status: the zero-dependency `@voxstudio/agent-executor` boundary, fake
 executor, fake `ToolRunner`, policy validator, and invocation ledger have
-landed. Gateway/session integration has not started.
+landed, and gateway/session integration now runs behind `agentMode: false` by
+default. A session-scoped run starts on the first finalized user turn (audio or
+typed), later turns steer it, `agent.cancel` cancels deterministically, barge-in
+stops only narration, hang-up cancels with bounded cleanup, and run progress is
+surfaced as `agent.run.*` protocol events. Web UI state for run progress and the
+Web cancel/steer controls remain.
 
 ### Phase C — minimal pi backend
 
@@ -418,11 +423,11 @@ Re-evaluate when:
 | Sandbox/tool-broker security baseline | accepted; real isolated runner remains Phase D |
 | Gateway/player composition controller | landed (`agent-run-controller.ts` + `agent-speech-sink.ts`; fake-executor run narrates through the real conversation channel); session executor integration pending |
 | Vox executor adapter | types, fake executor, fake ToolRunner, and invocation ledger landed |
-| Gateway/session executor integration | not started |
+| Gateway/session executor integration | landed (session wiring behind `agentMode: false`; `agent.run.*` events, steer, `agent.cancel`, barge-in, hang-up); Web UI run state pending |
 | pi production dependency | not added |
 | Artifact contract and UI | not started |
 | Dual-channel conversation input | not started |
 | Voiceprint sidecar | separate future project |
 
-The next implementation change is Phase A gateway/player integration using the
-fake executor, not installing pi.
+The next implementation change is the Phase B Web UI: render `agent.run.*` events
+as run progress and add the Web cancel/steer controls. pi is not installed.
