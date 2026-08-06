@@ -160,25 +160,27 @@ export interface ConversationTraceEvent {
   [key: string]: unknown;
 }
 
+export interface ConversationMediaDescriptor {
+  id: string;
+  sessionId: string;
+  turnId: string;
+  revision: number;
+  direction: "input" | "output";
+  state: "pending" | "ready" | "missing" | "truncated";
+  delivery: "sent" | "playback_acknowledged" | "interrupted" | "superseded" | null;
+  sampleRate: number;
+  channels: 1;
+  sampleCount: number;
+  durationMs: number;
+  bytes: number;
+  sha256: string | null;
+  createdAt: number;
+  errorCode: string | null;
+}
+
 export interface ConversationTraceDetail extends ConversationTraceSummary {
   events: ConversationTraceEvent[];
-  media: Array<{
-    id: string;
-    sessionId: string;
-    turnId: string;
-    revision: number;
-    direction: "input" | "output";
-    state: "pending" | "ready" | "missing" | "truncated";
-    delivery: "sent" | "playback_acknowledged" | "interrupted" | "superseded" | null;
-    sampleRate: number;
-    channels: 1;
-    sampleCount: number;
-    durationMs: number;
-    bytes: number;
-    sha256: string | null;
-    createdAt: number;
-    errorCode: string | null;
-  }>;
+  media: ConversationMediaDescriptor[];
 }
 
 export async function listAgentConversations(id: string, filters: {
@@ -224,6 +226,12 @@ export async function deleteAgentConversation(agentId: string, sessionId: string
     method: "DELETE",
   });
   if (!response.ok) await fail(response, "删除会话");
+}
+
+export function agentConversationMediaUrl(agentId: string, sessionId: string, assetId: string): string {
+  return gatewayResourceUrl(
+    `/v1/agents/${encodeURIComponent(agentId)}/conversations/${encodeURIComponent(sessionId)}/media/${encodeURIComponent(assetId)}`,
+  );
 }
 
 export interface DeploymentInfo {

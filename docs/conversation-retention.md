@@ -1,7 +1,8 @@
 # Conversation retention and media architecture
 
-Status: Accepted design; conversation-only retained-media backend and protected
-download API delivered, shared Library media and replay UI pending, 2026-08-06.
+Status: Accepted design; conversation-only retained-media backend, protected
+download API, and revision-aware Agent Builder replay UI delivered; shared
+Library media pending, 2026-08-06.
 
 This document defines how VoxStudio records an Agent conversation, how optional
 input and output audio is retained, and how that data relates to the existing
@@ -74,15 +75,17 @@ success, and resumes an incomplete cleanup on startup or the next retention
 sweep. The runtime byte ceiling evicts the oldest completed conversations before
 refusing media from the protected active session.
 
-This leaves three follow-up gaps:
+Agent Builder now joins text and media by `(turn_id, revision)`, exposes separate
+input/output playback controls and duration/delivery state, and reports the
+effective directional audio policy instead of always claiming audio is off.
+
+This leaves two follow-up gaps:
 
 1. a Trace policy reporting `audio: false` does not mean no VoxStudio component
    retained user audio, because the independently enabled Library may have done
    so;
 2. existing Library WAVs cannot be mapped reliably to a turn or speculative
    revision from `session_id` alone;
-3. Agent Builder does not yet render the retained descriptors or playback
-   controls, although the owner-checked WAV endpoint is available.
 
 ## Decisions
 
@@ -235,6 +238,36 @@ actually submitted to the sink. A zero-sample rendition creates no Media asset.
 Input already arrives as a bounded utterance WAV and may be enqueued as one
 unit. The retention coordinator fans the resulting asset out to Conversation
 and Library references according to their independent policies.
+
+### 7. WAV remains the canonical first format; compression is a derived tier
+
+The first implementation keeps PCM16 WAV because it is deterministic, directly
+inspectable, broadly decodable, and can be finalized without adding an encoder
+to the realtime path. At the current 16 kHz input and 48 kHz output rates, mono
+PCM16 costs about 115.2 MB and 345.6 MB per active audio hour respectively. A
+typical alternating conversation is therefore roughly 230 MB per wall-clock
+hour before filesystem overhead, which is appropriate for bounded local traces
+but not for long-lived production history.
+
+[RFC 6716](https://www.rfc-editor.org/rfc/rfc6716) places Opus speech sweet
+spots at 16–20 kbit/s for wideband and 28–40 kbit/s for fullband speech. A
+24–32 kbit/s replay tier would therefore use roughly 10.8–14.4 MB per active
+audio hour before container overhead — about 16–21 times smaller than the
+current alternating PCM mix. Container support must still be tested rather
+than assumed: WebKit added iOS/iPadOS-wide WebM support in Safari 17.4 and Ogg
+Opus support in Safari 18.4, so older mobile clients still require feature
+detection and a WAV fallback ([Safari 17.4](https://webkit.org/blog/15063/webkit-features-in-safari-17-4/),
+[Safari 18.4](https://webkit.org/blog/16574/webkit-features-in-safari-18-4/)).
+
+VoxStudio must not replace these files in-place merely to save space. A future
+storage tier may asynchronously create a compressed replay representation
+(Opus is the leading candidate) after canonical finalization. Before that ships,
+the Media descriptor and endpoint need explicit container, codec, content type,
+original-format, and checksum semantics plus a browser/mobile compatibility
+gate and WAV fallback. Curated voice references, ASR evaluation fixtures, and
+forensic/debug exports may continue to preserve WAV; ordinary expired replay
+history may retain only the compressed representation. Encoding failure must
+leave the canonical asset usable and must never affect the live conversation.
 
 ## Domain model
 
@@ -501,10 +534,11 @@ as an error.
 
 Delivery status as of 2026-08-06: step 1 is delivered; directional deployment
 policy, the private conversation Media Store, input/output capture, protected
-download, byte/time/count pruning, and explicit conversation deletion from
-steps 2–7 are delivered. Conversation policy snapshots, shared Library Media
-references, account-deletion coordination, legacy migration tooling, and Agent
-Builder replay controls remain pending.
+download, revision-aware Agent Builder replay, byte/time/count pruning, and
+explicit conversation deletion from steps 2–7 are delivered. Conversation
+policy snapshots, shared Library Media references, account-deletion
+coordination, legacy migration tooling, and compressed replay derivatives remain
+pending.
 
 1. **Identity first.** Replace/extend `onUtterance` with turn and revision
    identity; add regression coverage for reopen, empty ASR, and interruption.
