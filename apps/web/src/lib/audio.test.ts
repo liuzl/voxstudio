@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { microphoneConstraints, playbackWorkletSource, PlaybackTimeline } from "./audio";
+import { microphoneConstraints, playbackWorkletSource, PlaybackTimeline, visibleAudioInputDevices } from "./audio";
+import { microphoneDevicesNeedPermission } from "./use-microphone";
 
 describe("PlaybackTimeline", () => {
   test("schedules gaplessly and reports the audible remainder", () => {
@@ -64,6 +65,21 @@ describe("microphoneConstraints", () => {
       autoGainControl: false,
       channelCount: 1,
     });
+  });
+});
+
+describe("microphone device permission presentation", () => {
+  test("preserves withheld labels instead of inventing selectable microphone names", () => {
+    const devices = visibleAudioInputDevices([
+      { kind: "audioinput", deviceId: "", label: "" },
+      { kind: "audioinput", deviceId: "default", label: "Default" },
+      { kind: "audioinput", deviceId: "private-id", label: "" },
+      { kind: "videoinput", deviceId: "camera", label: "Camera" },
+    ]);
+
+    expect(devices).toEqual([{ id: "private-id", label: "" }]);
+    expect(microphoneDevicesNeedPermission(devices)).toBe(true);
+    expect(microphoneDevicesNeedPermission([{ id: "private-id", label: "Studio Mic" }])).toBe(false);
   });
 });
 

@@ -259,21 +259,24 @@ export function microphoneConstraints(processing = true, deviceId = ""): MediaTr
 
 export interface AudioInputDevice {
   id: string;
+  /** Empty until the browser exposes labels after microphone permission. */
   label: string;
+}
+
+export function visibleAudioInputDevices(
+  devices: Iterable<Pick<MediaDeviceInfo, "kind" | "deviceId" | "label">>,
+): AudioInputDevice[] {
+  return [...devices]
+    // Pre-permission Chrome reports one placeholder with an empty deviceId and label;
+    // it is not a usable input. Other browsers may expose a stable id while still
+    // withholding the label, which must remain empty so the UI can request permission.
+    .filter(device => device.kind === "audioinput" && device.deviceId !== "" && device.deviceId !== "default")
+    .map(device => ({ id: device.deviceId, label: device.label }));
 }
 
 /** Enumerate origin-visible microphones. Labels become available after the first grant. */
 export async function listAudioInputDevices(): Promise<AudioInputDevice[]> {
-  const devices = await navigator.mediaDevices.enumerateDevices();
-  let unnamed = 0;
-  return devices
-    // Pre-permission Chrome reports one placeholder with an empty deviceId and label;
-    // it is not a usable input, so it must never appear as "Microphone 1".
-    .filter(device => device.kind === "audioinput" && device.deviceId !== "" && device.deviceId !== "default")
-    .map(device => ({
-      id: device.deviceId,
-      label: device.label || `Microphone ${++unnamed}`,
-    }));
+  return visibleAudioInputDevices(await navigator.mediaDevices.enumerateDevices());
 }
 
 /**

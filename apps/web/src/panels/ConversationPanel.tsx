@@ -17,6 +17,7 @@ import { VoicePicker } from "../components/VoicePicker";
 import { ConversationRoutePicker } from "../components/EngineRoutePicker";
 import { PageHeader, SectionCard, StatusBadge, primaryButton, secondaryButton } from "../components/StudioPage";
 import { conversationControls, downloadMediaTrace, startConversation, stopConversation } from "../conversation";
+import { isMicrophonePermissionDenied } from "../lib/audio";
 import { formatMediaTransportDetails, mediaTransportFallbackMessage } from "../lib/media-telemetry";
 import { useGatewayHealth } from "../lib/useGatewayHealth";
 import { useMicrophoneDevices } from "../lib/use-microphone";
@@ -210,11 +211,19 @@ function MicLevel() {
 
 function AudioInputPicker() {
   const t = useT();
+  const toast = useStudio(state => state.toast);
   const selected = useStudio(state => state.micInputDeviceId);
   const setSelected = useStudio(state => state.setMicInputDevice);
   const { devices, needsPermission, authorizing, authorize } = useMicrophoneDevices();
 
   const selectedAvailable = !selected || devices.some(device => device.id === selected);
+  const requestPermission = (): void => {
+    void authorize().catch(error => {
+      toast("error", isMicrophonePermissionDenied(error)
+        ? t("麦克风权限被拒绝：请在浏览器中允许麦克风访问后重试")
+        : error instanceof Error ? error.message : String(error));
+    });
+  };
   return (
     <div className="flex flex-col gap-1.5">
       <label className="flex items-center gap-2 text-xs text-ink-300">
@@ -233,7 +242,7 @@ function AudioInputPicker() {
       {needsPermission ? (
         <button
           type="button"
-          onClick={() => void authorize()}
+          onClick={requestPermission}
           disabled={authorizing}
           className="self-start rounded border border-ink-700 bg-ink-800 px-2 py-1 text-[10px] text-ink-300 transition hover:bg-ink-700 disabled:opacity-50"
         >

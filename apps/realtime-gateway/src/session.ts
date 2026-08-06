@@ -736,7 +736,7 @@ export class GatewaySession {
       }
       case "agent.cancel": {
         const controller = this.agentControllers.at(-1);
-        if (controller === undefined) {
+        if (controller === undefined || controller.isTerminal) {
           this.emit({
             type: "command.rejected",
             reason: "no_active_agent_run",

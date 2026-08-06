@@ -161,6 +161,26 @@ describe("agent mode session (Phase B gateway/session integration)", () => {
     await session.done;
   });
 
+  test("agent.cancel after the run terminated is rejected as no longer active", async () => {
+    const events: GatewayEvent[] = [];
+    const executor = new FakeAgentExecutor();
+    const session = await startAgentSession({ events, executor });
+
+    session.handleCommand({ v: protocolVersion, type: "turn.text", idempotencyKey: "input-1", text: "任务" });
+    await waitFor(() => executor.runs.length === 1);
+    executor.runs[0]!.complete();
+    await waitFor(() => events.some(event => event.type === "agent.run.terminal"));
+
+    session.handleCommand({ v: protocolVersion, type: "agent.cancel", idempotencyKey: "cancel-after-terminal" });
+    await flush();
+    expect(events.some(event => event.type === "command.rejected"
+      && event.idempotencyKey === "cancel-after-terminal"
+      && event.reason === "no_active_agent_run")).toBe(true);
+
+    session.stop();
+    await session.done;
+  });
+
   test("hang-up cancels the session-scoped run with bounded cleanup", async () => {
     const events: GatewayEvent[] = [];
     const executor = new FakeAgentExecutor();

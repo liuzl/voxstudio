@@ -327,7 +327,9 @@ export class ConversationMediaStore {
           return;
         }
         await writeFile(temporary, bytes, { mode: 0o600 });
-        await open(temporary, "r").then(async handle => { try { await handle.sync(); } finally { await handle.close(); } });
+        // Windows requires write access for FlushFileBuffers; a read-only handle makes
+        // Bun's FileHandle.sync() fail even though the preceding write succeeded.
+        await open(temporary, "r+").then(async handle => { try { await handle.sync(); } finally { await handle.close(); } });
         await mkdir(dirname(target), { recursive: true, mode: 0o700 });
         await rename(temporary, target);
         await chmod(target, 0o600);

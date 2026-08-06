@@ -56,6 +56,7 @@ import {
   type VoiceEntry,
 } from "../lib/api";
 import type { ConnectionState } from "../lib/client";
+import { isMicrophonePermissionDenied } from "../lib/audio";
 import { formatMediaTransportDetails, mediaTransportFallbackMessage } from "../lib/media-telemetry";
 import { useMicrophoneDevices } from "../lib/use-microphone";
 import { useStudio } from "../store";
@@ -1390,6 +1391,13 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
   const [sendingText, setSendingText] = useState(false);
   const [textInput, setTextInput] = useState("");
   const { devices: audioInputs, needsPermission: micNeedsPermission, authorizing: micAuthorizing, authorize: authorizeMicrophone } = useMicrophoneDevices();
+  const requestMicrophonePermission = (): void => {
+    void authorizeMicrophone().catch(error => {
+      toast("error", isMicrophonePermissionDenied(error)
+        ? t("麦克风权限被拒绝：请在浏览器中允许麦克风访问后重试")
+        : error instanceof Error ? error.message : String(error));
+    });
+  };
   const [previewTraceKey, setPreviewTraceKey] = useState<string>();
   const [hasUnseen, setHasUnseen] = useState(false);
   const previewOwned = useRef(false);
@@ -1669,7 +1677,7 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
             {micNeedsPermission ? (
               <button
                 type="button"
-                onClick={() => void authorizeMicrophone()}
+                onClick={requestMicrophonePermission}
                 disabled={micAuthorizing}
                 className="self-end rounded-full border border-edge bg-canvas px-2.5 py-1 text-[10px] text-fg-secondary transition hover:bg-fill-hover disabled:cursor-not-allowed disabled:opacity-40"
               >
