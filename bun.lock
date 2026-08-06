@@ -58,6 +58,7 @@
       "dependencies": {
         "@better-auth/api-key": "^1.6.25",
         "@livekit/rtc-node": "^0.13.33",
+        "@voxstudio/agent-executor": "workspace:*",
         "@voxstudio/agents": "workspace:*",
         "@voxstudio/audio": "workspace:*",
         "@voxstudio/clients": "workspace:*",

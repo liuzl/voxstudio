@@ -273,10 +273,18 @@ Promotion gates:
 - no superseded narration is heard after steering;
 - no zombie event mutates a completed or cancelled run.
 
-Status: contract, pure state-model tests, and initial broker race tests landed
-(barge-in/tool completion, cancel/commit ordering, scoped duplicate IDs, and
-bounded fake-runner drain). Gateway/player integration and its 150 ms
-audible-stop gate remain before Phase A is complete.
+Status: contract, pure state-model tests, initial broker race tests, and the
+gateway/player composition controller have landed. The composition controller
+(`apps/realtime-gateway/src/agent-run-controller.ts`) composes one executor run
+with the lifecycle and a speech sink under deterministic tests over fake speech
+and fake execution; it enforces the promotion gates at the seam: barge-in stops
+speech without aborting execution, steering is ordered and at-most-once, explicit
+cancel is terminal and reported exactly once, milestones coalesce and are
+preempted by direct answers, late events never mutate a finished run, and events
+that race an explicit cancel are dropped in favor of the cancellation outcome.
+Gateway session wiring (mapping the speech sink to queueAgentSpeech/interrupt)
+and the measured 150 ms audible-stop gate on real playback remain before Phase A
+is complete.
 
 ### Phase B — executor adapter with a fake backend
 
@@ -403,6 +411,7 @@ Re-evaluate when:
 | Qwen3-ASR final revision tier | shipped |
 | Executor lifecycle contract | accepted; pure state model and race tests landed |
 | Sandbox/tool-broker security baseline | accepted; real isolated runner remains Phase D |
+| Gateway/player composition controller | landed (`agent-run-controller.ts` + deterministic tests); session wiring pending |
 | Vox executor adapter | types, fake executor, fake ToolRunner, and invocation ledger landed |
 | Gateway/session executor integration | not started |
 | pi production dependency | not added |
