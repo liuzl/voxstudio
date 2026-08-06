@@ -870,7 +870,25 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
           summary: "Permanently delete one retained Agent conversation",
           responses: {
             "200": { description: "Deleted." },
+            "409": errorResponse("The conversation is still active and must be stopped before deletion."),
             "404": errorResponse("Retention is disabled or the conversation does not exist for this owner."),
+          },
+        },
+      },
+      "/v1/agents/{id}/conversations/{sessionId}/media/{assetId}": {
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } },
+          { name: "sessionId", in: "path", required: true, schema: { type: "string" } },
+          { name: "assetId", in: "path", required: true, schema: { type: "string" } },
+        ],
+        get: {
+          summary: "Read one owner-scoped retained conversation WAV",
+          responses: {
+            "200": {
+              description: "Canonical input or output WAV.",
+              content: { "audio/wav": { schema: { type: "string", format: "binary" } } },
+            },
+            "404": errorResponse("The conversation or ready media asset does not exist for this owner."),
           },
         },
       },

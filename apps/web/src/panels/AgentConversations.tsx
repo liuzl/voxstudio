@@ -197,7 +197,10 @@ export function AgentConversations({ agentId }: { agentId: string }) {
   const locale = resolveLocale(useI18n(state => state.locale));
   const toast = useStudio(state => state.toast);
   const [conversations, setConversations] = useState<ConversationTraceSummary[]>([]);
-  const [policy, setPolicy] = useState<ConversationTracePolicy>({ enabled: true, content: false, audio: false });
+  const [policy, setPolicy] = useState<ConversationTracePolicy>({
+    enabled: true, content: false, audio: false,
+    inputAudio: false, outputAudio: false, maxBytes: null,
+  });
   const [loading, setLoading] = useState(true);
   const [failure, setFailure] = useState("");
   const [query, setQuery] = useState("");

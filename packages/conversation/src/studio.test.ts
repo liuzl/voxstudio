@@ -125,9 +125,9 @@ async function runStudio(config: {
     onControls: handle => { controls = handle; },
   }, {
     ...config.callbacks,
-    onUtterance: async (wav, transcript) => {
-      referents.recordUtterance(wav, transcript);
-      await config.callbacks?.onUtterance?.(wav, transcript);
+    onUtterance: async utterance => {
+      referents.recordUtterance(utterance.wav, utterance.rawTranscript);
+      await config.callbacks?.onUtterance?.(utterance);
     },
     onReply: (text, turnHandle) => {
       referents.recordReply(text);
@@ -196,7 +196,7 @@ describe("studio tools", () => {
           registered.push({ id, transcript, bytes: wav.length });
         },
       },
-      callbacks: { onUtterance: wav => { utteranceBytes.push(wav.length); } },
+      callbacks: { onUtterance: utterance => { utteranceBytes.push(utterance.wav.length); } },
     });
     // Held at the ask, executed at the confirm — and the audio is the SAMPLE utterance
     // (pinned when the action parked), not the command or the confirmation.

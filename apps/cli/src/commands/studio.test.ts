@@ -218,17 +218,23 @@ describe("vox studio", () => {
       "--trace-content",
       "--trace-retention-days", "14",
       "--trace-max-conversations", "500",
+      "--trace-audio", "both",
+      "--trace-max-bytes", "2G",
     ], config, io, options => { seen = options; return fakeGateway(); }, false)).toBe(0);
     expect(seen).toMatchObject({
       traceDir: "/tmp/vox-traces",
       traceContent: true,
       traceRetentionDays: 14,
       traceMaxConversations: 500,
+      traceAudio: "both",
+      traceMaxBytes: 2 * 1024 * 1024 * 1024,
     });
     await expect(runStudio(["--trace-content"], config, io, () => fakeGateway(), false))
       .rejects.toThrow("require --traces");
     await expect(runStudio(["--traces", "/tmp/vox-traces", "--trace-retention-days", "0"], config, io, () => fakeGateway(), false))
       .rejects.toThrow("positive integer");
+    await expect(runStudio(["--traces", "/tmp/vox-traces", "--trace-audio", "everything"], config, io, () => fakeGateway(), false))
+      .rejects.toThrow("input, output, or both");
   });
 
   test("--demo-agent resolves and pins the current immutable published version", async () => {

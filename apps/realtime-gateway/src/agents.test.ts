@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseConfig } from "@voxstudio/config";
@@ -66,7 +66,9 @@ class RealtimeClient {
   }
 
   sendTurn(): void {
-    for (const amplitude of [0.2, 0.2, 0, 0]) this.socket.send(new Float32Array(320).fill(amplitude).buffer);
+    for (const amplitude of [0.2, 0.2, 0.2, 0.2, 0, 0, 0, 0]) {
+      this.socket.send(new Float32Array(320).fill(amplitude).buffer);
+    }
   }
 
   stop(): void {
@@ -321,6 +323,8 @@ describe("Agent REST registry", () => {
       agentsDir,
       traceDir,
       traceContent: true,
+      traceAudio: "both",
+      traceMaxBytes: 1_000_000,
       authResolver: identity,
       fetch: engineFetch,
     });
@@ -343,6 +347,9 @@ describe("Agent REST registry", () => {
     client.sendTurn();
     await client.until(events => events.some(event => event.type === "turn.completed"), "completed turn");
     const sessionId = client.events[0]?.sessionId as string;
+    const activeDelete = await request(`/v1/agents/traced/conversations/${sessionId}`, { method: "DELETE" });
+    expect(activeDelete.status).toBe(409);
+    expect((await activeDelete.json() as { error: { code: string } }).error.code).toBe("conversation_active");
     client.stop();
     await client.until(events => events.some(event => event.type === "session.state" && event.state === "closed"), "closed state");
 
@@ -350,9 +357,11 @@ describe("Agent REST registry", () => {
     expect(listResponse.status).toBe(200);
     const list = await listResponse.json() as {
       conversations: Array<{ id: string; agentVersion: number; agentHash: string; outcome: string; turnCount: number }>;
-      policy: { content: boolean; audio: boolean };
+      policy: { content: boolean; audio: boolean; inputAudio: boolean; outputAudio: boolean; maxBytes: number };
     };
-    expect(list.policy).toEqual(expect.objectContaining({ content: true, audio: false }));
+    expect(list.policy).toEqual(expect.objectContaining({
+      content: true, audio: true, inputAudio: true, outputAudio: true, maxBytes: 1_000_000,
+    }));
     expect(list.conversations).toEqual([expect.objectContaining({
       id: sessionId,
       agentVersion: published.version.version,
@@ -361,11 +370,28 @@ describe("Agent REST registry", () => {
       turnCount: 1,
     })]);
 
-    const detail = await request(`/v1/agents/traced/conversations/${sessionId}`).then(response => response.json()) as {
-      conversation: { events: GatewayEvent[] };
-    };
-    expect(detail.conversation.events).toContainEqual(expect.objectContaining({ type: "transcript.final", text: "retained question" }));
-    expect(detail.conversation.events).toContainEqual(expect.objectContaining({ type: "response.text.final", text: "retained answer" }));
+    let detail: { conversation: { events: GatewayEvent[]; media: Array<{ id: string; direction: string; state: string }> } } | undefined;
+    const mediaDeadline = Date.now() + 2_000;
+    do {
+      detail = await request(`/v1/agents/traced/conversations/${sessionId}`).then(response => response.json()) as typeof detail;
+      if (detail?.conversation.media.length === 2 && detail.conversation.media.every(asset => asset.state === "ready")) break;
+      await Bun.sleep(10);
+    } while (Date.now() < mediaDeadline);
+    expect(detail?.conversation.media).toEqual(expect.arrayContaining([
+      expect.objectContaining({ direction: "input", state: "ready" }),
+      expect.objectContaining({ direction: "output", state: "ready" }),
+    ]));
+    const inputAsset = detail?.conversation.media.find(asset => asset.direction === "input")!;
+    const mediaPath = `/v1/agents/traced/conversations/${sessionId}/media/${inputAsset.id}`;
+    const mediaResponse = await request(mediaPath);
+    expect(mediaResponse.status).toBe(200);
+    expect(mediaResponse.headers.get("content-type")).toBe("audio/wav");
+    expect(mediaResponse.headers.get("cache-control")).toBe("private, no-store");
+    expect((await mediaResponse.arrayBuffer()).byteLength).toBeGreaterThan(44);
+    expect((await request(mediaPath, { user: "bob" })).status).toBe(404);
+    expect((await request(`/v1/agents/traced/conversations/${sessionId}/media/${crypto.randomUUID()}`)).status).toBe(404);
+    expect(detail?.conversation.events).toContainEqual(expect.objectContaining({ type: "transcript.final", text: "retained question" }));
+    expect(detail?.conversation.events).toContainEqual(expect.objectContaining({ type: "response.text.final", text: "retained answer" }));
     expect((await request(`/v1/agents/traced/conversations/${sessionId}`, { user: "bob" })).status).toBe(404);
     expect((await request(`/v1/agents/traced/conversations/${sessionId}`, { method: "DELETE", user: "bob" })).status).toBe(404);
     expect((await request(`/v1/agents/traced/conversations/${sessionId}`, { method: "DELETE" })).status).toBe(200);
@@ -381,10 +407,14 @@ describe("Agent REST registry", () => {
 
   test("a trace write failure never prevents an Agent session from starting", async () => {
     const agentsDir = await root();
-    gateway = startGateway({ config, port: 0, agentsDir, traceDir: await root(), authResolver: identity });
+    const traceDir = await root();
+    gateway = startGateway({ config, port: 0, agentsDir, traceDir, traceAudio: "input", authResolver: identity });
     const created = await request("/v1/agents", {
       method: "POST",
-      body: JSON.stringify({ id: "observer", name: "Observer", spec: { vad: "energy" } }),
+      body: JSON.stringify({
+        id: "observer", name: "Observer",
+        spec: { vad: "energy", threshold: 0.1, minSpeechMs: 40, silenceMs: 20 },
+      }),
     }).then(response => response.json()) as { revision: number };
     await request("/v1/agents/observer/publish", {
       method: "POST", body: JSON.stringify({ revision: created.revision }),
@@ -397,8 +427,16 @@ describe("Agent REST registry", () => {
       await client.ready();
       client.command({ agent: "observer" });
       await client.until(events => events.some(event => event.type === "session.snapshot"), "snapshot despite trace failure");
+      await client.until(events => events.some(event => event.type === "session.state" && event.state === "listening"), "listening despite trace failure");
+      client.sendTurn();
+      await client.until(events => events.some(event => event.type === "vad.end"), "finalized input despite trace failure");
+      // onFinalizedInput runs synchronously at this boundary, before ASR may reject or
+      // return an empty transcript. Give a mistakenly installed media observer time to
+      // drain so the filesystem assertion below is adversarial rather than racy.
+      await Bun.sleep(25);
       const list = await request("/v1/agents/observer/conversations").then(response => response.json()) as { conversations: unknown[] };
       expect(list.conversations).toHaveLength(0);
+      expect(await readdir(join(traceDir, "media"), { recursive: true })).toHaveLength(0);
       expect(gateway.sessionCount()).toBe(1);
     } finally {
       ConversationTraceStore.prototype.begin = originalBegin;

@@ -1,7 +1,7 @@
 # Conversation retention and media architecture
 
-Status: Accepted design; Conversation metadata core delivered, retained-media
-implementation not started, 2026-08-03.
+Status: Accepted design; conversation-only retained-media backend and protected
+download API delivered, shared Library media and replay UI pending, 2026-08-06.
 
 This document defines how VoxStudio records an Agent conversation, how optional
 input and output audio is retained, and how that data relates to the existing
@@ -50,30 +50,39 @@ The delivered Trace Store is an owner-scoped SQLite event and conversation
 store. It records the exact Agent draft revision or immutable published version
 and behavior hash. Metadata retention is enabled with `--traces DIR`, and
 content is a separate opt-in through `--trace-content`. Time- and count-based
-retention are enforced. Trace audio is currently always disabled.
+retention are enforced. Directional audio retention is now available through
+`--trace-audio`, with a deployment-wide byte ceiling through
+`--trace-max-bytes`; both remain off by default and demo mode forces audio off.
 
-The Capture Library is a separate explicit opt-in. For every VAD-finalized user
-utterance, `packages/conversation` invokes `onUtterance(wav, transcript)` and the
-gateway stores a WAV plus raw transcript for correction, ASR scoring, and voice
-promotion. Those records currently carry a session id but not the turn id or
-utterance revision.
+The Capture Library remains a separate explicit opt-in. For every VAD-finalized
+user utterance, `packages/conversation` now emits a synchronous
+`FinalizedInputAudio` with session, turn, revision, format, and WAV immediately
+before ASR submission. After ASR it emits the structured `FinalizedUtterance`
+with the raw transcript for the dataset workflow. This split means a speculative
+reopen that cancels ASR cannot erase an input revision already submitted; the
+legacy Library schema still stores only its session id and has not yet moved
+onto shared Media assets.
 
-Agent output is streamed to the protocol sink as PCM and is not retained. The
-gateway knows when samples were generated, submitted to a sink, interrupted,
-and sometimes acknowledged by the client, but it cannot generally prove that a
-listener heard them.
+When output retention is enabled, Agent PCM successfully submitted to the active
+protocol sink is incrementally finalized as a WAV. Delivery is labeled `sent`,
+`playback_acknowledged`, or `interrupted`; it still cannot generally prove that a
+listener heard the audio.
 
-This leaves four correctness gaps:
+Conversation deletion now uses a durable `deleting` marker, refuses an active
+session with `409 conversation_active`, removes WAV bytes before acknowledging
+success, and resumes an incomplete cleanup on startup or the next retention
+sweep. The runtime byte ceiling evicts the oldest completed conversations before
+refusing media from the protected active session.
+
+This leaves three follow-up gaps:
 
 1. a Trace policy reporting `audio: false` does not mean no VoxStudio component
    retained user audio, because the independently enabled Library may have done
    so;
 2. existing Library WAVs cannot be mapped reliably to a turn or speculative
    revision from `session_id` alone;
-3. Agent audio cannot be replayed;
-4. adding WAV paths directly to Trace rows would couple database lifecycle,
-   dataset lifecycle, and realtime delivery without a coherent deletion or
-   quota model.
+3. Agent Builder does not yet render the retained descriptors or playback
+   controls, although the owner-checked WAV endpoint is available.
 
 ## Decisions
 
@@ -121,24 +130,25 @@ explicit policy and authorization boundary.
 
 ### 3. Every audio object belongs to a turn and revision
 
-`onUtterance` must stop being an unstructured observer callback. Its replacement
+Conversation media must not depend on ASR completing. Its early observer
 receives at least:
 
 ```ts
-interface FinalizedUtterance {
+interface FinalizedInputAudio {
   sessionId: string;
   turnId: string;
   revision: number;
   wav: Uint8Array;
-  rawTranscript: string;
   sampleRate: number;
   channels: number;
 }
 ```
 
-The exact shape may follow existing package conventions, but `turnId` and
-`revision` are mandatory. A speculative reopen creates another immutable
-utterance revision; it does not mutate or reuse the prior Media association.
+The later Library observer adds `rawTranscript`. The exact shapes may follow
+existing package conventions, but `turnId` and `revision` are mandatory. A
+speculative reopen creates another immutable utterance revision; it does not
+mutate or reuse the prior Media association, even when the earlier ASR request
+is cancelled before returning text.
 
 Agent output is also keyed by `(sessionId, turnId, revision)`. An interrupted or
 superseded response remains inspectable when its class was retained. The final
@@ -302,13 +312,13 @@ The target store is rooted under the configured trace data directory:
 
 ```text
 <traces>/
-  conversations.db
+  traces.db
   media.db
   media/
     <owner-digest>/
       <asset-prefix>/
         <asset-id>.wav
-  tmp/
+  media-tmp/
 ```
 
 Hosted owner paths use the full hexadecimal SHA-256 digest already established
@@ -424,6 +434,10 @@ length. Byte Range support is desirable for seeking and must be implemented
 before the UI promises scrub-to-seek; it is not required for the first play/pause
 control.
 
+Deleting an active Conversation returns `409 conversation_active`; callers stop
+the live session and retry. A `200` deletion response means both the Conversation
+metadata and its unshared retained WAVs reached their terminal deleted state.
+
 The health response stops presenting one ambiguous audio boolean. During
 compatibility migration it keeps the existing derived `audio` field and adds:
 
@@ -479,11 +493,18 @@ as an error.
    an explicit, resumable migration command after verification.
 5. `--traces`, `--trace-content`, and the current REST paths remain compatible.
    New audio and byte flags are additive.
-6. Until directional health fields ship, current clients continue to see
-   `audio: false`. Documentation must describe this as the current implementation,
-   not the final policy.
+6. Health now keeps the derived `audio` field and publishes directional
+   `input_audio`, `output_audio`, and `max_bytes` fields. Clients must use the
+   directional fields when present.
 
 ## Implementation sequence
+
+Delivery status as of 2026-08-06: step 1 is delivered; directional deployment
+policy, the private conversation Media Store, input/output capture, protected
+download, byte/time/count pruning, and explicit conversation deletion from
+steps 2–7 are delivered. Conversation policy snapshots, shared Library Media
+references, account-deletion coordination, legacy migration tooling, and Agent
+Builder replay controls remain pending.
 
 1. **Identity first.** Replace/extend `onUtterance` with turn and revision
    identity; add regression coverage for reopen, empty ASR, and interruption.

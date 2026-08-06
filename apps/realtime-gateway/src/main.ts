@@ -47,10 +47,12 @@ while latency grows linearly, so admitting more finishes nothing sooner.
 --agents DIR (VOX_GATEWAY_AGENTS; default ~/.config/voxstudio/agents) stores Agent
 drafts and immutable published versions.
 --traces DIR (VOX_GATEWAY_TRACES) retains Agent conversation metadata and protocol
-events. Off by default; audio is never stored. --trace-content
+events. Off by default. --trace-content
 (VOX_GATEWAY_TRACE_CONTENT=1) separately enables transcripts, replies, and tool
 payloads; demo mode always forces content off. --trace-retention-days N and
---trace-max-conversations N bound completed records.
+--trace-max-conversations N bound completed records. --trace-audio
+input|output|both (VOX_GATEWAY_TRACE_AUDIO) retains canonical conversation WAVs;
+--trace-max-bytes SIZE (VOX_GATEWAY_TRACE_MAX_BYTES) bounds their total bytes.
 LiveKit Phase 3A bootstrap is environment-only: set VOX_LIVEKIT_URL,
 VOX_LIVEKIT_API_KEY, and VOX_LIVEKIT_API_SECRET together. Optional
 VOX_LIVEKIT_TOKEN_TTL_SECONDS is 30–600 (default 300). The gateway wires the signer
@@ -95,6 +97,8 @@ async function main(args: string[]): Promise<number> {
   let traceContent = process.env.VOX_GATEWAY_TRACE_CONTENT === "1";
   let traceRetentionDays = process.env.VOX_GATEWAY_TRACE_RETENTION_DAYS;
   let traceMaxConversations = process.env.VOX_GATEWAY_TRACE_MAX_CONVERSATIONS;
+  let traceAudio = process.env.VOX_GATEWAY_TRACE_AUDIO;
+  let traceMaxBytes = process.env.VOX_GATEWAY_TRACE_MAX_BYTES;
   let accountsDir = process.env.VOX_GATEWAY_ACCOUNTS;
   let quotaOperations = process.env.VOX_GATEWAY_QUOTA;
   let quotaWindow = process.env.VOX_GATEWAY_QUOTA_WINDOW;
@@ -126,6 +130,8 @@ async function main(args: string[]): Promise<number> {
     else if (arg === "--trace-content") traceContent = true;
     else if (arg === "--trace-retention-days") traceRetentionDays = value();
     else if (arg === "--trace-max-conversations") traceMaxConversations = value();
+    else if (arg === "--trace-audio") traceAudio = value();
+    else if (arg === "--trace-max-bytes") traceMaxBytes = value();
     else if (arg === "--accounts") accountsDir = value();
     else if (arg === "--quota") quotaOperations = value();
     else if (arg === "--quota-window") quotaWindow = value();
@@ -162,8 +168,17 @@ async function main(args: string[]): Promise<number> {
   const hasTraces = traceDir !== undefined && traceDir !== "";
   const retentionDays = positive(traceRetentionDays, "--trace-retention-days", true);
   const maxTraces = positive(traceMaxConversations, "--trace-max-conversations", true);
-  if (!hasTraces && (traceContent || retentionDays !== undefined || maxTraces !== undefined)) {
-    throw new TypeError("vox-gateway: trace content and retention options require --traces");
+  const audioClass = traceAudio === undefined || traceAudio === ""
+    ? undefined
+    : traceAudio === "input" || traceAudio === "output" || traceAudio === "both"
+      ? traceAudio
+      : (() => { throw new TypeError("vox-gateway: --trace-audio must be input, output, or both"); })();
+  const traceBytes = traceMaxBytes === undefined || traceMaxBytes === ""
+    ? undefined
+    : parseByteSize(traceMaxBytes, "vox-gateway: --trace-max-bytes");
+  if (!hasTraces && (traceContent || retentionDays !== undefined || maxTraces !== undefined
+      || audioClass !== undefined || traceBytes !== undefined)) {
+    throw new TypeError("vox-gateway: trace content, audio, and retention options require --traces");
   }
   // Hosted accounts fail closed at startup: a weak or missing secret must never boot,
   // and accounts + token is two products in one config (docs/auth.md decision 1).
@@ -227,6 +242,8 @@ async function main(args: string[]): Promise<number> {
     ...(traceContent ? { traceContent: true } : {}),
     ...(retentionDays === undefined ? {} : { traceRetentionDays: retentionDays }),
     ...(maxTraces === undefined ? {} : { traceMaxConversations: maxTraces }),
+    ...(audioClass === undefined ? {} : { traceAudio: audioClass }),
+    ...(traceBytes === undefined ? {} : { traceMaxBytes: traceBytes }),
     ...(hasAccounts ? {
       accounts: {
         dir: accountsDir as string,

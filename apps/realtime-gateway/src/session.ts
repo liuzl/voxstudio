@@ -14,6 +14,8 @@ import {
   type ConversationFrame,
   type ConversationPlayer,
   type ConversationTool,
+  type FinalizedInputAudio,
+  type FinalizedUtterance,
 } from "@voxstudio/conversation";
 import type { EngineKind, ResolvedEngineConfig, SpeechInput, VoxConfig } from "@voxstudio/contracts";
 import {
@@ -46,6 +48,8 @@ export interface EventSink {
 }
 
 export interface GatewaySessionOptions {
+  /** Preallocated when a retention coordinator must durably claim the session first. */
+  sessionId?: string;
   config: VoxConfig;
   fetch?: Fetch;
   /**
@@ -95,7 +99,17 @@ export interface GatewaySessionOptions {
    * The retention opt-in (docs/web-studio.md 素材库): every finalized utterance's WAV and
    * raw ASR text. Absent, nothing is kept — the conversation loop's own privacy rule.
    */
-  onUtterance?: (wav: Uint8Array, transcript: string) => void | Promise<void>;
+  onUtterance?: (utterance: FinalizedUtterance) => void | Promise<void>;
+  /** Canonical input submitted to ASR, observed before a reopen can cancel ASR. */
+  onFinalizedInput?: (input: FinalizedInputAudio) => void;
+  /**
+   * Optional non-blocking observer for canonical Agent PCM that was successfully handed
+   * to the active transport. It is absent unless conversation output retention is on.
+   */
+  createOutputRecording?: (identity: { sessionId: string; turnId: string; revision: number }) => {
+    write(samples: Float32Array, sampleRate: number): void;
+    finalize(delivery: "sent" | "playback_acknowledged" | "interrupted" | "superseded"): void;
+  } | undefined;
   /**
    * Whether a session may request the Studio tools (docs/voice-studio-control.md).
    * The server sets this false in demo mode — an anonymous visitor must not write the
@@ -292,6 +306,7 @@ export class GatewaySession {
   constructor(options: GatewaySessionOptions) {
     this.options = options;
     this.duplex = new DuplexSession({
+      ...(options.sessionId === undefined ? {} : { sessionId: options.sessionId }),
       onEvent: event => {
         // Re-sequence through the gateway envelope: one monotonic counter covers kernel
         // events, engine text, and command acknowledgements alike.
@@ -519,13 +534,16 @@ export class GatewaySession {
         this.referents.onToolPending(name);
         this.emit({ type: "tool.pending", turnId: turn.id, name, arguments: args });
       },
+      ...(this.options.onFinalizedInput === undefined ? {} : {
+        onFinalizedInput: this.options.onFinalizedInput,
+      }),
       ...(this.options.onUtterance === undefined && !studioActive ? {} : {
-        onUtterance: async (wav: Uint8Array, transcript: string) => {
+        onUtterance: async utterance => {
           // The studio referents hold at most two utterances in memory — "把刚才那句存成
           // 音色" and its park-time pin — and are not retention: nothing persists unless
           // the user confirms the save aloud. The library opt-in still gets every utterance.
-          if (studioActive) this.referents.recordUtterance(wav, transcript);
-          await this.options.onUtterance?.(wav, transcript);
+          if (studioActive) this.referents.recordUtterance(utterance.wav, utterance.rawTranscript);
+          await this.options.onUtterance?.(utterance);
         },
       }),
     });
@@ -857,6 +875,7 @@ export class GatewaySession {
     type QueuedFrame = {
       frameId: number;
       bytes: Uint8Array;
+      samples: Float32Array;
       sampleRate: number;
       audioMs: number;
       codec: "pcm_f32le" | "pcm_s16le";
@@ -864,6 +883,7 @@ export class GatewaySession {
       timestampSamples?: number;
     };
     const mediaPlayback = this.mediaPlayback;
+    const recording = this.options.createOutputRecording?.({ sessionId: this.id, turnId, revision });
     const streamId = mediaPlayback === undefined ? undefined : crypto.randomUUID();
     const queue: QueuedFrame[] = [];
     const capacityWaiters = new Set<() => void>();
@@ -997,6 +1017,7 @@ export class GatewaySession {
         if (dropped) throw sink === undefined
           ? new MediaTransportError("media_disconnected", "detached", "media endpoint detached before queued audio could be submitted")
           : new MediaTransportError("network_congested", "network_congested", "media socket dropped an outbound PCM frame");
+        recording?.write(frame.samples, frame.sampleRate);
         // Keep the pump alive even when this was the last application-queued frame. The
         // congestion deadline belongs to the socket episode, not to a future TTS write or
         // close(), which may arrive several seconds later.
@@ -1106,6 +1127,7 @@ export class GatewaySession {
             frame = {
               frameId,
               bytes,
+              samples,
               sampleRate: outputRate,
               audioMs,
               codec: "pcm_s16le",
@@ -1116,6 +1138,7 @@ export class GatewaySession {
             frame = {
               frameId,
               bytes: new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength),
+              samples,
               sampleRate: outputRate,
               audioMs,
               codec: "pcm_f32le",
@@ -1182,8 +1205,14 @@ export class GatewaySession {
         // this turn and adds a pointless timeout before end_call can finish.
         if (sentFrames === 0) return;
         this.emit({ type: "playback.ended", turnId });
-        if (!this.playbackAck || this.stopped) return;
-        if (this.lastAckedTurnId === turnId) return;
+        if (!this.playbackAck || this.stopped) {
+          recording?.finalize("sent");
+          return;
+        }
+        if (this.lastAckedTurnId === turnId) {
+          recording?.finalize("playback_acknowledged");
+          return;
+        }
         await new Promise<void>(resolve => {
           const timer = setTimeout(resolve, Math.ceil(sentMs) + 5_000);
           this.playbackWaiter = {
@@ -1195,6 +1224,7 @@ export class GatewaySession {
           };
         });
         if (this.playbackWaiter?.turnId === turnId) this.playbackWaiter = undefined;
+        recording?.finalize(this.lastAckedTurnId === turnId ? "playback_acknowledged" : "sent");
       },
       abort: async () => {
         if (playbackTerminated) return;
@@ -1211,6 +1241,7 @@ export class GatewaySession {
           this.playbackWaiter = undefined;
         }
         reportRendition("interrupted");
+        recording?.finalize("interrupted");
         this.emit({ type: "playback.interrupted", turnId });
       },
     };

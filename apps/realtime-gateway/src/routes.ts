@@ -111,6 +111,11 @@ export const apiRoutes: readonly ApiRoute[] = [
     demoRefusable: ["DELETE"],
   },
   {
+    path: "/v1/agents/{id}/conversations/{sessionId}/media/{assetId}",
+    match: /^\/v1\/agents\/[A-Za-z0-9._-]{1,64}\/conversations\/[A-Za-z0-9-]{1,64}\/media\/[A-Za-z0-9-]{1,64}$/,
+    methods: ["GET"],
+  },
+  {
     path: "/v1/voices",
     methods: ["GET", "POST"],
     charged: ["POST"],

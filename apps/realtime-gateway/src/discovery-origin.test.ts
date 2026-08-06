@@ -143,7 +143,11 @@ describe("a self-hosted studio answers the machine paths honestly", () => {
       demo: false,
       tokenRequired: false,
       livekit: false,
-      traces: { enabled: false, content: false, audio: false },
+      traces: {
+        enabled: false, content: false, audio: false,
+        input_audio: false, output_audio: false,
+        retention_days: null, max_conversations: null, max_bytes: null,
+      },
     });
     await gateway.stop();
 
@@ -159,7 +163,11 @@ describe("a self-hosted studio answers the machine paths honestly", () => {
       demo: false,
       tokenRequired: false,
       livekit: false,
-      traces: { enabled: false, content: false, audio: false },
+      traces: {
+        enabled: false, content: false, audio: false,
+        input_audio: false, output_audio: false,
+        retention_days: null, max_conversations: null, max_bytes: null,
+      },
     });
     // Live-session counts are nobody's business on a public entrance.
     expect("sessions" in hosted).toBe(false);

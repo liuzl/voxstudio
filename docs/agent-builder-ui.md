@@ -491,10 +491,11 @@ stage component does not require sharing the entire page theme.
    duration filters at the API), displays exact draft revision or published version/hash,
    transcript/tool/protocol detail when allowed, and supports deletion. `--traces DIR`
    is the metadata opt-in; `--trace-content` is a separate content opt-in, demo mode
-   forces content off, and the current implementation does not retain trace audio.
-   The retained input/output media design and byte ceiling are now accepted in
-   [conversation-retention.md](./conversation-retention.md), but implementation,
-   replay UI, and only then measured statistics remain.
+   forces content and audio off. `--trace-audio input|output|both` and
+   `--trace-max-bytes` now enable the conversation-only private Media Store, canonical
+   input/output WAV retention, protected download, and cascade deletion described in
+   [conversation-retention.md](./conversation-retention.md). Shared Library assets,
+   revision-aware replay UI, and only then measured statistics remain.
 6. **Portal reuse — not started**: curated public Agent and hardened demo
    experience after the preview component has passed desktop/mobile and
    real-browser gates.

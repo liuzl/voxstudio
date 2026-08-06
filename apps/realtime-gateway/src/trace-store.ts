@@ -1,9 +1,15 @@
 import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import type { FinalizedInputAudio } from "@voxstudio/conversation";
 import type { GatewayEvent } from "./protocol";
+import {
+  ConversationMediaStore,
+  type ConversationMediaDescriptor,
+  type OutputMediaRecorder,
+} from "./media-store";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MAX_EVENT_JSON_BYTES = 64 * 1024;
 
 export type TraceOutcome = "active" | "completed" | "error" | "abandoned";
@@ -35,12 +41,16 @@ export interface ConversationTraceSummary {
 
 export interface ConversationTraceDetail extends ConversationTraceSummary {
   events: GatewayEvent[];
+  media: ConversationMediaDescriptor[];
 }
 
 export interface TracePolicy {
   enabled: true;
   content: boolean;
-  audio: false;
+  audio: boolean;
+  inputAudio: boolean;
+  outputAudio: boolean;
+  maxBytes: number | null;
   retentionDays: number | null;
   maxConversations: number | null;
 }
@@ -52,6 +62,14 @@ export interface ConversationTraceStoreOptions {
   retentionDays?: number;
   /** Oldest completed records beyond this deployment-wide count are removed. */
   maxConversations?: number;
+  /** Retain canonical user utterance WAVs. Independent from content. */
+  retainInputAudio?: boolean;
+  /** Retain canonical Agent PCM successfully submitted to the active media sink. */
+  retainOutputAudio?: boolean;
+  /** Deployment-wide ceiling over retained conversation WAV bytes. */
+  maxBytes?: number;
+  /** Read historical retained audio even when new capture is disabled. False for demo deployments. */
+  serveRetainedAudio?: boolean;
   now?: () => number;
   log?: (line: string) => void;
 }
@@ -110,17 +128,25 @@ export class ConversationTraceStore {
   private readonly now: () => number;
   private readonly log: (line: string) => void;
   private readonly pruneTimer: ReturnType<typeof setInterval> | undefined;
+  private readonly media: ConversationMediaStore | undefined;
+  private readonly deletionJobs = new Map<string, Promise<void>>();
   private closed = false;
 
   constructor(readonly dir: string, options: ConversationTraceStoreOptions = {}) {
     const retentionDays = positiveInteger(options.retentionDays, "trace retention days") ?? null;
     const maxConversations = positiveInteger(options.maxConversations, "trace max conversations") ?? null;
+    const maxBytes = positiveInteger(options.maxBytes, "trace max bytes") ?? null;
+    const inputAudio = options.retainInputAudio === true;
+    const outputAudio = options.retainOutputAudio === true;
     this.now = options.now ?? Date.now;
     this.log = options.log ?? (() => {});
     this.policy = {
       enabled: true,
       content: options.retainContent === true,
-      audio: false,
+      audio: inputAudio || outputAudio,
+      inputAudio,
+      outputAudio,
+      maxBytes,
       retentionDays,
       maxConversations,
     };
@@ -149,8 +175,13 @@ export class ConversationTraceStore {
       outcome TEXT NOT NULL CHECK (outcome IN ('active', 'completed', 'error', 'abandoned')),
       error_code TEXT,
       turn_count INTEGER NOT NULL DEFAULT 0,
-      content_retained INTEGER NOT NULL DEFAULT 0
+      content_retained INTEGER NOT NULL DEFAULT 0,
+      deleting INTEGER NOT NULL DEFAULT 0
     )`);
+    const conversationColumns = new Set(this.db.query<{ name: string }, []>("PRAGMA table_info(conversations)").all().map(row => row.name));
+    if (!conversationColumns.has("deleting")) {
+      this.db.run("ALTER TABLE conversations ADD COLUMN deleting INTEGER NOT NULL DEFAULT 0");
+    }
     this.db.run(`CREATE TABLE IF NOT EXISTS conversation_events (
       session_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
       sequence INTEGER NOT NULL,
@@ -162,7 +193,29 @@ export class ConversationTraceStore {
     this.db.run("CREATE INDEX IF NOT EXISTS conversations_owner_agent_started ON conversations (owner_user_id, agent_id, started_at DESC)");
     this.db.run("CREATE INDEX IF NOT EXISTS conversation_events_session_time ON conversation_events (session_id, timestamp_ms, sequence)");
     this.db.run(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+    const openMedia = inputAudio || outputAudio
+      || (options.serveRetainedAudio !== false && existsSync(join(dir, "media.db")));
+    this.media = openMedia
+      ? new ConversationMediaStore(dir, {
+          ...(maxBytes === null ? {} : { maxBytes }),
+          now: this.now,
+          log: this.log,
+          evictionCandidates: (protectedOwner, protectedSessionId) => this.db.query<{
+            owner_user_id: string; id: string;
+          }, [string, string]>(`SELECT owner_user_id, id FROM conversations
+            WHERE outcome != 'active' AND deleting = 0
+              AND NOT (owner_user_id = ? AND id = ?)
+            ORDER BY COALESCE(ended_at, started_at) ASC, id ASC`).all(protectedOwner, protectedSessionId)
+            .map(row => ({ owner: row.owner_user_id, sessionId: row.id })),
+          beginEviction: (owner, sessionId) => this.markDeleting(owner, sessionId),
+          finishEviction: (owner, sessionId) => { this.finishDeleting(owner, sessionId); },
+        })
+      : undefined;
     this.reconcile();
+    this.media?.removeUnknownSessions(new Set(this.db.query<{ owner_user_id: string; id: string }, []>(
+      "SELECT owner_user_id, id FROM conversations",
+    ).all().map(row => `${row.owner_user_id}\0${row.id}`)));
+    this.retryDeleting();
     this.pruneTimer = this.policy.retentionDays === null
       ? undefined
       : setInterval(() => {
@@ -189,17 +242,92 @@ export class ConversationTraceStore {
     this.prune(now);
   }
 
+  private deletionKey(owner: string, sessionId: string): string { return `${owner}\0${sessionId}`; }
+
+  private markDeleting(owner: string, sessionId: string): boolean {
+    return this.db.run(
+      "UPDATE conversations SET deleting = 1 WHERE owner_user_id = ? AND id = ? AND outcome != 'active' AND deleting = 0",
+      [owner, sessionId],
+    ).changes > 0;
+  }
+
+  private finishDeleting(owner: string, sessionId: string): void {
+    this.db.run("DELETE FROM conversations WHERE owner_user_id = ? AND id = ? AND deleting = 1", [owner, sessionId]);
+  }
+
+  private scheduleDeletion(owner: string, sessionId: string): Promise<void> {
+    const key = this.deletionKey(owner, sessionId);
+    const existing = this.deletionJobs.get(key);
+    if (existing !== undefined) return existing;
+    const job = (async () => {
+      await this.media?.removeSession(owner, sessionId);
+      this.finishDeleting(owner, sessionId);
+    })();
+    this.deletionJobs.set(key, job);
+    void job.then(
+      () => { this.deletionJobs.delete(key); },
+      error => {
+        this.deletionJobs.delete(key);
+        this.log(`traces: deletion ${sessionId} failed: ${error instanceof Error ? error.message : String(error)}`);
+      },
+    );
+    return job;
+  }
+
+  private retryDeleting(): void {
+    for (const row of this.db.query<{ owner_user_id: string; id: string }, []>(
+      "SELECT owner_user_id, id FROM conversations WHERE deleting = 1",
+    ).all()) {
+      void this.scheduleDeletion(row.owner_user_id, row.id);
+    }
+  }
+
   private prune(now = this.now()): void {
+    this.retryDeleting();
     if (this.policy.retentionDays !== null) {
       const cutoff = now - this.policy.retentionDays * 86_400_000;
-      this.db.run("DELETE FROM conversations WHERE outcome != 'active' AND COALESCE(ended_at, started_at) < ?", [cutoff]);
+      const expired = this.db.query<{ owner_user_id: string; id: string }, [number]>(
+        "SELECT owner_user_id, id FROM conversations WHERE outcome != 'active' AND deleting = 0 AND COALESCE(ended_at, started_at) < ?",
+      ).all(cutoff);
+      for (const row of expired) {
+        if (this.markDeleting(row.owner_user_id, row.id)) void this.scheduleDeletion(row.owner_user_id, row.id);
+      }
     }
     if (this.policy.maxConversations !== null) {
-      this.db.run(`DELETE FROM conversations WHERE id IN (
-        SELECT id FROM conversations WHERE outcome != 'active'
+      const excess = this.db.query<{ owner_user_id: string; id: string }, [number]>(`SELECT owner_user_id, id FROM conversations WHERE id IN (
+        SELECT id FROM conversations WHERE outcome != 'active' AND deleting = 0
         ORDER BY COALESCE(ended_at, started_at) DESC, id DESC LIMIT -1 OFFSET ?
-      )`, [this.policy.maxConversations]);
+      )`).all(this.policy.maxConversations);
+      for (const row of excess) {
+        if (this.markDeleting(row.owner_user_id, row.id)) void this.scheduleDeletion(row.owner_user_id, row.id);
+      }
     }
+    if (this.policy.maxBytes !== null && this.media !== undefined) {
+      let projectedBytes = this.media.bytesUsed();
+      const oldest = this.db.query<{ owner_user_id: string; id: string }, []>(
+        `SELECT owner_user_id, id FROM conversations WHERE outcome != 'active' AND deleting = 0
+         ORDER BY COALESCE(ended_at, started_at) ASC, id ASC`,
+      ).all();
+      for (const row of oldest) {
+        if (projectedBytes <= this.policy.maxBytes) break;
+        const bytes = this.media.sessionBytes(row.owner_user_id, row.id);
+        if (bytes === 0) continue;
+        if (this.markDeleting(row.owner_user_id, row.id)) {
+          projectedBytes = Math.max(0, projectedBytes - bytes);
+          void this.scheduleDeletion(row.owner_user_id, row.id);
+        }
+      }
+    }
+  }
+
+  retainInput(owner: string, utterance: FinalizedInputAudio): void {
+    if (!this.policy.inputAudio) return;
+    this.media?.retainInput(owner, utterance);
+  }
+
+  createOutputRecorder(owner: string, sessionId: string, turnId: string, revision: number): OutputMediaRecorder | undefined {
+    if (!this.policy.outputAudio) return undefined;
+    return this.media?.createOutputRecorder(owner, sessionId, turnId, revision);
   }
 
   begin(owner: string, sessionId: string, agent: TraceAgentIdentity, startedAt = this.now()): void {
@@ -243,8 +371,8 @@ export class ConversationTraceStore {
     }
     const result = this.db.run(`INSERT OR IGNORE INTO conversation_events (
       session_id, sequence, timestamp_ms, type, payload_json
-    ) SELECT ?, ?, ?, ?, ? WHERE EXISTS (
-      SELECT 1 FROM conversations WHERE id = ? AND owner_user_id = ?
+      ) SELECT ?, ?, ?, ?, ? WHERE EXISTS (
+      SELECT 1 FROM conversations WHERE id = ? AND owner_user_id = ? AND deleting = 0
     )`, [event.sessionId, event.sequence, event.timestampMs, event.type, payloadJson, event.sessionId, owner]);
     if (result.changes === 0) return;
     if (event.type === "turn.completed") {
@@ -265,14 +393,14 @@ export class ConversationTraceStore {
     this.requireOpen();
     this.db.run(`UPDATE conversations SET
       ended_at = ?, outcome = CASE WHEN error_code IS NULL THEN 'completed' ELSE 'error' END
-      WHERE id = ? AND owner_user_id = ? AND outcome = 'active'`, [endedAt, sessionId, owner]);
+      WHERE id = ? AND owner_user_id = ? AND outcome = 'active' AND deleting = 0`, [endedAt, sessionId, owner]);
     this.prune(endedAt);
   }
 
   markError(owner: string, sessionId: string, code: string): void {
     this.requireOpen();
     this.db.run(
-      "UPDATE conversations SET error_code = COALESCE(error_code, ?) WHERE id = ? AND owner_user_id = ?",
+      "UPDATE conversations SET error_code = COALESCE(error_code, ?) WHERE id = ? AND owner_user_id = ? AND deleting = 0",
       [code, sessionId, owner],
     );
   }
@@ -310,7 +438,7 @@ export class ConversationTraceStore {
     // Reads are a second enforcement point beside the timer. Even if the event loop was
     // suspended through the deadline, expired content is removed before it can be served.
     this.prune();
-    const where = ["owner_user_id = ?", "agent_id = ?"];
+    const where = ["owner_user_id = ?", "agent_id = ?", "deleting = 0"];
     const values: Array<string | number> = [owner, agentId];
     if (options.outcome !== undefined) { where.push("outcome = ?"); values.push(options.outcome); }
     if (options.from !== undefined) { where.push("started_at >= ?"); values.push(options.from); }
@@ -332,27 +460,51 @@ export class ConversationTraceStore {
     this.requireOpen();
     this.prune();
     const row = this.db.query<TraceRow, [string, string, string]>(
-      "SELECT * FROM conversations WHERE owner_user_id = ? AND agent_id = ? AND id = ?",
+      "SELECT * FROM conversations WHERE owner_user_id = ? AND agent_id = ? AND id = ? AND deleting = 0",
     ).get(owner, agentId, sessionId);
     if (!row) return undefined;
     const events = this.db.query<{ payload_json: string }, [string]>(
       "SELECT payload_json FROM conversation_events WHERE session_id = ? ORDER BY sequence ASC",
     ).all(sessionId).map(entry => JSON.parse(entry.payload_json) as GatewayEvent);
-    return { ...this.summary(row), events };
+    return { ...this.summary(row), events, media: this.media?.list(owner, sessionId) ?? [] };
   }
 
-  remove(owner: string, agentId: string, sessionId: string): boolean {
+  mediaFile(owner: string, agentId: string, sessionId: string, assetId: string):
+    { path: string; descriptor: ConversationMediaDescriptor } | undefined {
     this.requireOpen();
-    return this.db.run(
-      "DELETE FROM conversations WHERE owner_user_id = ? AND agent_id = ? AND id = ?",
-      [owner, agentId, sessionId],
-    ).changes > 0;
+    const ownsConversation = this.db.query<{ found: number }, [string, string, string]>(
+      "SELECT 1 AS found FROM conversations WHERE owner_user_id = ? AND agent_id = ? AND id = ? AND deleting = 0",
+    ).get(owner, agentId, sessionId);
+    return ownsConversation ? this.media?.file(owner, sessionId, assetId) : undefined;
   }
 
-  close(): void {
+  /** Drain observer file work for shutdown and deterministic retention tests. */
+  async flushMedia(): Promise<void> {
+    await this.media?.flush();
+    await Promise.allSettled([...this.deletionJobs.values()]);
+  }
+
+  async remove(owner: string, agentId: string, sessionId: string): Promise<"deleted" | "active" | "not_found"> {
+    this.requireOpen();
+    const row = this.db.query<{ outcome: TraceOutcome; deleting: number }, [string, string, string]>(
+      "SELECT outcome, deleting FROM conversations WHERE owner_user_id = ? AND agent_id = ? AND id = ?",
+    ).get(owner, agentId, sessionId);
+    if (row == null) return "not_found";
+    // A live session still owns retention callbacks. Refusing the transition is the only
+    // safe behavior until a caller explicitly stops it; otherwise audio can reappear after
+    // a successful DELETE response.
+    if (row.outcome === "active") return "active";
+    if (row.deleting === 0 && !this.markDeleting(owner, sessionId)) return "not_found";
+    await this.scheduleDeletion(owner, sessionId);
+    return "deleted";
+  }
+
+  async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     if (this.pruneTimer !== undefined) clearInterval(this.pruneTimer);
+    await Promise.allSettled([...this.deletionJobs.values()]);
+    await this.media?.close();
     this.db.close();
   }
 }

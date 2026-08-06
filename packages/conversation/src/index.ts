@@ -185,15 +185,38 @@ export interface ConversationControls {
 
 export type ConversationErrorCode = "asr_empty" | "llm_empty" | "turn_failed";
 
+/**
+ * The canonical, endpointed user audio submitted to ASR. Identity is part of the
+ * retention contract: speculative reopen creates a new immutable turn revision rather
+ * than leaving observers to guess from a session id.
+ */
+export interface FinalizedInputAudio {
+  sessionId: string;
+  turnId: string;
+  revision: number;
+  wav: Uint8Array;
+  sampleRate: number;
+  channels: 1;
+}
+
+export interface FinalizedUtterance extends FinalizedInputAudio {
+  rawTranscript: string;
+}
+
 export interface ConversationCallbacks {
   onTranscript?(text: string, turn: DuplexTurn): void;
   onReplyDelta?(delta: string, turn: DuplexTurn): void;
   onReply?(text: string, turn: DuplexTurn): void;
   /**
+   * Fires synchronously after endpointing and WAV construction, immediately before ASR.
+   * It is deliberately void: retention may enqueue work but cannot delay or reject ASR.
+   */
+  onFinalizedInput?(input: FinalizedInputAudio): void;
+  /**
    * Every finalized utterance with what ASR heard, empty or not — the explicit opt-in for
    * building an ASR test set. Nothing is retained unless this is provided.
    */
-  onUtterance?(wav: Uint8Array, transcript: string): void | Promise<void>;
+  onUtterance?(utterance: FinalizedUtterance): void | Promise<void>;
   onError?(code: ConversationErrorCode, message: string, turn?: DuplexTurn): void;
   onKeytermCorrection?(from: string, to: string, turn: DuplexTurn): void;
   onToolCall?(name: string, args: Record<string, unknown>, turn: DuplexTurn): void;
@@ -276,6 +299,21 @@ export async function runConversation(
       let transcript: string;
       if (input.kind === "audio") {
         const wav = writeWav(input.samples, 16_000);
+        // This is the exact canonical object submitted below. Notify retention before
+        // awaiting ASR: a speculative reopen may abort that request, but it must not
+        // erase the immutable audio revision that was already submitted.
+        try {
+          callbacks.onFinalizedInput?.({
+            sessionId: session.sessionId,
+            turnId: turn.id,
+            revision: turn.revision,
+            wav,
+            sampleRate: 16_000,
+            channels: 1,
+          });
+        } catch {
+          // Retention is an observer. Its failure cannot change conversation behavior.
+        }
         const transcription = await asr.transcribe(
           new File([new Uint8Array(wav)], "utterance.wav", { type: "audio/wav" }),
           "utterance.wav", options.language, {}, turn.signal,
@@ -286,7 +324,15 @@ export async function runConversation(
         // utterance callback fires regardless of the result — and it receives the RAW
         // transcript: the utterance set exists to measure ASR, so keyterm correction
         // must never launder its samples.
-        await callbacks.onUtterance?.(wav, transcript);
+        await callbacks.onUtterance?.({
+          sessionId: session.sessionId,
+          turnId: turn.id,
+          revision: turn.revision,
+          wav,
+          rawTranscript: transcript,
+          sampleRate: 16_000,
+          channels: 1,
+        });
         if (turn.signal.aborted) return;
         if (!transcript) {
           callbacks.onError?.("asr_empty", "ASR returned empty text", turn);

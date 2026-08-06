@@ -23,7 +23,11 @@ describe("runConversation", () => {
     const events: string[] = [];
     const deltas: string[] = [];
     const played: number[] = [];
-    const utterances: { bytes: number; transcript: string }[] = [];
+    const inputBoundary: string[] = [];
+    const utterances: Array<{
+      bytes: number; transcript: string; sessionId: string; turnId: string;
+      revision: number; sampleRate: number; channels: number;
+    }> = [];
     let playerClosed = false;
     session.start();
 
@@ -35,7 +39,7 @@ describe("runConversation", () => {
         write: async audio => { played.push(audio.samples.length); },
         close: async () => { playerClosed = true; },
       }),
-      asr: { transcribe: async () => ({ text: "你好" }) },
+      asr: { transcribe: async () => { inputBoundary.push("asr"); return { text: "你好" }; } },
       llm: {
         chatStream: async function* () {
           yield "回答";
@@ -48,18 +52,38 @@ describe("runConversation", () => {
       allowBargeIn: true, turnTaking: "conservative", reopenMs: 7_000,
     }, {
       onTranscript: text => events.push(`transcript:${text}`),
+      onFinalizedInput: input => {
+        inputBoundary.push("retention");
+        expect(input).toMatchObject({
+          sessionId: session.sessionId, turnId: expect.any(String), revision: 0,
+          sampleRate: 16_000, channels: 1,
+        });
+      },
       onReplyDelta: delta => deltas.push(delta),
       onReply: text => events.push(`reply:${text}`),
-      onUtterance: (wav, transcript) => { utterances.push({ bytes: wav.length, transcript }); },
+      onUtterance: utterance => { utterances.push({
+        bytes: utterance.wav.length,
+        transcript: utterance.rawTranscript,
+        sessionId: utterance.sessionId,
+        turnId: utterance.turnId,
+        revision: utterance.revision,
+        sampleRate: utterance.sampleRate,
+        channels: utterance.channels,
+      }); },
     });
 
     expect(events).toEqual(["transcript:你好", "reply:回答完毕。"]);
     expect(deltas).toEqual(["回答", "完毕。"]);
+    expect(inputBoundary).toEqual(["retention", "asr"]);
     expect(played).toEqual([48_000]);
     expect(playerClosed).toBe(true);
     expect(utterances).toHaveLength(1);
     expect(utterances[0]?.transcript).toBe("你好");
     expect(utterances[0]?.bytes).toBeGreaterThan(44);
+    expect(utterances[0]).toMatchObject({
+      sessionId: session.sessionId, turnId: expect.any(String), revision: 0,
+      sampleRate: 16_000, channels: 1,
+    });
     expect(session.state).toBe("listening");
   });
 
@@ -103,6 +127,40 @@ describe("runConversation", () => {
 
     expect(aborted).toBe(true);
     expect(session.state).toBe("closed");
+  });
+
+  test("observes finalized input even when a reopen-style interruption cancels ASR", async () => {
+    const session = new DuplexSession();
+    let retained = 0;
+    let datasetUtterances = 0;
+    session.start();
+
+    await runConversation({
+      session,
+      vad: new EnergyVadSegmenter({ sampleRate: 16_000, threshold: 0.1, minSpeechMs: 40, silenceMs: 20 }),
+      frames: frames(),
+      createPlayer: () => ({ write: async () => {}, close: async () => {} }),
+      asr: {
+        transcribe: async () => {
+          session.interrupt("barge_in");
+          throw new DOMException("cancelled by resumed speech", "AbortError");
+        },
+      },
+      llm: { chatStream: async function* () { throw new Error("LLM must not run"); } },
+      tts: { speech: async () => { throw new Error("TTS must not run"); } },
+    }, {
+      language: "zh", chunking, ttsDefaults, voice: "demo",
+      allowBargeIn: true, turnTaking: "speculative", reopenMs: 7_000,
+    }, {
+      onFinalizedInput: input => {
+        retained += 1;
+        expect(input).toMatchObject({ revision: 0, sampleRate: 16_000, channels: 1 });
+      },
+      onUtterance: () => { datasetUtterances += 1; },
+    });
+
+    expect(retained).toBe(1);
+    expect(datasetUtterances).toBe(0);
   });
 
   test("runs typed input through the ordinary reply pipeline without invoking ASR", async () => {
@@ -633,7 +691,7 @@ describe("runConversation keyterm correction", () => {
       allowBargeIn: true, turnTaking: "conservative", reopenMs: 7_000,
       keyterms: async () => ["zf_001", "zliu"],
     }, {
-      onUtterance: (_wav, transcript) => { seen.utterance = transcript; },
+      onUtterance: utterance => { seen.utterance = utterance.rawTranscript; },
       onTranscript: text => { seen.transcript = text; },
       onKeytermCorrection: (from, to) => { seen.correction = `${from}->${to}`; },
     });

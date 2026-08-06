@@ -147,7 +147,7 @@ export interface GatewayServerOptions {
    * own machine, wrong for anything long-running or shared.
    */
   libraryMaxBytes?: number;
-  /** Agent conversation metadata/protocol traces. Off by default; audio is never stored. */
+  /** Agent conversation metadata/protocol traces. Off by default. */
   traceDir?: string;
   /** Retain transcript/reply/tool payloads in traces. Independent opt-in; forced off in demo mode. */
   traceContent?: boolean;
@@ -155,6 +155,10 @@ export interface GatewayServerOptions {
   traceRetentionDays?: number;
   /** Keep at most this many completed traces deployment-wide. */
   traceMaxConversations?: number;
+  /** Optional canonical conversation audio classes. Requires traceDir; forced off in demo mode. */
+  traceAudio?: "input" | "output" | "both";
+  /** Deployment-wide byte ceiling over retained conversation WAVs. */
+  traceMaxBytes?: number;
   /** Agent drafts and immutable published snapshots. Off when absent. */
   agentsDir?: string;
   loadSileroVad?: () => Promise<SpeechProbabilityModel>;
@@ -213,6 +217,7 @@ const voiceEntryPattern = /^\/v1\/voices\/[A-Za-z0-9._-]{1,64}$/;
 const libraryEntryPattern = /^\/v1\/library\/([A-Za-z0-9-]{1,64})(\/audio|\/promote)?$/;
 const agentEntryPattern = /^\/v1\/agents\/([A-Za-z0-9._-]{1,64})(?:\/(publish|audit|versions))?$/;
 const agentConversationPattern = /^\/v1\/agents\/([A-Za-z0-9._-]{1,64})\/conversations(?:\/([A-Za-z0-9-]{1,64}))?$/;
+const agentConversationMediaPattern = /^\/v1\/agents\/([A-Za-z0-9._-]{1,64})\/conversations\/([A-Za-z0-9-]{1,64})\/media\/([A-Za-z0-9-]{1,64})$/;
 const voiceIdPattern = /^[A-Za-z0-9._-]{1,64}$/;
 
 /**
@@ -316,8 +321,9 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     throw new TypeError("demoAgent and accounts cannot be combined until the Portal has an operator-owned Agent namespace");
   }
   if (options.traceDir === undefined && (options.traceContent === true
-      || options.traceRetentionDays !== undefined || options.traceMaxConversations !== undefined)) {
-    throw new TypeError("trace content and retention options require a traceDir");
+      || options.traceRetentionDays !== undefined || options.traceMaxConversations !== undefined
+      || options.traceAudio !== undefined || options.traceMaxBytes !== undefined)) {
+    throw new TypeError("trace content, audio, and retention options require a traceDir");
   }
   // Fail at startup, not on the first request: a hosted deployment with a weak or
   // missing secret must never come up. 32 is Better Auth's own floor.
@@ -477,14 +483,20 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
   if (options.traceDir !== undefined && options.demoMode === true && options.traceContent === true) {
     log("demo mode: conversation metadata may be retained, but transcript and tool content stay off");
   }
+  if (options.traceDir !== undefined && options.demoMode === true && options.traceAudio !== undefined) {
+    log("demo mode: conversation metadata may be retained, but input and output audio stay off");
+  }
   const traces = options.traceDir === undefined ? undefined : new ConversationTraceStore(options.traceDir, {
     retainContent: options.traceContent === true && options.demoMode !== true,
+    retainInputAudio: options.demoMode !== true && (options.traceAudio === "input" || options.traceAudio === "both"),
+    retainOutputAudio: options.demoMode !== true && (options.traceAudio === "output" || options.traceAudio === "both"),
+    serveRetainedAudio: options.demoMode !== true,
+    ...(options.traceMaxBytes === undefined ? {} : { maxBytes: options.traceMaxBytes }),
     ...(options.traceRetentionDays === undefined ? {} : { retentionDays: options.traceRetentionDays }),
     ...(options.traceMaxConversations === undefined ? {} : { maxConversations: options.traceMaxConversations }),
     log,
   });
   type TraceOperation =
-    | { type: "begin"; owner: string; sessionId: string; agent: TraceAgentIdentity; startedAt: number }
     | { type: "event"; owner: string; event: GatewayEvent }
     | { type: "error"; owner: string; sessionId: string; code: string }
     | { type: "finish"; owner: string; sessionId: string; endedAt: number };
@@ -508,8 +520,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       traces.batch(() => {
         for (const operation of pending) {
           try {
-            if (operation.type === "begin") traces.begin(operation.owner, operation.sessionId, operation.agent, operation.startedAt);
-            else if (operation.type === "event") traces.append(operation.owner, operation.event);
+            if (operation.type === "event") traces.append(operation.owner, operation.event);
             else if (operation.type === "error") traces.markError(operation.owner, operation.sessionId, operation.code);
             else traces.finish(operation.owner, operation.sessionId, operation.endedAt);
           } catch (error) {
@@ -535,7 +546,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         return;
       }
       // Lifecycle/control markers are more valuable than sampled media. Prefer evicting
-      // media, then the oldest ordinary event, so begin/error/finish remain consistent.
+      // media, then the oldest ordinary event, so error/finish remain consistent.
       let eventIndex = traceQueue.findIndex(entry => entry.type === "event" && entry.event.type.startsWith("media."));
       if (eventIndex < 0) eventIndex = traceQueue.findIndex(entry => entry.type === "event");
       if (eventIndex >= 0) {
@@ -794,8 +805,22 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
     }
     // Namespacing lives in the gateway; the session just applies it at the TTS boundary.
     const ownerVoice = (displayName: string): string | null => toEngineVoiceId(owner, displayName);
+    const sessionId = crypto.randomUUID();
+    let traceReady = false;
+    if (traces !== undefined && trace !== undefined) {
+      try {
+        // Claim the Conversation before exposing a live session. Media callbacks are only
+        // installed after this succeeds, so a lossy Trace observer can never create audio
+        // with no owner-visible Conversation record.
+        traces.begin(owner, sessionId, trace, Date.now());
+        traceReady = true;
+      } catch (error) {
+        log(`traces: begin failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     const session = new GatewaySession({
       config: options.config,
+      sessionId,
       owner,
       mapVoiceId: ownerVoice,
       // A deployment default such as `laok` is shared engine configuration, not a
@@ -874,26 +899,32 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
         }
         return composed;
       },
+      ...(traces?.policy.inputAudio === true && traceReady ? {
+        onFinalizedInput: input => { traces.retainInput(owner, input); },
+      } : {}),
       ...(library === undefined ? {} : {
         // A failed ingest must never cost the turn — capture is an observer, not a stage.
-        onUtterance: async (wav: Uint8Array, transcript: string) => {
-          try {
-            await library.ingest(wav, transcript, session.id, owner);
-          } catch (error) {
+        onUtterance: utterance => {
+          // The Library owns and drains its queued mutation. Never make ASR → LLM wait
+          // for retention I/O; both retention classes are observers of this boundary.
+          void library.ingest(utterance.wav, utterance.rawTranscript, utterance.sessionId, owner).catch(error => {
             log(`library: ingest failed: ${error instanceof Error ? error.message : String(error)}`);
-          }
+          });
         },
+      }),
+      ...(traces === undefined || !traceReady || !traces.policy.outputAudio ? {} : {
+        createOutputRecording: ({ sessionId, turnId, revision }) => traces.createOutputRecorder(owner, sessionId, turnId, revision),
       }),
       loadSileroVad: options.loadSileroVad,
       ...(options.reconnectGraceMs === undefined ? {} : { reconnectGraceMs: options.reconnectGraceMs }),
       ...((options.maxSessionSeconds === undefined && agentSpec?.maxSessionSeconds === undefined) ? {} : {
         maxSessionSeconds: Math.min(options.maxSessionSeconds ?? Number.POSITIVE_INFINITY, agentSpec?.maxSessionSeconds ?? Number.POSITIVE_INFINITY),
       }),
-      ...(traces === undefined || trace === undefined ? {} : {
+      ...(traces === undefined || !traceReady ? {} : {
         onEvent: event => { enqueueTrace({ type: "event", owner, event }); },
       }),
       onClosed: closed => {
-        if (traces !== undefined && trace !== undefined) {
+        if (traces !== undefined && traceReady) {
           if (closed.failureCode !== undefined) {
             enqueueTrace({ type: "error", owner, sessionId: closed.id, code: closed.failureCode });
           }
@@ -903,9 +934,6 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       },
       ...(options.log === undefined ? {} : { log: options.log }),
     });
-    if (traces !== undefined && trace !== undefined) {
-      enqueueTrace({ type: "begin", owner, sessionId: session.id, agent: trace, startedAt: Date.now() });
-    }
     sessions.set(session.id, session);
     return session;
   };
@@ -1093,7 +1121,20 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           ...(options.demoAgent === undefined ? {} : { demoAgent: options.demoAgent }),
           ...(options.maxSessions === undefined ? {} : { maxSessions: options.maxSessions }),
           ...(options.maxSessionSeconds === undefined ? {} : { maxSessionSeconds: options.maxSessionSeconds }),
-          traces: traces?.policy ?? { enabled: false, content: false, audio: false },
+          traces: traces === undefined ? {
+            enabled: false, content: false, audio: false,
+            input_audio: false, output_audio: false,
+            retention_days: null, max_conversations: null, max_bytes: null,
+          } : {
+            enabled: true,
+            content: traces.policy.content,
+            audio: traces.policy.audio,
+            input_audio: traces.policy.inputAudio,
+            output_audio: traces.policy.outputAudio,
+            retention_days: traces.policy.retentionDays,
+            max_conversations: traces.policy.maxConversations,
+            max_bytes: traces.policy.maxBytes,
+          },
         };
         if (options.accounts !== undefined) {
           return (async (): Promise<Response> => Response.json({
@@ -1372,7 +1413,8 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       }
       const agentMatch = agentEntryPattern.exec(url.pathname);
       const conversationMatch = agentConversationPattern.exec(url.pathname);
-      if (url.pathname === "/v1/agents" || agentMatch !== null || conversationMatch !== null) {
+      const conversationMediaMatch = agentConversationMediaPattern.exec(url.pathname);
+      if (url.pathname === "/v1/agents" || agentMatch !== null || conversationMatch !== null || conversationMediaMatch !== null) {
         if (agents === undefined) {
           return problem(404, "agents_disabled", "this deployment has no Agent registry configured");
         }
@@ -1403,6 +1445,27 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           headers: { etag: `\"${record.revision}\"` },
         });
         try {
+          if (conversationMediaMatch !== null) {
+            if (traces === undefined) {
+              return problem(404, "traces_disabled", "conversation traces are not enabled on this gateway (start with --traces DIR)");
+            }
+            const retained = traces.mediaFile(
+              ctx.userId,
+              conversationMediaMatch[1] as string,
+              conversationMediaMatch[2] as string,
+              conversationMediaMatch[3] as string,
+            );
+            if (retained === undefined) {
+              return problem(404, "media_not_found", "this retained conversation has no such ready media asset");
+            }
+            return new Response(Bun.file(retained.path), {
+              headers: {
+                "content-type": "audio/wav",
+                "cache-control": "private, no-store",
+                "content-disposition": `inline; filename="${retained.descriptor.direction}-${retained.descriptor.turnId}-${retained.descriptor.revision}.wav"`,
+              },
+            });
+          }
           if (conversationMatch !== null) {
             if (traces === undefined) {
               return problem(404, "traces_disabled", "conversation traces are not enabled on this gateway (start with --traces DIR)");
@@ -1462,9 +1525,14 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
                 : Response.json({ conversation: trace, policy: traces.policy });
             }
             if (request.method === "DELETE") {
-              return traces.remove(ctx.userId, agentId, sessionId)
-                ? Response.json({ deleted: true })
-                : problem(404, "conversation_not_found", "conversation was not found");
+              const removed = await traces.remove(ctx.userId, agentId, sessionId);
+              if (removed === "not_found") {
+                return problem(404, "conversation_not_found", "conversation was not found");
+              }
+              if (removed === "active") {
+                return problem(409, "conversation_active", "stop the active conversation before deleting its retained record");
+              }
+              return Response.json({ deleted: true });
             }
             return problem(405, "method_not_allowed", `${request.method} is not allowed on this route`);
           }
@@ -2009,7 +2077,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
       // against an open database; only then does the store close.
       if (library) await library.close();
       flushTraces();
-      traces?.close();
+      if (traces) await traces.close();
       // Bounded: Bun's force-stop has been observed to never resolve when a client's
       // WebSocket close handshake is still in flight at stop time (reproduced 2026-07-19
       // with an MCP-configured gateway). The sockets are already torn down above; a stop

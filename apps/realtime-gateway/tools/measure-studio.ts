@@ -185,7 +185,7 @@ async function main(): Promise<number> {
   }, {
     onTranscript: text => console.error(`  [user] ${text}`),
     onReply: text => { referents.recordReply(text); replies.push(text); console.error(`  [agent] ${text.slice(0, 60)}`); },
-    onUtterance: async (wav, transcript) => { referents.recordUtterance(wav, transcript); },
+    onUtterance: async utterance => { referents.recordUtterance(utterance.wav, utterance.rawTranscript); },
     onToolCall: (name, args) => events.push(`call:${name}:${JSON.stringify(args)}`),
     onToolPending: name => { referents.onToolPending(name); events.push(`pending:${name}`); },
     onToolResult: (name, ok) => events.push(`result:${name}:${ok}`),

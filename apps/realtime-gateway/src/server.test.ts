@@ -368,6 +368,8 @@ describe("realtime gateway", () => {
 
   test("media telemetry marks detached audio dropped and does not carry pressure onto a replacement socket", async () => {
     const events: GatewayEvent[] = [];
+    const retainedSamples: number[] = [];
+    const retainedDeliveries: string[] = [];
     let session: GatewaySession;
     let binaryFrames = 0;
     const firstSink: EventSink = {
@@ -388,6 +390,10 @@ describe("realtime gateway", () => {
       }),
       reconnectGraceMs: 2_000,
       onEvent: event => { events.push(event); },
+      createOutputRecording: () => ({
+        write: samples => { retainedSamples.push(samples.length); },
+        finalize: delivery => { retainedDeliveries.push(delivery); },
+      }),
     });
     await session.start({
       ...startOptions,
@@ -410,6 +416,10 @@ describe("realtime gateway", () => {
       status: "interrupted",
       staleFramesDiscarded: 0,
     });
+    // Bun's -1 means accepted with backpressure, so that submitted prefix is retained;
+    // frames discarded after detach are not observable here and cannot enter the WAV.
+    expect(retainedSamples.reduce((sum, count) => sum + count, 0)).toBe(2_400);
+    expect(retainedDeliveries).toEqual(["interrupted"]);
 
     const replacement: EventSink = { send: data => ({ sendResult: typeof data === "string" ? data.length : data.byteLength, bufferedBytes: 0 }) };
     session.attach(replacement);

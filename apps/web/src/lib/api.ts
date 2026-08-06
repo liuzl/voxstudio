@@ -115,6 +115,9 @@ export interface ConversationTracePolicy {
   enabled: boolean;
   content: boolean;
   audio: boolean;
+  inputAudio: boolean;
+  outputAudio: boolean;
+  maxBytes: number | null;
   retentionDays?: number | null;
   maxConversations?: number | null;
 }
@@ -159,6 +162,23 @@ export interface ConversationTraceEvent {
 
 export interface ConversationTraceDetail extends ConversationTraceSummary {
   events: ConversationTraceEvent[];
+  media: Array<{
+    id: string;
+    sessionId: string;
+    turnId: string;
+    revision: number;
+    direction: "input" | "output";
+    state: "pending" | "ready" | "missing" | "truncated";
+    delivery: "sent" | "playback_acknowledged" | "interrupted" | "superseded" | null;
+    sampleRate: number;
+    channels: 1;
+    sampleCount: number;
+    durationMs: number;
+    bytes: number;
+    sha256: string | null;
+    createdAt: number;
+    errorCode: string | null;
+  }>;
 }
 
 export async function listAgentConversations(id: string, filters: {
@@ -180,7 +200,10 @@ export async function listAgentConversations(id: string, filters: {
   if (response.status === 404) {
     const body = await response.clone().json().catch(() => null) as { error?: { code?: string } } | null;
     if (body?.error?.code === "traces_disabled") {
-      return { conversations: [], total: 0, policy: { enabled: false, content: false, audio: false } };
+      return { conversations: [], total: 0, policy: {
+        enabled: false, content: false, audio: false,
+        inputAudio: false, outputAudio: false, maxBytes: null,
+      } };
     }
   }
   if (!response.ok) await fail(response, "获取助手会话");

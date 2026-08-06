@@ -254,9 +254,10 @@ duplicate/export/audit actions, runtime-dependency validation, advanced
 route/tool/speech controls, exact draft/published Try it live, and copyable native/OpenAI
 integration examples, plus optional owner-scoped conversation traces with exact Agent
 revision/version identity; `--traces DIR` enables metadata, `--trace-content` separately
-enables transcripts/tool payloads, and the current implementation stores no trace audio;
-the accepted [conversation retention design](docs/conversation-retention.md) adds
-independently gated input/output replay), live conversation
+enables transcripts/tool payloads, `--trace-audio input|output|both` independently
+retains canonical owner-scoped WAVs, and `--trace-max-bytes` bounds them; the protected
+media API is delivered while Agent Builder replay controls and shared Library assets in
+the accepted [conversation retention design](docs/conversation-retention.md) remain), live conversation
 (worklet microphone capture, gapless streamed playback, captions with turn
 state and per-turn timing, the negotiated AEC capability snapshot), generation with takes,
 the voice bank (file upload or in-browser recording, plus design-profile create / audit /

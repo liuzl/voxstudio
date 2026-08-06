@@ -377,7 +377,8 @@ export async function runListen(
         io.err(`tool: ${name} ${JSON.stringify(args)} awaiting spoken confirmation`);
       },
       ...(options.saveUtterances === undefined && !options.studioTools ? {} : {
-        onUtterance: async (wav: Uint8Array, transcript: string) => {
+        onUtterance: async utterance => {
+          const { wav, rawTranscript: transcript } = utterance;
           // The studio referents hold at most two utterances in memory — "把刚才那句存成
           // 音色" and its park-time pin — and are not retention: nothing touches disk
           // unless the user later confirms the save aloud.

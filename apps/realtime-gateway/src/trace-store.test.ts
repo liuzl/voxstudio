@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtemp, rm, stat } from "node:fs/promises";
+import { writeWav } from "@voxstudio/audio";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GatewayEvent } from "./protocol";
@@ -28,6 +30,31 @@ function event(sessionId: string, sequence: number, payload: Record<string, unkn
 }
 
 describe("ConversationTraceStore", () => {
+  test("migrates a pre-deletion-marker trace database in place", async () => {
+    const dir = await root();
+    const legacy = new Database(join(dir, "traces.db"), { create: true });
+    legacy.run(`CREATE TABLE conversations (
+      id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+      agent_source TEXT NOT NULL, agent_revision INTEGER, agent_version INTEGER,
+      agent_hash TEXT, started_at INTEGER NOT NULL, ended_at INTEGER, outcome TEXT NOT NULL,
+      error_code TEXT, turn_count INTEGER NOT NULL DEFAULT 0,
+      content_retained INTEGER NOT NULL DEFAULT 0
+    )`);
+    legacy.run("PRAGMA user_version = 1");
+    legacy.close();
+
+    const store = new ConversationTraceStore(dir);
+    store.begin("owner", "session", { agentId: "support", source: "draft", revision: 1 }, 0);
+    store.finish("owner", "session", 1);
+    expect(await store.remove("owner", "support", "session")).toBe("deleted");
+    await store.close();
+
+    const migrated = new Database(join(dir, "traces.db"));
+    expect(migrated.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(2);
+    expect(migrated.query<{ name: string }, []>("PRAGMA table_info(conversations)").all().map(row => row.name)).toContain("deleting");
+    migrated.close();
+  });
+
   test("commits a burst of observer writes as one batch", async () => {
     const store = new ConversationTraceStore(await root());
     store.batch(() => {
@@ -85,9 +112,9 @@ describe("ConversationTraceStore", () => {
     expect(detail?.events[1]).toMatchObject({ type: "tool.call", name: "lookup" });
     expect(detail?.events[1]).not.toHaveProperty("arguments");
     expect(store.get("bob", "support", "session-1")).toBeUndefined();
-    expect(store.remove("bob", "support", "session-1")).toBe(false);
-    expect(store.remove("alice", "support", "session-1")).toBe(true);
-    store.close();
+    expect(await store.remove("bob", "support", "session-1")).toBe("not_found");
+    expect(await store.remove("alice", "support", "session-1")).toBe("deleted");
+    await store.close();
   });
 
   test("retains content only under the independent content policy", async () => {
@@ -110,6 +137,43 @@ describe("ConversationTraceStore", () => {
     }
   });
 
+  test("attaches typed audio to a turn and cascades bytes on conversation deletion", async () => {
+    const store = new ConversationTraceStore(await root(), {
+      retainInputAudio: true,
+      retainOutputAudio: true,
+      maxBytes: 1_000_000,
+    });
+    store.begin("owner", "media-session", { agentId: "support", source: "draft", revision: 1 }, 10);
+    store.retainInput("owner", {
+      sessionId: "media-session", turnId: "turn-1", revision: 0,
+      wav: writeWav(new Float32Array(1_600).fill(0.1), 16_000),
+      sampleRate: 16_000, channels: 1,
+    });
+    const output = store.createOutputRecorder("owner", "media-session", "turn-1", 0)!;
+    output.write(new Float32Array(800).fill(0.2), 16_000);
+    output.finalize("interrupted");
+    await store.flushMedia();
+
+    expect(store.policy).toMatchObject({
+      audio: true, inputAudio: true, outputAudio: true, maxBytes: 1_000_000,
+    });
+    const detail = store.get("owner", "support", "media-session")!;
+    expect(detail.media).toHaveLength(2);
+    expect(detail.media).toEqual(expect.arrayContaining([
+      expect.objectContaining({ direction: "input", turnId: "turn-1", revision: 0, state: "ready" }),
+      expect.objectContaining({ direction: "output", delivery: "interrupted", state: "ready" }),
+    ]));
+    const retained = store.mediaFile("owner", "support", "media-session", detail.media[0]!.id);
+    expect(retained).toBeDefined();
+    expect(store.mediaFile("another-owner", "support", "media-session", detail.media[0]!.id)).toBeUndefined();
+
+    expect(await store.remove("owner", "support", "media-session")).toBe("active");
+    store.finish("owner", "media-session", 20);
+    expect(await store.remove("owner", "support", "media-session")).toBe("deleted");
+    await expect(stat(retained!.path)).rejects.toThrow();
+    await store.close();
+  });
+
   test("enforces age retention before a stale record can be read", async () => {
     let now = 0;
     const store = new ConversationTraceStore(await root(), { retentionDays: 1, now: () => now });
@@ -119,6 +183,67 @@ describe("ConversationTraceStore", () => {
     expect(store.list("owner", "support").conversations).toHaveLength(0);
     expect(store.get("owner", "support", "expired")).toBeUndefined();
     store.close();
+  });
+
+  test("enforces a lowered media byte ceiling on startup by pruning completed conversations", async () => {
+    const dir = await root();
+    let store = new ConversationTraceStore(dir, { retainInputAudio: true });
+    store.begin("owner", "large", { agentId: "support", source: "draft", revision: 1 }, 0);
+    store.retainInput("owner", {
+      sessionId: "large", turnId: "turn", revision: 0,
+      wav: writeWav(new Float32Array(1_600), 16_000), sampleRate: 16_000, channels: 1,
+    });
+    store.finish("owner", "large", 1);
+    await store.close();
+
+    store = new ConversationTraceStore(dir, { retainInputAudio: true, maxBytes: 100 });
+    expect(store.list("owner", "support").conversations).toHaveLength(0);
+    await store.flushMedia();
+    await store.close();
+  });
+
+  test("evicts the oldest completed conversation to retain new media at the runtime byte ceiling", async () => {
+    const store = new ConversationTraceStore(await root(), { retainInputAudio: true, maxBytes: 300 });
+    const wav = writeWav(new Float32Array(100), 16_000);
+    store.begin("owner", "old", { agentId: "support", source: "draft", revision: 1 }, 0);
+    store.retainInput("owner", {
+      sessionId: "old", turnId: "turn-old", revision: 0, wav, sampleRate: 16_000, channels: 1,
+    });
+    await store.flushMedia();
+    store.finish("owner", "old", 1);
+
+    store.begin("owner", "new", { agentId: "support", source: "draft", revision: 2 }, 2);
+    store.retainInput("owner", {
+      sessionId: "new", turnId: "turn-new", revision: 0, wav, sampleRate: 16_000, channels: 1,
+    });
+    await store.flushMedia();
+
+    expect(store.get("owner", "support", "old")).toBeUndefined();
+    expect(store.get("owner", "support", "new")?.media).toEqual([
+      expect.objectContaining({ state: "ready", direction: "input" }),
+    ]);
+    await store.close();
+  });
+
+  test("disabling new audio capture does not hide already-retained conversation media", async () => {
+    const dir = await root();
+    let store = new ConversationTraceStore(dir, { retainInputAudio: true });
+    store.begin("owner", "history", { agentId: "support", source: "draft", revision: 1 }, 0);
+    store.retainInput("owner", {
+      sessionId: "history", turnId: "turn", revision: 0,
+      wav: writeWav(new Float32Array(100), 16_000), sampleRate: 16_000, channels: 1,
+    });
+    store.finish("owner", "history", 1);
+    await store.close();
+
+    store = new ConversationTraceStore(dir);
+    expect(store.policy.audio).toBe(false);
+    expect(store.get("owner", "support", "history")?.media[0]).toMatchObject({ state: "ready", direction: "input" });
+    await store.close();
+
+    store = new ConversationTraceStore(dir, { serveRetainedAudio: false });
+    expect(store.get("owner", "support", "history")?.media).toEqual([]);
+    await store.close();
   });
 
   test("records an adapter-level start failure as an error outcome", async () => {

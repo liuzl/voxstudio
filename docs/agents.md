@@ -41,9 +41,11 @@ Deployment section provides native/compatible integration examples. Conversation
 history now uses an optional owner-scoped Trace Store: every record pins the exact
 draft revision or immutable published version/hash, metadata retention is explicit,
 content retention is a second opt-in, and the current implementation does not
-store trace audio. The accepted Conversation/Media/Library boundary, directional
-audio opt-ins, byte retention, replay semantics, and deletion contract are in
-[conversation-retention.md](./conversation-retention.md). Their implementation,
+store trace audio unless `--trace-audio input|output|both` is explicitly enabled.
+The conversation-only private Media Store, directional byte ceiling, output-prefix
+semantics, owner-checked download, and conversation deletion are delivered. Shared
+Library assets, policy snapshots, account/legacy lifecycle tooling, and replay UI remain
+under the accepted contract in [conversation-retention.md](./conversation-retention.md).
 Statistics, response feedback, the remaining preview failure/retry controls,
 and the later independent Full Preview described in
 [agent-builder-ui.md](./agent-builder-ui.md) remain next.

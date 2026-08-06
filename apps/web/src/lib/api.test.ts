@@ -197,7 +197,10 @@ describe("Agent API", () => {
     });
 
     await expect(listAgentConversations("support", { outcome: "error", query: "session/1", limit: 25 })).resolves.toEqual({
-      conversations: [], total: 0, policy: { enabled: false, content: false, audio: false },
+      conversations: [], total: 0, policy: {
+        enabled: false, content: false, audio: false,
+        inputAudio: false, outputAudio: false, maxBytes: null,
+      },
     });
     await getAgentConversation("support", "session/1");
     await deleteAgentConversation("support", "session/1");
