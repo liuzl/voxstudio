@@ -59,6 +59,24 @@ describe("Agent Conversations presentation", () => {
     }]);
   });
 
+  test("orders turns by earliest timestamp, mixing audio-only and text turns", () => {
+    const earlyAudio = media({ id: "input-early", turnId: "t0", revision: 0, createdAt: 5 });
+    expect(conversationTurns([
+      { type: "transcript.final", sequence: 1, timestampMs: 10, sessionId: "s", turnId: "t1", revision: 0, text: "later" },
+    ], [earlyAudio]).map(turn => turn.id)).toEqual(["t0", "t1"]);
+  });
+
+  test("marks only the interrupted revision when the event carries a revision", () => {
+    expect(conversationTurns([
+      { type: "transcript.final", sequence: 1, timestampMs: 1, sessionId: "s", turnId: "t1", revision: 0, text: "first" },
+      { type: "playback.interrupted", sequence: 2, timestampMs: 2, sessionId: "s", turnId: "t1", revision: 0 },
+      { type: "response.text.final", sequence: 3, timestampMs: 3, sessionId: "s", turnId: "t1", revision: 1, text: "second" },
+    ])).toEqual([
+      { id: "t1", revision: 0, transcript: "first", interrupted: true },
+      { id: "t1", revision: 1, reply: "second", interrupted: false },
+    ]);
+  });
+
   test("formats short and multi-minute durations compactly", () => {
     expect(durationLabel(1_400)).toBe("1s");
     expect(durationLabel(125_000)).toBe("2m 05s");

@@ -1242,7 +1242,7 @@ export class GatewaySession {
         }
         reportRendition("interrupted");
         recording?.finalize("interrupted");
-        this.emit({ type: "playback.interrupted", turnId });
+        this.emit({ type: "playback.interrupted", turnId, revision });
       },
     };
   }

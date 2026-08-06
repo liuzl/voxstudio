@@ -107,7 +107,7 @@ export type GatewayEventPayload =
   | { type: "response.text.final"; turnId: string; revision: number; text: string }
   | { type: "playback.format"; turnId: string; revision: number; sampleRate: number }
   | { type: "playback.ended"; turnId: string }
-  | { type: "playback.interrupted"; turnId: string }
+  | { type: "playback.interrupted"; turnId: string; revision: number }
   | ({
       type: "media.frame";
       frameId: number;

@@ -47,34 +47,58 @@ export function conversationTurns(
 ): ConversationTurnView[] {
   const turns = new Map<string, ConversationTurnView>();
   const interrupted = new Set<string>();
-  const turn = (id: string, revision: number): ConversationTurnView => {
+  const sortAt = new Map<string, number>();
+  const order = new Map<string, number>();
+  let nextOrder = 0;
+  const markInterrupted = (id: string, revision?: number) => {
+    interrupted.add(revision === undefined ? id : `${id}:${revision}`);
+  };
+  const isInterrupted = (id: string, revision: number) =>
+    interrupted.has(`${id}:${revision}`) || interrupted.has(id);
+  const turn = (id: string, revision: number, atMs: number): ConversationTurnView => {
     const key = `${id}:${revision}`;
     const existing = turns.get(key);
-    if (existing) return existing;
-    const created = { id, revision, interrupted: interrupted.has(id) };
+    if (existing) {
+      const earliest = sortAt.get(key);
+      if (earliest === undefined || atMs < earliest) sortAt.set(key, atMs);
+      return existing;
+    }
+    const created = { id, revision, interrupted: isInterrupted(id, revision) };
     turns.set(key, created);
+    sortAt.set(key, atMs);
+    order.set(key, nextOrder);
+    nextOrder += 1;
     return created;
   };
   for (const event of events) {
     if (!event.turnId) continue;
     if (event.type === "playback.interrupted") {
-      interrupted.add(event.turnId);
+      markInterrupted(event.turnId, event.revision);
       for (const current of turns.values()) {
-        if (current.id === event.turnId) current.interrupted = true;
+        if (current.id === event.turnId && (event.revision === undefined || current.revision === event.revision)) {
+          current.interrupted = true;
+        }
       }
       continue;
     }
-    const current = turn(event.turnId, event.revision ?? 0);
+    const current = turn(event.turnId, event.revision ?? 0, event.timestampMs);
     if (event.type === "transcript.final" && typeof event.text === "string") current.transcript = event.text;
     if (event.type === "response.text.final" && typeof event.text === "string") current.reply = event.text;
   }
   for (const descriptor of [...media].sort((left, right) => left.createdAt - right.createdAt)) {
-    const current = turn(descriptor.turnId, descriptor.revision);
+    const current = turn(descriptor.turnId, descriptor.revision, descriptor.createdAt);
     if (descriptor.direction === "input") current.inputMedia = descriptor;
     else current.outputMedia = descriptor;
   }
-  return [...turns.values()].filter(item =>
-    item.transcript !== undefined || item.reply !== undefined || item.inputMedia !== undefined || item.outputMedia !== undefined);
+  return [...turns.entries()]
+    .filter(([, item]) =>
+      item.transcript !== undefined || item.reply !== undefined || item.inputMedia !== undefined || item.outputMedia !== undefined)
+    .sort(([leftKey], [rightKey]) => {
+      const timeDiff = (sortAt.get(leftKey) ?? 0) - (sortAt.get(rightKey) ?? 0);
+      if (timeDiff !== 0) return timeDiff;
+      return (order.get(leftKey) ?? 0) - (order.get(rightKey) ?? 0);
+    })
+    .map(([, item]) => item);
 }
 
 export function durationLabel(durationMs: number): string {
@@ -126,7 +150,7 @@ function PolicyBanner({ policy }: { policy: ConversationTracePolicy }) {
       <ShieldCheck className="mt-0.5 size-4 shrink-0 text-fg-muted" />
       <div className="min-w-0 flex-1">
         <p className="text-[11px] font-medium">{policy.content ? t("会话内容留存已启用") : t("仅保留会话元数据")}</p>
-        <p className="mt-1 text-[10px] leading-5 text-fg-faint">{policy.audio
+        <p className="mt-1 text-[10px] leading-5 text-fg-faint">{policy.audio && (policy.inputAudio || policy.outputAudio)
           ? policy.inputAudio && policy.outputAudio
             ? t("输入与输出音频也会保留，可在逐轮对话中播放。")
             : t("部分音频留存已启用，可在逐轮对话中播放。")
@@ -134,7 +158,7 @@ function PolicyBanner({ policy }: { policy: ConversationTracePolicy }) {
             ? t("转写、回答和工具载荷会被保存；音频仍然不会进入 Trace Store。")
             : t("转写、回答和工具载荷不会保存；音频也不会进入 Trace Store。")}</p>
       </div>
-      <span className="shrink-0 rounded-full bg-fill-active px-2 py-1 text-[9px] text-fg-muted">{t(policy.audio ? "音频开启" : "音频关闭")}</span>
+      <span className="shrink-0 rounded-full bg-fill-active px-2 py-1 text-[9px] text-fg-muted">{t(policy.audio && (policy.inputAudio || policy.outputAudio) ? "音频开启" : "音频关闭")}</span>
     </div>
   );
 }
