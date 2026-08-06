@@ -702,7 +702,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
                   schema: {
                     type: "object",
                     properties: {
-                      server_url: { type: "string", format: "uri", description: "The configured wss:// LiveKit endpoint." },
+                      server_url: { type: "string", format: "uri", description: "The browser-reachable wss:// LiveKit endpoint (VOX_LIVEKIT_PUBLIC_URL when set, otherwise the configured VOX_LIVEKIT_URL)." },
                       participant_token: { type: "string", description: "Ephemeral signed participant JWT. Never persist or log it." },
                       room_name: { type: "string", description: "Opaque, unique room for this bootstrap." },
                       participant_identity: { type: "string", description: "Opaque browser participant; it contains no account id or email." },

@@ -539,7 +539,15 @@ block validating the renderer and interruption behavior with PCM16.
 
 Bootstrap/security and server-adapter slice implemented 2026-08-05. `VOX_LIVEKIT_URL`,
 `VOX_LIVEKIT_API_KEY`, and `VOX_LIVEKIT_API_SECRET` configure only the server-side
-signer. `/healthz` advertises the authenticated `POST /v1/realtime/livekit/token`
+signer. `VOX_LIVEKIT_URL` is the adapter-facing endpoint; a co-located LiveKit server
+may stay loopback-only (`ws://127.0.0.1:7880`). Browsers receive that URL verbatim as
+`server_url` unless `VOX_LIVEKIT_PUBLIC_URL` is set, in which case they receive the
+public `wss://` override while the local rtc-node adapter keeps `VOX_LIVEKIT_URL`.
+Use the override when LiveKit is loopback-only and a tunnel (for example Tailscale
+serve) fronts its signal port: `VOX_LIVEKIT_PUBLIC_URL=wss://<host>:<tunnel-port>`
+returns a browser-reachable endpoint without forcing the adapter through the tunnel.
+The public override must be `wss://` with no credentials, query, or fragment.
+`/healthz` advertises the authenticated `POST /v1/realtime/livekit/token`
 capability only after the rtc-node media adapter is also wired. The CLI and standalone gateway wire that
 adapter whenever the complete environment contract is present. The endpoint accepts an
 owner-scoped Agent selection or the bounded behavior fields used by Live conversation.

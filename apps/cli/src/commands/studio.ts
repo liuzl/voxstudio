@@ -82,7 +82,10 @@ options:
                  VOX_LIVEKIT_URL=wss://..., VOX_LIVEKIT_API_KEY, and
                  VOX_LIVEKIT_API_SECRET must be set together. They configure the signer
                  and the isolated rtc-node Agent media adapter. Tokens last 300 seconds;
-                 VOX_LIVEKIT_TOKEN_TTL_SECONDS may set 30–600
+                 VOX_LIVEKIT_TOKEN_TTL_SECONDS may set 30–600. When LiveKit is
+                 loopback-only behind a tunnel, set VOX_LIVEKIT_PUBLIC_URL=wss://...
+                 to the browser-reachable signal endpoint; the browser receives it while
+                 the local adapter keeps VOX_LIVEKIT_URL
   --quota N      bound each account to N chargeable operations per window: synthesis,
                  transcription, chat, voice/profile creation, promote, and starting a
                  realtime conversation. Reads, deletes, health and the discovery

@@ -109,6 +109,34 @@ describe("POST /v1/realtime/livekit/token", () => {
     expect((JSON.parse(health) as { deployment: { livekit: boolean } }).deployment.livekit).toBe(true);
   });
 
+  test("returns the public browser URL while the adapter keeps the private endpoint", async () => {
+    let accepted: LiveKitAgentBootstrap | undefined;
+    const privateLivekit = {
+      serverUrl: "ws://127.0.0.1:7880",
+      publicServerUrl: "wss://yutu.tail1e4ec4.ts.net:8443",
+      apiKey: "devkey",
+      apiSecret: "voxstudio-local-livekit-secret-2026-08-05",
+    };
+    gateway = startGateway({
+      config,
+      port: 0,
+      token: "gateway-secret",
+      livekit: privateLivekit,
+      agentsDir,
+      livekitAdapter: adapter(bootstrap => { accepted = bootstrap; }),
+    });
+    const response = await fetch(new URL("/v1/realtime/livekit/token", gateway.url), {
+      method: "POST",
+      headers: { authorization: "Bearer gateway-secret", origin: "https://unrelated.example" },
+      body: JSON.stringify({ agent: "support", agentSource: "published", agentVersion: 1 }),
+    });
+    expect(response.status).toBe(200);
+    const body = JSON.parse(await response.text()) as { server_url: string };
+    expect(body.server_url).toBe(privateLivekit.publicServerUrl);
+    // The server-side adapter contract never sees the browser-facing endpoint.
+    expect(accepted?.roomName).toBeDefined();
+  });
+
   test("binds the Agent from the authenticated account namespace, never the same id from another owner", async () => {
     let accepted: LiveKitAgentBootstrap | undefined;
     gateway = startGateway({

@@ -57,7 +57,10 @@ LiveKit Phase 3A bootstrap is environment-only: set VOX_LIVEKIT_URL,
 VOX_LIVEKIT_API_KEY, and VOX_LIVEKIT_API_SECRET together. Optional
 VOX_LIVEKIT_TOKEN_TTL_SECONDS is 30–600 (default 300). The gateway wires the signer
 and isolated rtc-node Agent media adapter together; Studio browser WebRTC selection
-remains a separate client capability.`;
+remains a separate client capability. VOX_LIVEKIT_PUBLIC_URL, when set, is the wss://
+endpoint returned to browsers while the adapter keeps connecting to VOX_LIVEKIT_URL —
+use it when LiveKit is loopback-only and a tunnel (for example Tailscale serve) fronts
+its signal port.`;
 
 /**
  * OAuth providers from the environment. Credentials never travel in argv, where a

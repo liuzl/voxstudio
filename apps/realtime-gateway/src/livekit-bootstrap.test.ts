@@ -56,6 +56,23 @@ describe("LiveKit browser bootstrap", () => {
     expect(() => validateLiveKitBootstrapOptions({ ...options, serverUrl: "https://media.example" })).toThrow("wss://");
   });
 
+  test("returns the public browser URL when configured, keeping the adapter endpoint private", async () => {
+    const publicUrl = "wss://yutu.tail1e4ec4.ts.net:8443";
+    const response = await issueLiveKitBrowserToken({ ...options, publicServerUrl: publicUrl });
+    expect(response.server_url).toBe(publicUrl);
+    const loopback = await issueLiveKitBrowserToken(options);
+    expect(loopback.server_url).toBe(options.serverUrl);
+  });
+
+  test("validates the public browser URL strictly", () => {
+    expect(() => validateLiveKitBootstrapOptions({ ...options, publicServerUrl: "wss://media.example" })).not.toThrow();
+    expect(() => validateLiveKitBootstrapOptions({ ...options, publicServerUrl: "ws://media.example" })).toThrow("wss://");
+    expect(() => validateLiveKitBootstrapOptions({ ...options, publicServerUrl: "https://media.example" })).toThrow("wss://");
+    expect(() => validateLiveKitBootstrapOptions({ ...options, publicServerUrl: "wss://user:pass@media.example" })).toThrow("must not contain");
+    expect(() => validateLiveKitBootstrapOptions({ ...options, publicServerUrl: "wss://media.example?x=1" })).toThrow("must not contain");
+    expect(() => validateLiveKitBootstrapOptions({ ...options, publicServerUrl: "not a url" })).toThrow("absolute wss://");
+  });
+
   test("fails closed on secrets in URLs, empty credentials, and long-lived tokens", () => {
     expect(() => validateLiveKitBootstrapOptions({ ...options, serverUrl: "wss://user:pass@media.example" })).toThrow("must not contain");
     expect(() => validateLiveKitBootstrapOptions({ ...options, serverUrl: "wss://media.example?secret=x" })).toThrow("must not contain");
@@ -82,6 +99,26 @@ describe("LiveKit browser bootstrap", () => {
       VOX_LIVEKIT_API_KEY: options.apiKey,
       VOX_LIVEKIT_API_SECRET: options.apiSecret,
     })).toEqual(options);
+    expect(liveKitBootstrapFromEnv({
+      VOX_LIVEKIT_URL: "ws://127.0.0.1:7880",
+      VOX_LIVEKIT_API_KEY: options.apiKey,
+      VOX_LIVEKIT_API_SECRET: options.apiSecret,
+      VOX_LIVEKIT_PUBLIC_URL: "wss://media.example",
+    })).toEqual({
+      serverUrl: "ws://127.0.0.1:7880",
+      publicServerUrl: "wss://media.example",
+      apiKey: options.apiKey,
+      apiSecret: options.apiSecret,
+    });
+    expect(() => liveKitBootstrapFromEnv({
+      VOX_LIVEKIT_PUBLIC_URL: "wss://media.example",
+    }, "gateway")).toThrow("must be set together");
+    expect(() => liveKitBootstrapFromEnv({
+      VOX_LIVEKIT_URL: options.serverUrl,
+      VOX_LIVEKIT_API_KEY: options.apiKey,
+      VOX_LIVEKIT_API_SECRET: options.apiSecret,
+      VOX_LIVEKIT_PUBLIC_URL: "ws://media.example",
+    })).toThrow("wss://");
     expect(() => liveKitBootstrapFromEnv({
       VOX_LIVEKIT_URL: options.serverUrl,
       VOX_LIVEKIT_API_KEY: options.apiKey,

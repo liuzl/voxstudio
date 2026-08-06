@@ -5,7 +5,10 @@ import { AccessToken, TrackSource } from "livekit-server-sdk";
  * The API secret must never cross the gateway boundary or enter the web bundle.
  */
 export interface LiveKitBootstrapOptions {
+  /** Adapter-facing LiveKit endpoint (loopback allowed for a co-located server). */
   serverUrl: string;
+  /** Optional browser-facing endpoint returned to clients; defaults to serverUrl. */
+  publicServerUrl?: string;
   apiKey: string;
   apiSecret: string;
   /** Browser token lifetime. Defaults to five minutes and is capped at ten. */
@@ -49,6 +52,22 @@ export function validateLiveKitBootstrapOptions(options: LiveKitBootstrapOptions
   if (url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "") {
     throw new TypeError("LiveKit server URL must not contain credentials, a query, or a fragment");
   }
+  if (options.publicServerUrl !== undefined) {
+    let publicUrl: URL;
+    try {
+      publicUrl = new URL(options.publicServerUrl);
+    } catch {
+      throw new TypeError("LiveKit public server URL must be an absolute wss:// URL");
+    }
+    // A browser on an HTTPS page cannot open an insecure WebSocket to a non-loopback
+    // host (mixed content), so the browser-facing override is wss:// only.
+    if (publicUrl.protocol !== "wss:") {
+      throw new TypeError("LiveKit public server URL must use wss://");
+    }
+    if (publicUrl.username !== "" || publicUrl.password !== "" || publicUrl.search !== "" || publicUrl.hash !== "") {
+      throw new TypeError("LiveKit public server URL must not contain credentials, a query, or a fragment");
+    }
+  }
   if (options.apiKey.trim() === "") throw new TypeError("LiveKit API key must not be empty");
   if (options.apiSecret.trim() === "") throw new TypeError("LiveKit API secret must not be empty");
   // LiveKit's documented loopback dev server intentionally uses devkey/secret. Keep
@@ -72,17 +91,22 @@ export function liveKitBootstrapFromEnv(
   const serverUrl = env.VOX_LIVEKIT_URL;
   const apiKey = env.VOX_LIVEKIT_API_KEY;
   const apiSecret = env.VOX_LIVEKIT_API_SECRET;
+  const publicServerUrl = env.VOX_LIVEKIT_PUBLIC_URL;
   const rawTtl = env.VOX_LIVEKIT_TOKEN_TTL_SECONDS;
-  const hasAny = [serverUrl, apiKey, apiSecret, rawTtl].some(value => value !== undefined && value !== "");
+  const hasAny = [serverUrl, apiKey, apiSecret, publicServerUrl, rawTtl].some(value => value !== undefined && value !== "");
   if (!hasAny) return undefined;
   if (!serverUrl || !apiKey || !apiSecret) {
-    throw new TypeError(`${source}: VOX_LIVEKIT_URL, VOX_LIVEKIT_API_KEY, and VOX_LIVEKIT_API_SECRET must be set together`);
+    throw new TypeError(
+      `${source}: VOX_LIVEKIT_URL, VOX_LIVEKIT_API_KEY, and VOX_LIVEKIT_API_SECRET must be set together`
+      + " (VOX_LIVEKIT_PUBLIC_URL is an optional browser-facing override)",
+    );
   }
   const tokenTtlSeconds = rawTtl === undefined || rawTtl === "" ? undefined : Number(rawTtl);
   const options: LiveKitBootstrapOptions = {
     serverUrl,
     apiKey,
     apiSecret,
+    ...(publicServerUrl === undefined || publicServerUrl === "" ? {} : { publicServerUrl }),
     ...(tokenTtlSeconds === undefined ? {} : { tokenTtlSeconds }),
   };
   try {
@@ -125,7 +149,7 @@ export async function issueLiveKitBrowserToken(
     throw new TypeError("LiveKit participant token has no valid expiration");
   }
   return {
-    server_url: options.serverUrl,
+    server_url: options.publicServerUrl ?? options.serverUrl,
     participant_token: participantToken,
     room_name: roomName,
     participant_identity: participantIdentity,
