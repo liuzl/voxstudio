@@ -58,9 +58,12 @@ export interface AgentRunControllerOptions {
   onEvent?(event: AgentEvent): void;
   /** Exactly one call when the run reaches a terminal state. */
   onTerminal?(state: "completed" | "failed" | "cancelled"): void;
+  /** Maximum shutdown wait before a broken executor is failed closed. */
+  drainTimeoutMs?: number;
 }
 
 const defaultMilestoneIntervalMs = 5_000;
+const defaultDrainTimeoutMs = 2_000;
 
 export function defaultMilestoneText(event: AgentEvent): string | undefined {
   switch (event.type) {
@@ -101,12 +104,15 @@ export class AgentRunController {
   private readonly describeFailure: (event: Extract<AgentEvent, { type: "run.failed" }>) => string;
   private readonly onEvent: ((event: AgentEvent) => void) | undefined;
   private readonly onTerminal: ((state: "completed" | "failed" | "cancelled") => void) | undefined;
+  private readonly drainTimeoutMs: number;
 
   private pendingMilestone: { text: string } | undefined;
   private lastAudibleAtMs = -Infinity;
   private terminal = false;
   private terminalReported = false;
   private resolveDrained!: () => void;
+  private cancelPromise: Promise<void> | undefined;
+  private closePromise: Promise<void> | undefined;
 
   constructor(options: AgentRunControllerOptions) {
     const { executor, speech, input, context } = options;
@@ -117,6 +123,10 @@ export class AgentRunController {
     this.describeFailure = options.describeFailure ?? defaultFailureText;
     this.onEvent = options.onEvent;
     this.onTerminal = options.onTerminal;
+    this.drainTimeoutMs = options.drainTimeoutMs ?? defaultDrainTimeoutMs;
+    if (!Number.isSafeInteger(this.drainTimeoutMs) || this.drainTimeoutMs <= 0) {
+      throw new TypeError("agent drain timeout must be a positive integer");
+    }
     this.drained = new Promise(resolve => { this.resolveDrained = resolve; });
     this.run = executor.start(input, context);
     void this.consume();
@@ -154,7 +164,7 @@ export class AgentRunController {
     this.speech.stop();
     this.pendingMilestone = undefined;
     this.lastAudibleAtMs = this.now();
-    await this.run.cancel(reason);
+    await this.cancelRun(reason);
   }
 
   /** Hang-up: Phase A policy cancels the session-scoped run with bounded cleanup. */
@@ -164,24 +174,61 @@ export class AgentRunController {
       this.pendingMilestone = undefined;
       this.lastAudibleAtMs = this.now();
     }
-    if (!this.terminal) await this.run.cancel(reason).catch(() => {});
-    await this.run.close().catch(() => {});
-    await this.drained;
+    const cleanup = (async () => {
+      if (!this.terminal) await this.cancelRun(reason);
+      await this.closeRun();
+      await this.drained;
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      cleanup.then(() => "drained" as const),
+      new Promise<"timeout">(resolve => { timer = setTimeout(() => resolve("timeout"), this.drainTimeoutMs); }),
+    ]);
+    if (timer !== undefined) clearTimeout(timer);
+    if (outcome === "timeout") {
+      // Invoke close even when cancel itself wedged. The controller returns at the
+      // documented gateway deadline and rejects every late event from this run.
+      void this.closeRun();
+      this.failRun(false);
+    }
   }
 
   private async consume(): Promise<void> {
     try {
       for await (const event of this.run.events) {
         this.accept(event);
+        // A terminal event is the stream boundary. Do not depend on an executor also
+        // closing its iterator correctly before releasing session shutdown.
+        if (this.terminal) break;
       }
+      if (!this.terminal) this.failRun();
     } catch {
       // A broken executor must still release the audio surface and report a terminal.
-      this.speech.stop();
-      this.pendingMilestone = undefined;
-      this.reportTerminal("failed");
+      this.failRun();
     } finally {
       this.resolveDrained();
     }
+  }
+
+  private closeRun(): Promise<void> {
+    return this.closePromise ??= this.run.close().catch(() => {});
+  }
+
+  private cancelRun(reason: string): Promise<void> {
+    return this.cancelPromise ??= this.run.cancel(reason).catch(() => {
+      // A rejected cancellation must not leave the controller permanently stuck in
+      // `cancelling`, nor escape as an unhandled rejection from the protocol handler.
+      this.failRun(false);
+      void this.closeRun();
+    });
+  }
+
+  private failRun(stopSpeech = true): void {
+    if (this.terminal) return;
+    if (stopSpeech) this.speech.stop();
+    this.pendingMilestone = undefined;
+    this.lifecycle.fail();
+    this.reportTerminal("failed");
   }
 
   private accept(event: AgentEvent): void {

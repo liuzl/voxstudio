@@ -79,7 +79,7 @@ Examples:
 
 - stop speech and reject new user input;
 - Phase A policy cancels the session-scoped execution with bounded cleanup;
-- wait up to the gateway drain deadline for terminal events;
+- wait up to the two-second gateway drain deadline for terminal events;
 - close remaining resources without claiming uncommitted effects were undone.
 
 Durable jobs that survive session or process lifetime are a later product with

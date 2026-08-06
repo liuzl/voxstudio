@@ -330,6 +330,95 @@ describe("agent run controller (Phase A gateway/player composition)", () => {
     });
     await controller.drained;
     expect(terminal).toEqual(["failed"]);
+    expect(controller.lifecycle.execution).toBe("failed");
+    expect(sink.stopCalls).toBe(1);
+  });
+
+  test("an event stream that ends without a terminal event fails closed", async () => {
+    const clock = { now: 1_000 };
+    const sink = new RecordingSink(clock);
+    const terminal: ("completed" | "failed" | "cancelled")[] = [];
+    const incomplete: AgentExecutor = {
+      start(_input, runContext) {
+        return {
+          context: runContext,
+          state: "running",
+          events: {
+            async *[Symbol.asyncIterator]() {
+              yield { type: "run.started", runId: runContext.runId, sequence: 1, timestampMs: 1_000 };
+            },
+          },
+          steer: async () => {},
+          cancel: async () => {},
+          close: async () => {},
+        } as AgentRun;
+      },
+    };
+    const controller = new AgentRunController({
+      executor: incomplete,
+      speech: sink,
+      input,
+      context,
+      onTerminal: state => terminal.push(state),
+    });
+
+    await controller.drained;
+    expect(controller.lifecycle.execution).toBe("failed");
+    expect(terminal).toEqual(["failed"]);
+    expect(sink.stopCalls).toBe(1);
+  });
+
+  test("session shutdown returns at its deadline when an executor wedges", async () => {
+    const clock = { now: 1_000 };
+    const sink = new RecordingSink(clock);
+    const terminal: ("completed" | "failed" | "cancelled")[] = [];
+    let cancelCalls = 0;
+    let closeCalls = 0;
+    const never = new Promise<void>(() => {});
+    const wedged: AgentExecutor = {
+      start(_input, runContext) {
+        let deliveredStart = false;
+        return {
+          context: runContext,
+          state: "running",
+          events: {
+            [Symbol.asyncIterator]() {
+              return {
+                next: async () => {
+                  if (!deliveredStart) {
+                    deliveredStart = true;
+                    return { done: false, value: {
+                      type: "run.started", runId: runContext.runId, sequence: 1, timestampMs: 1_000,
+                    } };
+                  }
+                  return never.then(() => ({ done: true as const, value: undefined }));
+                },
+              };
+            },
+          },
+          steer: async () => {},
+          cancel: async () => { cancelCalls += 1; await never; },
+          close: async () => { closeCalls += 1; await never; },
+        } as AgentRun;
+      },
+    };
+    const controller = new AgentRunController({
+      executor: wedged,
+      speech: sink,
+      input,
+      context,
+      drainTimeoutMs: 10,
+      onTerminal: state => terminal.push(state),
+    });
+    await flush();
+
+    void controller.cancel("user_cancelled");
+    await flush();
+    await controller.endSession();
+    expect(controller.lifecycle.execution).toBe("failed");
+    expect(terminal).toEqual(["failed"]);
+    expect(cancelCalls).toBe(1);
+    expect(closeCalls).toBe(1);
     expect(sink.stopCalls).toBe(1);
   });
 });

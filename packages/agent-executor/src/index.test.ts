@@ -117,6 +117,19 @@ describe("agent lifecycle", () => {
     lifecycle.finish("completed");
     expect(() => lifecycle.beginSteering()).toThrow("completed");
   });
+
+  test("executor-boundary failures close every nonterminal state", () => {
+    const beforeStart = new AgentLifecycle();
+    beforeStart.fail();
+    expect(beforeStart.execution).toBe("failed");
+
+    const whileCancelling = new AgentLifecycle();
+    whileCancelling.startExecution();
+    whileCancelling.requestCancel();
+    whileCancelling.fail();
+    expect(whileCancelling.execution).toBe("failed");
+    expect(() => whileCancelling.fail()).toThrow("failed");
+  });
 });
 
 describe("tool sandbox policy", () => {

@@ -192,6 +192,9 @@ export function formatOperationalEventLog(sessionId: string, event: GatewayEvent
     return `${prefix} media.rendition turn ${event.turnId.slice(0, 8)} ${event.status}`
       + ` frames=${event.frames} audio=${Math.round(event.audioMs)}ms stale=${event.staleFramesDiscarded}`;
   }
+  if (event.type === "agent.run.terminal") {
+    return `${prefix} agent.run.terminal run ${event.runId.slice(0, 8)} ${event.state}`;
+  }
   const turn = "turnId" in event ? ` turn ${event.turnId.slice(0, 8)}` : "";
   const state = event.type === "session.state" ? ` ${event.state}` : "";
   return `${prefix} ${event.type}${turn}${state}`;

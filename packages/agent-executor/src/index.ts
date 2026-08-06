@@ -125,6 +125,12 @@ export class AgentLifecycle {
     this.speechState = "silent";
   }
 
+  /** An executor-boundary failure closes any nonterminal state without inventing success. */
+  fail(): void {
+    this.moveExecution(["idle", "running", "steering", "cancelling"], "failed");
+    this.speechState = "silent";
+  }
+
   private isTerminal(): boolean {
     return this.executionState === "completed"
       || this.executionState === "failed"

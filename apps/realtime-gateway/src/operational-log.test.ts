@@ -104,9 +104,17 @@ describe("realtime operational log", () => {
       previous: "idle",
       state: "listening",
     };
+    const agentTerminal: GatewayEvent = {
+      ...envelope,
+      type: "agent.run.terminal",
+      runId: "agentrun-1234-5678",
+      state: "failed",
+    };
     expect(formatOperationalEventLog(envelope.sessionId, error))
       .toBe("session 12345678 #42 error: media socket blocked");
     expect(formatOperationalEventLog(envelope.sessionId, state))
       .toBe("session 12345678 #42 session.state listening");
+    expect(formatOperationalEventLog(envelope.sessionId, agentTerminal))
+      .toBe("session 12345678 #42 agent.run.terminal run agentrun failed");
   });
 });
