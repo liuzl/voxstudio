@@ -267,11 +267,30 @@ export async function listAudioInputDevices(): Promise<AudioInputDevice[]> {
   const devices = await navigator.mediaDevices.enumerateDevices();
   let unnamed = 0;
   return devices
-    .filter(device => device.kind === "audioinput" && device.deviceId !== "default")
+    // Pre-permission Chrome reports one placeholder with an empty deviceId and label;
+    // it is not a usable input, so it must never appear as "Microphone 1".
+    .filter(device => device.kind === "audioinput" && device.deviceId !== "" && device.deviceId !== "default")
     .map(device => ({
       id: device.deviceId,
       label: device.label || `Microphone ${++unnamed}`,
     }));
+}
+
+/**
+ * Request microphone access so device labels become visible. Call from a user
+ * gesture; resolves without prompting when permission was already granted.
+ */
+export async function grantMicrophonePermission(): Promise<void> {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  stream.getTracks().forEach(track => track.stop());
+}
+
+/** True when a capture/start failure is a microphone permission denial. */
+export function isMicrophonePermissionDenied(error: unknown): boolean {
+  if (typeof DOMException !== "undefined" && error instanceof DOMException) {
+    return error.name === "NotAllowedError" || error.name === "PermissionDeniedError";
+  }
+  return error instanceof Error && /permission|denied|notallowed|not allowed/i.test(error.message);
 }
 
 export class MicCapture {

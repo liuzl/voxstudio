@@ -14,6 +14,7 @@ export const agentBuilderMessages = {
   "麦克风已恢复：{device}": "Microphone recovered: {device}",
   "麦克风恢复失败：{message}": "Microphone recovery failed: {message}",
   "麦克风静音切换失败：{message}": "Could not change microphone mute state: {message}",
+  "麦克风权限被拒绝：请在浏览器中允许麦克风访问后重试": "Microphone access was denied. Allow microphone access in your browser and try again.",
   "WebRTC 暂时不可用，已切换到兼容模式": "WebRTC is temporarily unavailable. Switched to compatibility mode.",
   "LiveKit 服务不可用，已回退到 WebSocket": "LiveKit service unavailable; fell back to WebSocket.",
   "LiveKit 房间连接失败，已回退到 WebSocket": "LiveKit room connection failed; fell back to WebSocket.",

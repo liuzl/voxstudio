@@ -56,8 +56,8 @@ import {
   type VoiceEntry,
 } from "../lib/api";
 import type { ConnectionState } from "../lib/client";
-import { listAudioInputDevices, type AudioInputDevice } from "../lib/audio";
 import { formatMediaTransportDetails, mediaTransportFallbackMessage } from "../lib/media-telemetry";
+import { useMicrophoneDevices } from "../lib/use-microphone";
 import { useStudio } from "../store";
 import { AgentConversations } from "./AgentConversations";
 
@@ -1389,7 +1389,7 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
   const [starting, setStarting] = useState(false);
   const [sendingText, setSendingText] = useState(false);
   const [textInput, setTextInput] = useState("");
-  const [audioInputs, setAudioInputs] = useState<AudioInputDevice[]>([]);
+  const { devices: audioInputs, needsPermission: micNeedsPermission, authorizing: micAuthorizing, authorize: authorizeMicrophone } = useMicrophoneDevices();
   const [previewTraceKey, setPreviewTraceKey] = useState<string>();
   const [hasUnseen, setHasUnseen] = useState(false);
   const previewOwned = useRef(false);
@@ -1408,23 +1408,6 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
       previewOwned.current = false;
       previewStarting.current = false;
       if (shouldStop) void stopConversation();
-    };
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-    const refresh = () => {
-      void listAudioInputDevices().then(devices => {
-        if (alive) setAudioInputs(devices);
-      }).catch(() => {
-        if (alive) setAudioInputs([]);
-      });
-    };
-    refresh();
-    navigator.mediaDevices?.addEventListener?.("devicechange", refresh);
-    return () => {
-      alive = false;
-      navigator.mediaDevices?.removeEventListener?.("devicechange", refresh);
     };
   }, []);
 
@@ -1680,9 +1663,19 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
               >
                 <option value="">{t("浏览器默认输入")}</option>
                 {micInputDeviceId && !audioInputs.some(device => device.id === micInputDeviceId) ? <option value={micInputDeviceId}>{t("已选择的麦克风不可用")}</option> : null}
-                {audioInputs.map(device => <option key={device.id} value={device.id}>{device.label}</option>)}
+                {audioInputs.filter(device => device.label !== "").map(device => <option key={device.id} value={device.id}>{device.label}</option>)}
               </select>
             </label>
+            {micNeedsPermission ? (
+              <button
+                type="button"
+                onClick={() => void authorizeMicrophone()}
+                disabled={micAuthorizing}
+                className="self-end rounded-full border border-edge bg-canvas px-2.5 py-1 text-[10px] text-fg-secondary transition hover:bg-fill-hover disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {t("首次使用需要授权麦克风")}
+              </button>
+            ) : null}
             <button onClick={() => void start()} disabled={starting || (blocked && source.type === "draft")} className="flex h-10 items-center justify-center gap-2 rounded-full bg-ink px-5 text-[12px] font-medium text-on-ink transition hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-40 sm:h-11 sm:w-full">{starting ? <LoaderCircle className="size-4 animate-spin" /> : <Mic className="size-4" />}{source.type === "draft" && dirty ? t("保存并开始测试") : t("开始测试")}</button>
           </div>
         )}

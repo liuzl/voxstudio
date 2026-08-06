@@ -1,7 +1,7 @@
 import type { GatewayEvent, SessionStartOptions } from "@voxstudio/realtime-gateway/protocol";
 import { t } from "./i18n";
 import { GatewayApiError, synthesize } from "./lib/api";
-import { MicCapture, SpeakerOutput } from "./lib/audio";
+import { isMicrophonePermissionDenied, MicCapture, SpeakerOutput } from "./lib/audio";
 import { GatewayClient } from "./lib/client";
 import { gatewayRealtimeUrl } from "./lib/gateway-auth";
 import type { BrowserLiveKitClient } from "./lib/livekit-client";
@@ -19,6 +19,14 @@ const webMediaV2 = {
   version: 2,
   playback: [{ codec: "pcm_s16le", sampleRate: 24_000, channels: 1, packetDurationMs: 20 }],
 } as const satisfies NonNullable<SessionStartOptions["media"]>;
+
+/** A browser permission denial is the one start failure the user can act on. */
+function microphoneStartError(error: unknown): Error {
+  if (isMicrophonePermissionDenied(error)) {
+    return new Error(t("麦克风权限被拒绝：请在浏览器中允许麦克风访问后重试"), { cause: error });
+  }
+  return error instanceof Error ? error : new Error(String(error));
+}
 
 export function mayFallbackFromLiveKit(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
@@ -137,7 +145,10 @@ export class ConversationController {
       } catch (error) {
         this.client = undefined;
         this.livekit = undefined;
-        if (!mayFallbackFromLiveKit(error) || this.stopped) throw error;
+        // A microphone refusal belongs to the browser permission, not the transport.
+        // Non-fallbackable failures surface it clearly; fallbackable ones continue
+        // below into the WebSocket path.
+        if (!mayFallbackFromLiveKit(error) || this.stopped) throw microphoneStartError(error);
         fallbackReason = liveKitFallbackReason(error);
         store.toast("info", t("WebRTC 暂时不可用，已切换到兼容模式"));
       }
@@ -160,28 +171,33 @@ export class ConversationController {
       onConnectionChange: state => useStudio.getState().setConnection(state),
     });
     this.client = client;
-    const mic = await MicCapture.start(samples => {
-      client.sendAudio(samples);
-      this.tapLevel(samples);
-    }, {
-      autoRecover: true,
-      deviceId: inputDeviceId,
-      onCapabilityChange: capability => {
-        useStudio.getState().setCapability(capability);
-        this.recordRoute(capability);
-      },
-      onRecovered: capability => {
-        useStudio.getState().toast("info", t("麦克风已恢复：{device}", {
-          device: capability.deviceLabel ?? t("系统默认输入"),
-        }));
-      },
-      onRecoveryError: error => {
-        useStudio.getState().setMicLevel(0);
-        useStudio.getState().toast("error", t("麦克风恢复失败：{message}", {
-          message: error instanceof Error ? error.message : String(error),
-        }));
-      },
-    });
+    let mic: MicCapture;
+    try {
+      mic = await MicCapture.start(samples => {
+        client.sendAudio(samples);
+        this.tapLevel(samples);
+      }, {
+        autoRecover: true,
+        deviceId: inputDeviceId,
+        onCapabilityChange: capability => {
+          useStudio.getState().setCapability(capability);
+          this.recordRoute(capability);
+        },
+        onRecovered: capability => {
+          useStudio.getState().toast("info", t("麦克风已恢复：{device}", {
+            device: capability.deviceLabel ?? t("系统默认输入"),
+          }));
+        },
+        onRecoveryError: error => {
+          useStudio.getState().setMicLevel(0);
+          useStudio.getState().toast("error", t("麦克风恢复失败：{message}", {
+            message: error instanceof Error ? error.message : String(error),
+          }));
+        },
+      });
+    } catch (error) {
+      throw microphoneStartError(error);
+    }
     if (this.stopped) {
       await mic.stop().catch(() => {});
       throw new Error("conversation start cancelled");

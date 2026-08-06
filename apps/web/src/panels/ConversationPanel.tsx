@@ -17,9 +17,9 @@ import { VoicePicker } from "../components/VoicePicker";
 import { ConversationRoutePicker } from "../components/EngineRoutePicker";
 import { PageHeader, SectionCard, StatusBadge, primaryButton, secondaryButton } from "../components/StudioPage";
 import { conversationControls, downloadMediaTrace, startConversation, stopConversation } from "../conversation";
-import { listAudioInputDevices, type AudioInputDevice } from "../lib/audio";
 import { formatMediaTransportDetails, mediaTransportFallbackMessage } from "../lib/media-telemetry";
 import { useGatewayHealth } from "../lib/useGatewayHealth";
+import { useMicrophoneDevices } from "../lib/use-microphone";
 import { useStudio, type TurnView } from "../store";
 import { useT, type MessageKey } from "../i18n";
 
@@ -212,40 +212,35 @@ function AudioInputPicker() {
   const t = useT();
   const selected = useStudio(state => state.micInputDeviceId);
   const setSelected = useStudio(state => state.setMicInputDevice);
-  const [devices, setDevices] = useState<AudioInputDevice[]>([]);
-
-  useEffect(() => {
-    let active = true;
-    const refresh = () => {
-      void listAudioInputDevices().then(next => {
-        if (active) setDevices(next);
-      }).catch(() => {
-        if (active) setDevices([]);
-      });
-    };
-    refresh();
-    navigator.mediaDevices.addEventListener?.("devicechange", refresh);
-    return () => {
-      active = false;
-      navigator.mediaDevices.removeEventListener?.("devicechange", refresh);
-    };
-  }, []);
+  const { devices, needsPermission, authorizing, authorize } = useMicrophoneDevices();
 
   const selectedAvailable = !selected || devices.some(device => device.id === selected);
   return (
-    <label className="flex items-center gap-2 text-xs text-ink-300">
-      {t("麦克风")}
-      <select
-        aria-label={t("麦克风")}
-        value={selected}
-        onChange={event => setSelected(event.target.value)}
-        className="min-w-0 flex-1 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100"
-      >
-        <option value="">{t("浏览器默认输入")}</option>
-        {!selectedAvailable && <option value={selected}>{t("已选择的麦克风不可用")}</option>}
-        {devices.map(device => <option key={device.id} value={device.id}>{device.label}</option>)}
-      </select>
-    </label>
+    <div className="flex flex-col gap-1.5">
+      <label className="flex items-center gap-2 text-xs text-ink-300">
+        {t("麦克风")}
+        <select
+          aria-label={t("麦克风")}
+          value={selected}
+          onChange={event => setSelected(event.target.value)}
+          className="min-w-0 flex-1 rounded border border-ink-700 bg-ink-800 px-2 py-1.5 text-xs text-ink-100"
+        >
+          <option value="">{t("浏览器默认输入")}</option>
+          {!selectedAvailable && <option value={selected}>{t("已选择的麦克风不可用")}</option>}
+          {devices.filter(device => device.label !== "").map(device => <option key={device.id} value={device.id}>{device.label}</option>)}
+        </select>
+      </label>
+      {needsPermission ? (
+        <button
+          type="button"
+          onClick={() => void authorize()}
+          disabled={authorizing}
+          className="self-start rounded border border-ink-700 bg-ink-800 px-2 py-1 text-[10px] text-ink-300 transition hover:bg-ink-700 disabled:opacity-50"
+        >
+          {t("首次使用需要授权麦克风")}
+        </button>
+      ) : null}
+    </div>
   );
 }
 
