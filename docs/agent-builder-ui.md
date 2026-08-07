@@ -1,7 +1,7 @@
 # Agent Builder UI and experiential voice surfaces
 
 Status: Accepted living product requirement, 2026-08-01; implementation status
-reconciled 2026-08-05. This document expands the Web scope of
+reconciled 2026-08-07. This document expands the Web scope of
 [agents.md](./agents.md). It records reference behavior, delivered slices, and
 the remaining implementation order; it does not make either reference site's
 information architecture part of VoxStudio.
@@ -380,6 +380,15 @@ keys have one explicit data-lifecycle policy.
 Try it live is bound to the current Agent and must never fall through to an
 unscoped generic session.
 
+Here, Agent means the saved voice-Agent configuration object defined in
+[agents.md](./agents.md). Its preview runs the ordinary shared conversation loop.
+The separate autonomous executor in [voice-agent-roadmap.md](./voice-agent-roadmap.md)
+is an orthogonal, default-off session capability: the presence of `agent`,
+`agentSource`, or `agentVersion` must never cause the browser or gateway to infer
+`agentMode: true`. Future autonomous run-state UI requires an explicit activation
+contract and must preserve this saved-Agent preview behavior while the production
+executor is unavailable.
+
 It uses the existing authenticated realtime WebSocket and session creation path,
 not a privileged preview endpoint. `session.start` names the Agent and explicitly
 requests either the current draft revision or an immutable published version.
@@ -478,8 +487,9 @@ stage component does not require sharing the entire page theme.
    draft or exact published-version start, transcript, connection truth, mute,
    stop reply, restart, and end use existing session events in a desktop drawer
    or mobile full-screen surface. Pre-start microphone selection and native
-   typed turns now work over WebSocket and LiveKit. Response feedback,
-   additional settings, and the complete failure/retry matrix remain.
+   typed turns now work over WebSocket and LiveKit through the ordinary conversation
+   pipeline; this saved-Agent preview does not enable autonomous `agentMode`.
+   Response feedback, additional settings, and the complete failure/retry matrix remain.
 4. **Independent Full Preview / VoiceStage — not started**: a separate expanded
    surface with state-driven visual and reduced-motion/fallback paths. This is
    the first StreamCore-inspired implementation; it is not a theme transplant

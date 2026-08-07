@@ -17,7 +17,7 @@ flowchart LR
   end
   GW["realtime-gateway<br/>WS /v1/realtime (native + OpenAI dialect)<br/>REST facade · credential hiding · engine routing"]
   CORE["core orchestration (packages/)<br/>conversation loop · duplex session<br/>chunking · voice profiles"]
-  AGENT["autonomous agent executor<br/>lifecycle + sandbox policy contracts landed<br/>isolated runner + gateway integration planned"]
+  AGENT["autonomous agent executor<br/>lifecycle + gateway/session seam landed behind an opt-in<br/>production backend + isolated runner planned"]
   subgraph engines["engines"]
     ASR["ASR<br/>SenseVoice/FunASR — realtime slot<br/>parakeet.cpp · moss-transcribe (longform)"]
     TTS["TTS<br/>VoxCPM2 — quality: clone + design<br/>kokoro — fast lane · VoxCPM.cpp — fallback"]
@@ -46,7 +46,7 @@ The core never talks to a specific engine — only to the OpenAI-compatible cont
 | `engines/funasr/` | Realtime-slot ASR server (SenseVoice-Small / Paraformer, OpenAI-compatible) |
 | `engines/kokoro/` | Local CPU TTS server — the conversation fast lane (fixed voice bank, ~0.2s first audio) |
 | `packages/` | Shared TypeScript contracts, clients, configuration, text, audio, and orchestration |
-| `packages/agent-executor/` | Vox-owned autonomous-executor boundary, fake executor, tool runner, and invocation ledger; isolated production execution and gateway integration are still planned |
+| `packages/agent-executor/` | Vox-owned autonomous-executor boundary, fake executor, tool runner, and invocation ledger; the gateway/session seam has landed behind `agentMode: false`, while the production pi backend and isolated runner remain planned |
 | `packages/duplex-session/` | Platform-neutral realtime turn state, cancellation, and events |
 | `packages/conversation/` | The shared conversation loop (VAD turns, barge-in policy, speculative turn-taking, streaming replies, typed tools with a spoken confirmation flow) behind `vox listen` and the gateway |
 | `packages/mcp/` | The MCP client bridge: configured servers' tools join the conversation with annotation-derived effects |
@@ -187,10 +187,12 @@ There are two distinct Agent layers. The saved voice-Agent configuration runtime
 shipped: the registry stores drafts and immutable published versions, and realtime
 sessions resolve them into the existing conversation loop. The separate autonomous
 executor boundary, lifecycle state model, invocation ledger, and sandbox/tool-broker
-policy contracts and validator have also landed, but a real isolated runner, the
-production pi dependency, and autonomous-executor gateway/session integration have
-not. The dashed agent node in the architecture diagram represents that planned
-autonomous execution path, not the shipped saved-Agent runtime. See
+policy contracts and validator have also landed. Its session-scoped gateway integration
+is available only behind the default-off `agentMode` start option and currently uses a
+deterministic fake backend when no executor is injected. The production pi dependency,
+Web run-state controls, and real isolated runner have not landed. The dashed agent node
+in the architecture diagram represents that incomplete autonomous execution path, not
+the shipped saved-Agent runtime. A saved Agent id never implies autonomous mode. See
 [the voice-agent roadmap](./docs/voice-agent-roadmap.md),
 [agent lifecycle](./docs/agent-lifecycle.md), and
 [sandbox boundary](./docs/agent-execution-sandbox.md).

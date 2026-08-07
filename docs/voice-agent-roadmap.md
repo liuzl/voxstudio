@@ -1,7 +1,8 @@
 # Voice agent roadmap: unified conversation, execution, and multimodal input
 
 Status: living. Opened 2026-07-28; feasibility investigations completed
-2026-07-29; converted to an executable integration plan 2026-07-29.
+2026-07-29; converted to an executable integration plan 2026-07-29; implementation
+status reconciled 2026-08-07.
 Machine and deployment specifics live in the internal ops repo. This document
 owns product behavior, architecture, delivery order, and promotion gates.
 
@@ -288,8 +289,8 @@ The gateway speech-sink wiring has landed too
 seam, and `stop` clears the queue and interrupts playback — verified end to end
 with the fake executor narrating through the real conversation channel. The
 measured 150 ms audible-stop gate on real playback remains before Phase A is
-complete; session-level executor integration (controller creation behind an
-agent-mode flag, protocol events, Web UI state) is Phase B.
+complete. Session-level executor integration and protocol events have since
+landed in Phase B; Web UI state remains.
 
 ### Phase B — executor adapter with a fake backend
 
@@ -315,7 +316,9 @@ default. A session-scoped run starts on the first finalized user turn (audio or
 typed), later turns steer it, `agent.cancel` cancels deterministically, barge-in
 stops only narration, hang-up cancels with bounded cleanup, and run progress is
 surfaced as `agent.run.*` protocol events. Web UI state for run progress and the
-Web cancel/steer controls remain.
+Web cancel/steer controls remain. This autonomous mode is separate from the
+shipped saved voice-Agent runtime: naming a saved Agent resolves its conversation
+configuration but must not implicitly set `agentMode: true`.
 
 ### Phase C — minimal pi backend
 
@@ -421,7 +424,7 @@ Re-evaluate when:
 | Qwen3-ASR final revision tier | shipped |
 | Executor lifecycle contract | accepted; pure state model and race tests landed |
 | Sandbox/tool-broker security baseline | accepted; real isolated runner remains Phase D |
-| Gateway/player composition controller | landed (`agent-run-controller.ts` + `agent-speech-sink.ts`; fake-executor run narrates through the real conversation channel); session executor integration pending |
+| Gateway/player composition controller | landed (`agent-run-controller.ts` + `agent-speech-sink.ts`; fake-executor run narrates through the real conversation channel); real-playback 150 ms promotion measurement pending |
 | Vox executor adapter | types, fake executor, fake ToolRunner, and invocation ledger landed |
 | Gateway/session executor integration | landed (session wiring behind `agentMode: false`; `agent.run.*` events, steer, `agent.cancel`, barge-in, hang-up); Web UI run state pending |
 | pi production dependency | not added |
@@ -429,5 +432,9 @@ Re-evaluate when:
 | Dual-channel conversation input | not started |
 | Voiceprint sidecar | separate future project |
 
-The next implementation change is the Phase B Web UI: render `agent.run.*` events
-as run progress and add the Web cancel/steer controls. pi is not installed.
+The next autonomous-executor implementation change is the Phase B Web support:
+consume `agent.run.*` as run progress and add Web cancel/steer commands under
+deterministic tests. This support remains dormant unless a caller explicitly selects
+autonomous mode; the existing Agent Builder Try it live flow must not infer
+`agentMode: true` from a saved Agent id. pi is not installed, so no ordinary product
+surface should advertise autonomous execution as available yet.
