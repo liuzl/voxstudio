@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   AudioLines,
   Bot,
@@ -11,16 +11,26 @@ import {
   X,
 } from "lucide-react";
 import { VerifyBanner } from "./AuthGate";
-import { AgentsPanel, type AgentSection } from "./panels/AgentsPanel";
-import { ConversationPanel } from "./panels/ConversationPanel";
-import { GeneratePanel } from "./panels/GeneratePanel";
-import { LibraryPanel } from "./panels/LibraryPanel";
-import { SettingsPanel } from "./panels/SettingsPanel";
-import { VoicesPanel } from "./panels/VoicesPanel";
+import type { AgentSection } from "./panels/AgentsPanel";
 import { useGatewayHealth } from "./lib/useGatewayHealth";
 import { useAccount } from "./account";
 import { useStudio, type ToastView } from "./store";
 import { useT, type MessageKey } from "./i18n";
+
+// Panels are independent URL workspaces. Loading them on demand keeps the sign-in and
+// navigation shell small, while Vite shares their common controls in a reusable chunk.
+const AgentsPanel = lazy(() => import("./panels/AgentsPanel")
+  .then(module => ({ default: module.AgentsPanel })));
+const ConversationPanel = lazy(() => import("./panels/ConversationPanel")
+  .then(module => ({ default: module.ConversationPanel })));
+const GeneratePanel = lazy(() => import("./panels/GeneratePanel")
+  .then(module => ({ default: module.GeneratePanel })));
+const VoicesPanel = lazy(() => import("./panels/VoicesPanel")
+  .then(module => ({ default: module.VoicesPanel })));
+const LibraryPanel = lazy(() => import("./panels/LibraryPanel")
+  .then(module => ({ default: module.LibraryPanel })));
+const SettingsPanel = lazy(() => import("./panels/SettingsPanel")
+  .then(module => ({ default: module.SettingsPanel })));
 
 /* The sidebar (grouped, hand-laid-out) is the source of labels and icons; routes only need ids. */
 const tabIds = ["agents", "conversation", "generate", "voices", "library", "settings"] as const;
@@ -91,6 +101,15 @@ function Toasts() {
       {toasts.map(toast => (
         <Toast key={toast.id} toast={toast} onDismiss={() => dismissToast(toast.id)} />
       ))}
+    </div>
+  );
+}
+
+function PanelFallback() {
+  return (
+    <div className="mx-auto w-full max-w-[1120px] animate-pulse px-5 py-8 sm:px-8" aria-busy="true">
+      <div className="h-7 w-40 rounded-lg bg-fill-active" />
+      <div className="mt-7 h-48 rounded-2xl border border-edge-faint bg-surface/50" />
     </div>
   );
 }
@@ -229,14 +248,14 @@ export function App() {
   }, [agentDirty, hasTakes]);
 
   const panel = (
-    <>
+    <Suspense fallback={<PanelFallback />}>
       {tab === "agents" && <AgentsPanel agentId={agentId} agentSection={agentSection} onOpenAgent={openAgent} onOpenAgentSection={openAgentSection} onCloseAgent={closeAgent} onDirtyChange={setAgentDirty} />}
       {tab === "conversation" && <ConversationPanel />}
       {tab === "generate" && <GeneratePanel />}
       {tab === "voices" && <VoicesPanel />}
       {tab === "library" && <LibraryPanel />}
       {tab === "settings" && <SettingsPanel />}
-    </>
+    </Suspense>
   );
 
   const sidebarItem = (
