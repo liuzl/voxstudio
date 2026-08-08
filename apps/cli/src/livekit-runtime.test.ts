@@ -42,7 +42,7 @@ describe("embedded LiveKit runtime", () => {
       publicServerUrl: "wss://rtc.example.test",
       env: { PATH: process.env.PATH, LIVEKIT_KEYS: "must-not-leak", OPENAI_API_KEY: "provider-secret" },
       spawn,
-      fetch: async () => new Response("not found", { status: 404 }),
+      fetch: async () => new Response("ok", { status: 200 }),
     });
 
     expect(command).toEqual([process.execPath, "--bind", "127.0.0.1"]);
@@ -68,6 +68,31 @@ describe("embedded LiveKit runtime", () => {
     await runtime.stop();
     await runtime.stop();
     expect(kills).toBe(1);
+  });
+
+  test("retries a non-2xx signal response before reporting ready", async () => {
+    let resolveExit!: (code: number) => void;
+    const exited = new Promise<number>(resolve => { resolveExit = resolve; });
+    let fetches = 0;
+    const runtime = await startEmbeddedLiveKitRuntime({
+      executable: process.execPath,
+      spawn: () => ({
+        pid: 43,
+        exited,
+        stdout: emptyStream(),
+        stderr: emptyStream(),
+        kill: () => resolveExit(0),
+      }),
+      fetch: async () => {
+        fetches += 1;
+        return fetches === 1
+          ? new Response("starting", { status: 500 })
+          : new Response(null, { status: 204 });
+      },
+    });
+
+    expect(fetches).toBe(2);
+    await runtime.stop();
   });
 
   test("fails closed on malformed enable and port environment values", () => {

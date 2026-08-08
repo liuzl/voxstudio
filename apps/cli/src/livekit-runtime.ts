@@ -224,7 +224,9 @@ async function waitUntilReady(
     const outcome = await Promise.race([
       child.exited.then(code => ({ type: "exit" as const, code })),
       fetcher(url, { signal: AbortSignal.timeout(750) })
-        .then(() => ({ type: "ready" as const }))
+        .then(response => response.ok
+          ? ({ type: "ready" as const })
+          : ({ type: "retry" as const }))
         .catch(() => ({ type: "retry" as const })),
     ]);
     if (outcome.type === "ready") return;
