@@ -15,6 +15,8 @@ concurrency:
 jobs:
   build:
     name: Build (${{ matrix.platform }})
+    env:
+      LIVEKIT_VERSION: 1.13.5
     strategy:
       fail-fast: false
       matrix:
@@ -57,6 +59,48 @@ jobs:
           }
       - name: Install locked dependencies
         run: bun ci
+      - name: Prepare embedded LiveKit Server (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install livekit
+            helper="$(brew --prefix livekit)/bin/livekit-server"
+            "$helper" --version | grep -q "$LIVEKIT_VERSION"
+          else
+            asset="livekit_${LIVEKIT_VERSION}_linux_amd64.tar.gz"
+            release="https://github.com/livekit/livekit/releases/download/v${LIVEKIT_VERSION}"
+            mkdir -p "$RUNNER_TEMP/livekit"
+            curl -fsSL "$release/$asset" -o "$RUNNER_TEMP/$asset"
+            expected="$(curl -fsSL "$release/checksums.txt" | awk -v asset="$asset" '$2 == asset { print $1 }')"
+            test -n "$expected"
+            echo "$expected  $RUNNER_TEMP/$asset" | sha256sum -c -
+            tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP/livekit"
+            helper="$(find "$RUNNER_TEMP/livekit" -type f -name livekit-server -print -quit)"
+            test -n "$helper"
+            chmod +x "$helper"
+          fi
+          echo "VOXSTUDIO_EMBED_LIVEKIT_SERVER=$helper" >> "$GITHUB_ENV"
+      - name: Prepare embedded LiveKit Server (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $asset = "livekit_$env:LIVEKIT_VERSION`_windows_amd64.zip"
+          $release = "https://github.com/livekit/livekit/releases/download/v$env:LIVEKIT_VERSION"
+          $archive = Join-Path $env:RUNNER_TEMP $asset
+          $destination = Join-Path $env:RUNNER_TEMP "livekit"
+          Invoke-WebRequest "$release/$asset" -OutFile $archive
+          $checksums = (Invoke-WebRequest "$release/checksums.txt").Content -split "`n"
+          $entry = $checksums | Where-Object { $_ -match [regex]::Escape($asset) } | Select-Object -First 1
+          if (-not $entry) { throw "No checksum found for $asset" }
+          $expected = ($entry.Trim() -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "LiveKit checksum mismatch: $actual != $expected" }
+          Expand-Archive $archive -DestinationPath $destination
+          $helper = Get-ChildItem $destination -Recurse -Filter livekit-server.exe | Select-Object -First 1
+          if (-not $helper) { throw "livekit-server.exe missing from $asset" }
+          "VOXSTUDIO_EMBED_LIVEKIT_SERVER=$($helper.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Typecheck
         run: bun run typecheck
       - name: Test TypeScript

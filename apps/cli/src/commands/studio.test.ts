@@ -5,6 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { GatewayServer, GatewayServerOptions } from "@voxstudio/realtime-gateway";
+import type { EmbeddedLiveKitRuntime, EmbeddedLiveKitRuntimeOptions } from "../livekit-runtime";
 import type { CliIo } from "../io";
 import { runStudio } from "./studio";
 
@@ -106,6 +107,63 @@ describe("vox studio", () => {
 
       process.env.VOX_LIVEKIT_TOKEN_TTL_SECONDS = "601";
       await expect(runStudio([], config, io, capture, false)).rejects.toThrow("between 30 and 600");
+    } finally {
+      for (const name of names) {
+        const value = before[name];
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
+
+  test("starts and stops the embedded LiveKit helper without exposing generated credentials", async () => {
+    const names = [
+      "VOX_LIVEKIT_EMBEDDED",
+      "VOX_LIVEKIT_URL",
+      "VOX_LIVEKIT_API_KEY",
+      "VOX_LIVEKIT_API_SECRET",
+      "VOX_LIVEKIT_PUBLIC_URL",
+      "VOX_LIVEKIT_EMBEDDED_PORT",
+    ] as const;
+    const before = Object.fromEntries(names.map(name => [name, process.env[name]]));
+    for (const name of names) delete process.env[name];
+    process.env.VOX_LIVEKIT_PUBLIC_URL = "wss://rtc.voxstudio.example";
+    process.env.VOX_LIVEKIT_EMBEDDED_PORT = "17880";
+    let stopped = 0;
+    let runtimeOptions: EmbeddedLiveKitRuntimeOptions | undefined;
+    const runtime: EmbeddedLiveKitRuntime = {
+      bootstrap: {
+        serverUrl: "ws://127.0.0.1:17880",
+        publicServerUrl: "wss://rtc.voxstudio.example",
+        apiKey: "generated-key",
+        apiSecret: "generated-secret-that-never-gets-logged-123456789",
+      },
+      executable: "/embedded/livekit-server",
+      exited: new Promise<number>(() => {}),
+      stop: async () => { stopped += 1; },
+    };
+    const io = collectingIo();
+    let seen: GatewayServerOptions | undefined;
+    try {
+      expect(await runStudio(
+        ["--livekit", "embedded"],
+        config,
+        io,
+        options => { seen = options; return fakeGateway(); },
+        false,
+        undefined,
+        async options => { runtimeOptions = options; return runtime; },
+      )).toBe(0);
+      expect(runtimeOptions).toMatchObject({ signalPort: 17_880, publicServerUrl: "wss://rtc.voxstudio.example" });
+      expect(seen?.livekit).toEqual(runtime.bootstrap);
+      expect(seen?.livekitAdapter).toBeDefined();
+      expect(stopped).toBe(1);
+      expect(`${io.outs.join("\n")}\n${io.errs.join("\n")}`).not.toContain(runtime.bootstrap.apiSecret);
+
+      process.env.VOX_LIVEKIT_URL = "wss://external.example";
+      await expect(runStudio(
+        ["--livekit", "embedded"], config, io, () => fakeGateway(), false, undefined, async () => runtime,
+      )).rejects.toThrow("cannot be combined");
     } finally {
       for (const name of names) {
         const value = before[name];

@@ -248,7 +248,10 @@ routes requests through the engine registry (named instances, role defaults, cap
 tags, per-request pinning). The whole studio also ships inside the compiled `vox` binary:
 `vox studio` embeds the built web app and serves it around the guarded API from one file,
 barge-in detection included (the Silero WASM backend rides along — no native ONNX runtime
-needed). Remote TTS engines can stream Ogg/Opus (`stream_format: opus`,
+needed). Tagged releases also embed a platform-matching LiveKit Server helper: local
+Studio stays WebSocket-only by default, while `vox studio --livekit embedded` materializes
+and supervises the full WebRTC runtime with generated process-private credentials. See
+[Embedded LiveKit Runtime](docs/embedded-livekit-runtime.md). Remote TTS engines can stream Ogg/Opus (`stream_format: opus`,
 ~12KB/s vs raw PCM's 187.5KB/s) for slow WAN links, decoded gateway-side via ffmpeg. The browser studio (`apps/web`) ships six primary surfaces on top of it:
 a registry-backed Agents list and Configuration/Speech/Deployment/Conversations Builder (owner-scoped CRUD,
 immutable publish snapshots with restore-as-draft, revision-safe saving,

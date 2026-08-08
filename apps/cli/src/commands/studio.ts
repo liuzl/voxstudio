@@ -14,8 +14,15 @@ import {
 } from "@voxstudio/realtime-gateway";
 import { webAssets } from "../generated/web-assets";
 import type { CliIo } from "../io";
+import {
+  embeddedLiveKitEnabled,
+  embeddedLiveKitOptionsFromEnv,
+  startEmbeddedLiveKitRuntime,
+  type EmbeddedLiveKitRuntime,
+  type EmbeddedLiveKitRuntimeOptions,
+} from "../livekit-runtime";
 
-export const studioUsage = `usage: vox studio [--host HOST] [--port PORT] [--token TOKEN]
+export const studioUsage = `usage: vox studio [--host HOST] [--port PORT] [--token TOKEN] [--livekit embedded]
                  [--agents DIR] [--library DIR] [--library-max-bytes SIZE] [--accounts DIR]
                  [--traces DIR] [--trace-content] [--trace-retention-days N]
                  [--trace-max-conversations N] [--trace-audio input|output|both]
@@ -78,7 +85,16 @@ options:
                  (credentials come from the environment, never argv). VOX_AUTH_PASSWORD=off
                  closes the email-and-password door — a public launch should open one door,
                  not two (docs/auth.md)
-  LiveKit Phase 3A bootstrap (environment only; secrets never enter argv):
+  --livekit embedded
+                 start and supervise the bundled/installed LiveKit Server helper
+                 (VOX_LIVEKIT_EMBEDDED=1). Local WebSocket mode remains the default.
+                 VOX_LIVEKIT_SERVER_BIN overrides helper discovery; optional embedded
+                 ports are VOX_LIVEKIT_EMBEDDED_PORT (7880),
+                 VOX_LIVEKIT_EMBEDDED_RTC_UDP_PORT (7882), and
+                 VOX_LIVEKIT_EMBEDDED_RTC_TCP_PORT. VOX_LIVEKIT_EMBEDDED_NODE_IP sets
+                 the ICE-advertised address. The generated API secret is passed only
+                 through the child environment and never appears in process arguments.
+  External LiveKit bootstrap (environment only; secrets never enter argv):
                  VOX_LIVEKIT_URL=wss://..., VOX_LIVEKIT_API_KEY, and
                  VOX_LIVEKIT_API_SECRET must be set together. They configure the signer
                  and the isolated rtc-node Agent media adapter. Tokens last 300 seconds;
@@ -164,6 +180,7 @@ export async function runStudio(
   waitForever = true,
   /** The --config the process was started with; persist_pronunciations resolves through it. */
   explicitConfigPath?: string,
+  startEmbedded: (options: EmbeddedLiveKitRuntimeOptions) => Promise<EmbeddedLiveKitRuntime> = startEmbeddedLiveKitRuntime,
 ): Promise<number> {
   let host: string | undefined;
   let port: number | undefined;
@@ -192,7 +209,7 @@ export async function runStudio(
   let maxSynthesisSeconds = positiveEnv("VOX_GATEWAY_MAX_SYNTHESIS_SECONDS");
   let maxConcurrentSynthesis = positiveEnv("VOX_GATEWAY_MAX_CONCURRENT_SYNTHESIS", true);
   let maxQueuedSynthesis = positiveEnv("VOX_GATEWAY_MAX_QUEUED_SYNTHESIS", true);
-  const livekit = liveKitBootstrapFromEnv(process.env, "studio");
+  let useEmbeddedLiveKit = embeddedLiveKitEnabled(process.env);
   const quotaEnv = process.env.VOX_GATEWAY_LIBRARY_MAX_BYTES;
   // A quota typo must fail closed too, exactly like the guardrail envs above.
   let libraryMaxBytes = quotaEnv === undefined || quotaEnv === ""
@@ -213,6 +230,11 @@ export async function runStudio(
       }
       port = parsed;
     } else if (arg === "--token") token = value();
+    else if (arg === "--livekit") {
+      const mode = value();
+      if (mode !== "embedded") throw new TypeError("studio: --livekit currently supports only embedded");
+      useEmbeddedLiveKit = true;
+    }
     else if (arg === "--agents") agentsDir = value();
     else if (arg === "--max-sessions") maxSessions = positiveNumber(value(), arg, true);
     else if (arg === "--max-session-seconds") maxSessionSeconds = positiveNumber(value(), arg);
@@ -279,70 +301,121 @@ export async function runStudio(
   if (Object.keys(webAssets).length === 0) {
     io.err("studio: no web assets were embedded at build time (apps/web/dist missing); serving the API only");
   }
-  // Without ffmpeg the decoder is absent and engines negotiate raw PCM instead.
+  // Resolve every fallible non-media input before spawning the helper. A config typo
+  // must not leave an orphan LiveKit process behind.
   const decoder = ffmpegPcmDecoder();
   const configPath = await resolveConfigPath(explicitConfigPath === undefined ? {} : { explicit: explicitConfigPath });
+  const externalLiveKitFields = [
+    process.env.VOX_LIVEKIT_URL,
+    process.env.VOX_LIVEKIT_API_KEY,
+    process.env.VOX_LIVEKIT_API_SECRET,
+  ].some(value => value !== undefined && value !== "");
+  if (useEmbeddedLiveKit && externalLiveKitFields) {
+    throw new TypeError(
+      "studio: embedded LiveKit cannot be combined with VOX_LIVEKIT_URL/API_KEY/API_SECRET; "
+      + "VOX_LIVEKIT_PUBLIC_URL remains available as the browser-facing override",
+    );
+  }
+  let livekitRuntime: EmbeddedLiveKitRuntime | undefined;
+  const externalLivekit = useEmbeddedLiveKit ? undefined : liveKitBootstrapFromEnv(process.env, "studio");
+  if (useEmbeddedLiveKit) {
+    livekitRuntime = await startEmbedded({
+      ...embeddedLiveKitOptionsFromEnv(process.env),
+      log: line => io.err(line),
+    });
+    io.out("Embedded LiveKit Server ready");
+  }
+  const livekit = livekitRuntime?.bootstrap ?? externalLivekit;
+  // Without ffmpeg the decoder is absent and engines negotiate raw PCM instead.
   const livekitAdapter = livekit === undefined
     ? undefined
     : new DefaultLiveKitAgentMediaAdapter(livekit, undefined, line => io.err(line));
-  const gateway = start({
-    config,
-    staticAssets: webAssets,
-    ...(decoder === undefined ? {} : { pcmDecoder: decoder }),
-    ...(host === undefined ? {} : { hostname: host }),
-    ...(port === undefined ? {} : { port }),
-    ...(token === undefined || token === "" ? {} : { token }),
-    ...(livekit === undefined ? {} : { livekit, livekitAdapter: livekitAdapter as DefaultLiveKitAgentMediaAdapter }),
-    ...(maxSessions === undefined ? {} : { maxSessions }),
-    ...(maxSessionSeconds === undefined ? {} : { maxSessionSeconds }),
-    ...(demoMode ? { demoMode } : {}),
-    ...(demoAgent === undefined ? {} : { demoAgent }),
-    ...(agentsDir === "" ? {} : { agentsDir }),
-    ...(libraryDir === undefined || libraryDir === "" ? {} : { libraryDir }),
-    ...(libraryMaxBytes === undefined ? {} : { libraryMaxBytes }),
-    ...(hasTraces ? { traceDir: traceDir as string } : {}),
-    ...(traceContent ? { traceContent: true } : {}),
-    ...(traceRetentionDays === undefined ? {} : { traceRetentionDays }),
-    ...(traceMaxConversations === undefined ? {} : { traceMaxConversations }),
-    ...(traceAudio === undefined ? {} : { traceAudio }),
-    ...(traceMaxBytes === undefined ? {} : { traceMaxBytes }),
-    ...(hasAccounts ? {
-      accounts: {
-        dir: accountsDir as string,
-        secret: authSecret,
-        ...(authBaseUrl === undefined || authBaseUrl === "" ? {} : { baseUrl: authBaseUrl }),
-        ...(socialProvidersFromEnv() === undefined ? {} : { socialProviders: socialProvidersFromEnv() as Record<string, { clientId: string; clientSecret: string }> }),
-        passwordLogin: passwordLoginFromEnv(),
-      },
-    } : {}),
-    ...(quotaOperations === undefined
-      ? {}
-      : { quota: { operations: quotaOperations, windowSeconds: quotaWindow ?? 3_600 } }),
-    ...(maxSynthesisSeconds === undefined ? {} : { maxSynthesisSeconds }),
-    ...(maxConcurrentSynthesis === undefined
-      ? {}
-      : { synthesisConcurrency: { maxInFlight: maxConcurrentSynthesis, maxQueued: maxQueuedSynthesis ?? maxConcurrentSynthesis } }),
-    loadSileroVad: () => loadSileroVadModel((line, level) => {
-      if (level === "info") io.out(line);
-      else io.err(line);
-    }),
-    ...(configPath === undefined ? {} : {
-      persistPronunciations: (entries: Record<string, string>) => persistPronunciationsFile(configPath, entries),
-    }),
-    log: line => io.err(line),
-  });
+  let gateway: GatewayServer;
+  try {
+    gateway = start({
+      config,
+      staticAssets: webAssets,
+      ...(decoder === undefined ? {} : { pcmDecoder: decoder }),
+      ...(host === undefined ? {} : { hostname: host }),
+      ...(port === undefined ? {} : { port }),
+      ...(token === undefined || token === "" ? {} : { token }),
+      ...(livekit === undefined ? {} : { livekit, livekitAdapter: livekitAdapter as DefaultLiveKitAgentMediaAdapter }),
+      ...(maxSessions === undefined ? {} : { maxSessions }),
+      ...(maxSessionSeconds === undefined ? {} : { maxSessionSeconds }),
+      ...(demoMode ? { demoMode } : {}),
+      ...(demoAgent === undefined ? {} : { demoAgent }),
+      ...(agentsDir === "" ? {} : { agentsDir }),
+      ...(libraryDir === undefined || libraryDir === "" ? {} : { libraryDir }),
+      ...(libraryMaxBytes === undefined ? {} : { libraryMaxBytes }),
+      ...(hasTraces ? { traceDir: traceDir as string } : {}),
+      ...(traceContent ? { traceContent: true } : {}),
+      ...(traceRetentionDays === undefined ? {} : { traceRetentionDays }),
+      ...(traceMaxConversations === undefined ? {} : { traceMaxConversations }),
+      ...(traceAudio === undefined ? {} : { traceAudio }),
+      ...(traceMaxBytes === undefined ? {} : { traceMaxBytes }),
+      ...(hasAccounts ? {
+        accounts: {
+          dir: accountsDir as string,
+          secret: authSecret,
+          ...(authBaseUrl === undefined || authBaseUrl === "" ? {} : { baseUrl: authBaseUrl }),
+          ...(socialProvidersFromEnv() === undefined ? {} : { socialProviders: socialProvidersFromEnv() as Record<string, { clientId: string; clientSecret: string }> }),
+          passwordLogin: passwordLoginFromEnv(),
+        },
+      } : {}),
+      ...(quotaOperations === undefined
+        ? {}
+        : { quota: { operations: quotaOperations, windowSeconds: quotaWindow ?? 3_600 } }),
+      ...(maxSynthesisSeconds === undefined ? {} : { maxSynthesisSeconds }),
+      ...(maxConcurrentSynthesis === undefined
+        ? {}
+        : { synthesisConcurrency: { maxInFlight: maxConcurrentSynthesis, maxQueued: maxQueuedSynthesis ?? maxConcurrentSynthesis } }),
+      loadSileroVad: () => loadSileroVadModel((line, level) => {
+        if (level === "info") io.out(line);
+        else io.err(line);
+      }),
+      ...(configPath === undefined ? {} : {
+        persistPronunciations: (entries: Record<string, string>) => persistPronunciationsFile(configPath, entries),
+      }),
+      log: line => io.err(line),
+    });
+  } catch (error) {
+    await livekitRuntime?.stop();
+    throw error;
+  }
   io.out(`Web Studio at ${gateway.url}`);
   if (token !== undefined && token !== "") {
     io.out("Shared-token Studio: append #token=<VOX_GATEWAY_TOKEN> once; the browser redacts it from the URL");
   }
   if (!waitForever) {
     await gateway.stop();
+    await livekitRuntime?.stop();
     return 0;
   }
-  const stop = () => {
-    void gateway.stop().then(() => process.exit(0));
+  let closing = false;
+  const stop = (exitCode = 0) => {
+    if (closing) return;
+    closing = true;
+    void (async () => {
+      try {
+        await gateway.stop();
+      } catch (error) {
+        io.err(`studio: gateway shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        await livekitRuntime?.stop().catch(error => {
+          io.err(`studio: embedded LiveKit shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+        process.exit(exitCode);
+      }
+    })();
   };
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
+  if (livekitRuntime !== undefined) {
+    void livekitRuntime.exited.then(code => {
+      if (closing) return;
+      io.err(`embedded LiveKit Server exited unexpectedly with status ${code}; stopping Studio`);
+      stop(1);
+    });
+  }
+  process.once("SIGINT", () => stop());
+  process.once("SIGTERM", () => stop());
   return await new Promise<number>(() => {});
 }
