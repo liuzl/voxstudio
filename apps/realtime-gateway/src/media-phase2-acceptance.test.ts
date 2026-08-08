@@ -223,6 +223,30 @@ describe("Phase 2 media acceptance gate", () => {
     expect(report.matrix.find(candidate => candidate.id === "matrix.unique_traces")?.passed).toBe(false);
   });
 
+  test("does not classify stale revision suppression as transport loss", () => {
+    const traces = new Map(definitions.map((run, index) => [
+      run.id,
+      traceDocument(run, index, run.healthyNetwork ? 600_000 : 60_000),
+    ]));
+    const healthy = traces.get("healthy-macos-chrome")?.value as Record<string, unknown>;
+    const diagnostics = healthy.diagnostics as Record<string, unknown>;
+    diagnostics.droppedFrames = 1;
+    healthy.events = [{ event: { type: "media.socket", dropped: true, discardReason: "stale_rendition" } }];
+    const evidenceByRun = new Map(definitions.map((run, index) => [run.id, evidence(run, index)]));
+
+    let report = evaluatePhase2Acceptance(manifest, traces, evidenceByRun);
+    let checks = report.runs[0]?.checks ?? [];
+    expect(checks.find(candidate => candidate.id === "media.unexpected_dropped_frames")?.passed).toBe(true);
+
+    (healthy.events as Record<string, unknown>[]).push({
+      event: { type: "media.socket", dropped: true, discardReason: "network_congested" },
+    });
+    diagnostics.droppedFrames = 2;
+    report = evaluatePhase2Acceptance(manifest, traces, evidenceByRun);
+    checks = report.runs[0]?.checks ?? [];
+    expect(checks.find(candidate => candidate.id === "media.unexpected_dropped_frames")?.passed).toBe(false);
+  });
+
   test("rejects reused network evidence and manifest profiles that disagree with telemetry", () => {
     const traces = new Map(definitions.map((run, index) => [run.id, traceDocument(run, index, run.healthyNetwork ? 600_000 : 60_000)]));
     const iphone = traces.get("iphone-constrained")?.value as Record<string, unknown>;

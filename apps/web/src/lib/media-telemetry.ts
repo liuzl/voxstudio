@@ -46,6 +46,8 @@ export interface MediaDiagnostics {
   highWaterBytes: number;
   maxQueuedAudioMs: number;
   droppedFrames: number;
+  staleDroppedFrames: number;
+  unexpectedDroppedFrames: number;
   backpressureEvents: number;
   bufferDepthP95Ms: number | undefined;
   interruptionStops: number;
@@ -290,11 +292,14 @@ export class MediaTraceRecorder {
         audioMs: this.diagnostics.audioMs + event.audioMs,
       };
     } else if (event.type === "media.socket") {
+      const staleDrop = event.dropped && event.discardReason === "stale_rendition";
       this.diagnostics = {
         ...this.diagnostics,
         highWaterBytes: Math.max(this.diagnostics.highWaterBytes, event.highWaterBytes),
         maxQueuedAudioMs: Math.max(this.diagnostics.maxQueuedAudioMs, event.queuedAudioMs),
         droppedFrames: this.diagnostics.droppedFrames + (event.dropped ? 1 : 0),
+        staleDroppedFrames: this.diagnostics.staleDroppedFrames + (staleDrop ? 1 : 0),
+        unexpectedDroppedFrames: this.diagnostics.unexpectedDroppedFrames + (event.dropped && !staleDrop ? 1 : 0),
       };
     } else if (event.type === "media.socket.drain") {
       this.diagnostics = {
@@ -648,6 +653,8 @@ export function emptyMediaDiagnostics(): MediaDiagnostics {
     highWaterBytes: 0,
     maxQueuedAudioMs: 0,
     droppedFrames: 0,
+    staleDroppedFrames: 0,
+    unexpectedDroppedFrames: 0,
     backpressureEvents: 0,
     bufferDepthP95Ms: undefined,
     interruptionStops: 0,

@@ -144,6 +144,8 @@ interface TraceDiagnostics {
   maxQueuedAudioMs?: unknown;
   highWaterBytes?: unknown;
   droppedFrames?: unknown;
+  staleDroppedFrames?: unknown;
+  unexpectedDroppedFrames?: unknown;
   playbackObservations?: unknown;
   concealedSamples?: unknown;
   concealmentEvents?: unknown;
@@ -162,6 +164,29 @@ interface TraceExport {
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const sha256 = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{64}$/i.test(value);
+
+function droppedFrameCounts(trace: TraceExport, diagnostics: TraceDiagnostics): {
+  total: number | undefined;
+  stale: number | undefined;
+  unexpected: number | undefined;
+} {
+  const total = finite(diagnostics.droppedFrames) ? diagnostics.droppedFrames : undefined;
+  if (finite(diagnostics.staleDroppedFrames) && finite(diagnostics.unexpectedDroppedFrames)) {
+    return { total, stale: diagnostics.staleDroppedFrames, unexpected: diagnostics.unexpectedDroppedFrames };
+  }
+  const raw = Array.isArray(trace.events) ? trace.events.flatMap(entry => {
+    if (!record(entry) || !record(entry.event)) return [];
+    const event = entry.event;
+    return event.type === "media.socket" && event.dropped === true ? [event] : [];
+  }) : [];
+  // Old v2 traces can be classified only while their bounded raw event window still
+  // contains every drop. Otherwise fail closed by treating the legacy total as loss.
+  if (total !== undefined && raw.length === total) {
+    const stale = raw.filter(event => event.discardReason === "stale_rendition").length;
+    return { total, stale, unexpected: total - stale };
+  }
+  return { total, stale: total === undefined ? undefined : 0, unexpected: total };
+}
 
 function member<T extends readonly unknown[]>(name: string, value: unknown, values: T): T[number] {
   if (!values.includes(value as T[number])) throw new TypeError(`${name} must be one of ${values.join(", ")}`);
@@ -377,6 +402,7 @@ function evaluateRun(
 ): Phase3RunReport {
   const trace = record(document?.value) ? document.value as TraceExport : {};
   const diagnostics = record(trace.diagnostics) ? trace.diagnostics : {};
+  const dropped = droppedFrameCounts(trace, diagnostics);
   const durationMs = finite(trace.startedAtMs) && finite(trace.exportedAtMs)
     ? Math.max(0, trace.exportedAtMs - trace.startedAtMs)
     : undefined;
@@ -444,7 +470,10 @@ function evaluateRun(
     atMost("webrtc.jitter_buffer_p95", diagnostics.downlinkJitterBufferP95Ms, 600),
     atMost("media.max_queued_audio", diagnostics.maxQueuedAudioMs, 1_000),
     atMost("media.high_water_bytes", diagnostics.highWaterBytes, 192_000),
-    atMost("media.dropped_frames", diagnostics.droppedFrames, 0),
+    check("media.dropped_frame_accounting", finite(dropped.total) && finite(dropped.stale) && finite(dropped.unexpected)
+      && dropped.total === dropped.stale + dropped.unexpected,
+    "total = stale + unexpected", dropped),
+    atMost("media.unexpected_dropped_frames", dropped.unexpected, 0),
     check("evidence.present", evidence !== undefined, "loaded", evidence?.source ?? null),
     check("evidence.run_id", evidence?.runId === run.id, run.id, evidence?.runId ?? null),
     check("evidence.environment", evidence?.device === run.device && evidence?.route === run.route,
@@ -526,6 +555,8 @@ function evaluateRun(
       maxQueuedAudioMs: diagnostics.maxQueuedAudioMs ?? null,
       highWaterBytes: diagnostics.highWaterBytes ?? null,
       droppedFrames: diagnostics.droppedFrames ?? null,
+      staleDroppedFrames: dropped.stale ?? null,
+      unexpectedDroppedFrames: dropped.unexpected ?? null,
       playbackObservations: diagnostics.playbackObservations ?? null,
       concealedSamples: diagnostics.concealedSamples ?? null,
       concealmentEvents: diagnostics.concealmentEvents ?? null,

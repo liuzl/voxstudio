@@ -17,7 +17,10 @@ room lifecycle to the existing `GatewaySession`. When `/healthz` advertises
 one processed microphone track, subscribe to the Agent-side track, and use reliable data
 messages for protocol-v1 events and controls. Deployments without the complete
 signer/adapter capability keep the existing WebSocket path. A real LiveKit
-deployment/device gate is still required before Phase 3A is considered delivered. The
+deployment/device gate is still required before Phase 3A is considered delivered. A
+2026-08-05/06 self-hosted iPhone smoke run confirms that the integrated path works on
+both Wi-Fi and operator-reported 5G, but it did not retain the browser traces and
+operator observations required by that gate. The
 strict Phase 3 report generator is implemented so those device, network, lifecycle,
 and billing runs can be retained as auditable evidence rather than informal notes.
 
@@ -131,6 +134,42 @@ TCP retransmission delays every later byte on the connection. The browser WebSoc
 API also delivers the application message as a completed `Blob` or `ArrayBuffer`, not
 as independently playable fragments. A near-one-second PCM message can therefore
 consume the entire current lead before it becomes schedulable.
+
+### 2026-08-05/06 self-hosted LiveKit iPhone smoke
+
+Private operational logs retain a useful, privacy-sanitized smoke result even though
+the browser trace files were not exported:
+
+- ten iPhone joins completed: nine Mobile Safari and one Chrome on iOS;
+- every joined session selected UDP, published the expected microphone audio/RED
+  track, and reported echo cancellation;
+- two runs exposed cellular public candidates consistent with the operator-reported
+  5G tests, two exposed LAN candidates consistent with same-Wi-Fi tests, and six used
+  overlay candidates whose underlying access network cannot be inferred from the log;
+- all sessions ended through an expected client-leave or room-delete path, including
+  one run lasting approximately 5 minutes 29 seconds, with no server-side media error.
+
+This is integrated-path **smoke evidence**, not a Phase 3 promotion result. It lacks
+the exported metadata-only browser traces, per-run route labels, external network
+evidence, interaction matrix, listening observations, and ten-minute healthy soak
+required by the strict runner. Data-channel abort warnings emitted during room teardown
+are expected and are not counted as transport failures.
+
+Two metadata-only iPhone Safari traces captured on 2026-08-07 add direct browser
+telemetry to that smoke evidence. The operator confirmed the first used Wi-Fi and the
+second used 5G; both media paths still traversed the Tailnet overlay. The Wi-Fi run had
+121 ms WebRTC RTT p95, 32 ms downlink jitter p95, a 190 ms jitter-buffer p95, and about
+98 ms of concealed audio. The 5G run degraded to an overflowed greater-than-two-second
+RTT p95, 140 ms jitter p95, a 1,988 ms jitter-buffer p95, and about 15.84 seconds of
+concealed audio across 54 events. The operator reported obvious stuttering on 5G,
+corroborating the browser counters even though Safari emitted no `waiting`/`stalled`
+playback event. Neither trace accumulated 30 seconds of Agent audio, and the Wi-Fi run
+was overlay rather than direct, so they remain smoke records rather than gate rows.
+
+Verbose LiveKit logs are sensitive operational data: rejected participant JWTs and
+SDP/ICE credentials can appear in diagnostic output. Keep them access-restricted and
+short-lived, and redact them before attaching logs to an issue or committing any
+derived evidence. Raw operational logs do not belong in this repository.
 
 ### Playback granularity is a separate constraint
 
@@ -683,6 +722,9 @@ Initial promotion thresholds, subject to measured calibration:
 - p95 interruption-to-silence no greater than 150 ms;
 - no audible stale audio after a stream is interrupted or superseded;
 - no unbounded queue; a session fails loudly if queued audio exceeds its ceiling;
+- zero unexpected media drops. Frames suppressed as `stale_rendition` after an
+  interruption or superseding revision are required freshness behavior, reported
+  separately, and do not count as transport loss;
 - no `AudioBufferSourceNode`-per-packet rendering path;
 - codec quality passes deterministic reference comparison and user listening tests,
   including cloned-voice identity, sibilants, Mandarin/English switching, and long
@@ -711,6 +753,15 @@ bun run gate:media-phase3 -- --manifest media-phase3-manifest.json \
   --output media-phase3-report.json
 ```
 
+For each iPhone row, end the conversation before exporting so the trace contains the
+complete lifecycle. Then tap the media-trace control in the conversation footer or the
+Agent preview header. Browsers with file sharing support open the native share sheet;
+save the JSON to Files or AirDrop it to the machine running the gate. Other browsers
+download the same file directly. The filename is derived from the recorded session id,
+including after Studio has reset its live-session state. Do not substitute LiveKit
+server logs for this browser artifact: those logs neither contain the required native
+playback observations nor satisfy the trace privacy contract.
+
 Set `deployment` to `livekit_cloud` for Phase 3A or `self_hosted` for Phase 3B. A cloud
 manifest must reference billing evidence; a self-hosted manifest omits it. The cloud
 test project must contain no unrelated rooms during the evidence window. The evaluator
@@ -725,7 +776,7 @@ the 80 kbps ceiling is evaluated.
 Every run must remain on WebRTC without compatibility fallback, negotiate Opus/48 kHz,
 contain both uplink and downlink RTC samples plus an observed native playback start, and accumulate at least 30 seconds of real
 Agent audio. The evaluator enforces the 80 kbps RTP Agent-audio ceiling, a 600 ms measured
-jitter-buffer ceiling, a one-second application queue ceiling with no dropped frames,
+jitter-buffer ceiling, a one-second application queue ceiling with no unexpected drops,
 direction-explicit shaped RTT/jitter/loss ranges, distinct trace/evidence digests, and the
 complete device/route/network/interaction matrix. Each network profile declares whether
 packet loss was applied to uplink, downlink, or both; the runner checks only the declared
@@ -790,7 +841,7 @@ constrained or relayed row cannot be relabeled as the healthy soak.
 Per run the gate enforces Media v2 PCM16/24 kHz without mid-run format changes, at least
 30 seconds of accumulated media, at least 1,500 media frames, at least 1,350 real render
 observations, at least 90% render coverage, and at least five RTT samples. It also
-requires no dropped frames, a maximum 1,000 ms application media queue, p95 browser
+requires no unexpected media drops, a maximum 1,000 ms application media queue, p95 browser
 buffer depth no greater than 600 ms, and render-thread observations rather than
 estimates. Barge-in and rapid-revision runs need at least ten internal stop measurements
 and ten external audible-silence measurements; both p95 values must be no greater than

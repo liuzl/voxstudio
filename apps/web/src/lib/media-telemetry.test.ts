@@ -243,6 +243,29 @@ describe("media delay attribution", () => {
     });
   });
 
+  test("separates required stale-rendition suppression from unexpected media loss", () => {
+    const recorder = new MediaTraceRecorder(() => 10_000);
+    const envelope = { v: 1 as const, sessionId: "s-1", timestampMs: 0 };
+    const socket = {
+      ...envelope,
+      type: "media.socket" as const,
+      submittedAtMs: 1,
+      highWaterBytes: 0,
+      queuedBytes: 0,
+      queuedAudioMs: 0,
+      backpressured: false,
+      dropped: true,
+    };
+    recorder.observeGateway({ ...socket, sequence: 1, frameId: 1, discardReason: "stale_rendition" });
+    recorder.observeGateway({ ...socket, sequence: 2, frameId: 2, discardReason: "network_congested" });
+
+    expect(recorder.summary()).toMatchObject({
+      droppedFrames: 2,
+      staleDroppedFrames: 1,
+      unexpectedDroppedFrames: 1,
+    });
+  });
+
   test("keeps RTT and RTT-jitter distributions instead of only the last ping", () => {
     let now = 20;
     const recorder = new MediaTraceRecorder(() => now);

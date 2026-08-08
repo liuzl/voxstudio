@@ -1569,10 +1569,10 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
             <p className="mt-1 truncate text-[10px] text-fg-muted">{record.name}</p>
           </div>
           <div className="flex items-center gap-1.5">
-            {isPreview ? <button onClick={() => void restart()} disabled={starting || (blocked && source.type === "draft")} title={t("重新开始")} aria-label={t("重新开始")} className="flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg disabled:opacity-40"><RotateCw className={`size-3.5 ${starting ? "animate-spin" : ""}`} /></button> : null}
-            {hasMediaDiagnostics ? <button type="button" onClick={downloadMediaTrace} className="flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg md:hidden" title="Metadata only; no audio or transcript content" aria-label={`media trace · ${t("下载")}`}><Download className="size-3.5" /></button> : null}
+            {isPreview ? <button onClick={() => void restart()} disabled={starting || (blocked && source.type === "draft")} title={t("重新开始")} aria-label={t("重新开始")} className="flex size-11 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg disabled:opacity-40 md:size-8"><RotateCw className={`size-3.5 ${starting ? "animate-spin" : ""}`} /></button> : null}
+            {hasMediaDiagnostics ? <button type="button" onClick={downloadMediaTrace} className="flex size-11 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg md:hidden" title="Metadata only; no audio or transcript content" aria-label={`media trace · ${t("下载")}`}><Download className="size-3.5" /></button> : null}
             <span className={`mx-1 size-2 rounded-full ${previewConnected ? "bg-emerald-400 shadow-[0_0_0_4px_rgba(52,211,153,0.12)]" : isPreview ? "bg-amber-400 shadow-[0_0_0_4px_rgba(251,191,36,0.12)]" : "bg-edge-hover"}`} />
-            <button onClick={onClose} aria-label={t("关闭")} className="flex size-8 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg"><X className="size-4" /></button>
+            <button onClick={onClose} aria-label={t("关闭")} className="flex size-11 items-center justify-center rounded-lg text-fg-muted hover:bg-fill-hover hover:text-fg md:size-8"><X className="size-4" /></button>
           </div>
         </div>
         <div className={isPreview ? "hidden md:block" : "block"}>

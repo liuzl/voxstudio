@@ -45,12 +45,41 @@ export function liveKitFallbackReason(error: unknown): MediaTransportFallbackRea
     : "livekit_service_unavailable";
 }
 
-function downloadTracePayload(payload: Record<string, unknown>): void {
+export function mediaTraceFilename(payload: Record<string, unknown>): string {
+  const rawSessionId = typeof payload.sessionId === "string" && payload.sessionId.trim()
+    ? payload.sessionId.trim()
+    : useStudio.getState().sessionId ?? "session";
+  const sessionId = rawSessionId.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "session";
+  return `voxstudio-media-trace-${sessionId}.json`;
+}
+
+async function downloadTracePayload(payload: Record<string, unknown>): Promise<void> {
   const json = JSON.stringify(payload, null, 2);
-  const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+  const filename = mediaTraceFilename(payload);
+  const blob = new Blob([json], { type: "application/json" });
+
+  // File sharing is the shortest reliable path from iPhone Safari to Files, AirDrop,
+  // or another gate-evidence destination. Keep the ordinary download as a universal
+  // fallback and treat dismissing the native share sheet as an intentional cancel.
+  if (typeof navigator.share === "function" && typeof navigator.canShare === "function") {
+    const file = new File([blob], filename, { type: blob.type });
+    if (navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({
+          files: [file],
+          title: "VoxStudio media trace",
+        });
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+      }
+    }
+  }
+
+  const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `voxstudio-media-trace-${useStudio.getState().sessionId ?? "session"}.json`;
+  anchor.download = filename;
   anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
@@ -301,7 +330,7 @@ export class ConversationController {
   }
 
   downloadMediaTrace(): void {
-    downloadTracePayload(this.mediaTrace.export());
+    void downloadTracePayload(this.mediaTrace.export());
   }
 
   private handleEvent(event: GatewayEvent): void {
@@ -425,5 +454,5 @@ export function conversationControls(): Pick<ConversationController, "setMuted" 
 
 export function downloadMediaTrace(): void {
   if (current) current.downloadMediaTrace();
-  else if (lastMediaTracePayload) downloadTracePayload(lastMediaTracePayload);
+  else if (lastMediaTracePayload) void downloadTracePayload(lastMediaTracePayload);
 }

@@ -259,7 +259,32 @@ describe("Phase 3 WebRTC acceptance gate", () => {
     expect(checks.find(candidate => candidate.id === "healthy.underruns")?.passed).toBe(false);
     expect(checks.find(candidate => candidate.id === "media.max_queued_audio")?.passed).toBe(false);
     expect(checks.find(candidate => candidate.id === "media.high_water_bytes")?.passed).toBe(false);
-    expect(checks.find(candidate => candidate.id === "media.dropped_frames")?.passed).toBe(false);
+    expect(checks.find(candidate => candidate.id === "media.unexpected_dropped_frames")?.passed).toBe(false);
+  });
+
+  test("accepts stale-rendition suppression but rejects congestion loss", () => {
+    const values = inputs();
+    const healthy = values.traces.get("healthy-macos-chrome") as Phase3TraceDocument;
+    const trace = healthy.value as Record<string, unknown>;
+    const diagnostics = trace.diagnostics as Record<string, unknown>;
+    diagnostics.droppedFrames = 2;
+    trace.events = [
+      ...(trace.events as unknown[]),
+      { event: { type: "media.socket", dropped: true, discardReason: "stale_rendition" } },
+      { event: { type: "media.socket", dropped: true, discardReason: "stale_rendition" } },
+    ];
+    let report = evaluatePhase3Acceptance(manifest, values.traces, values.evidence);
+    let checks = report.runs[0]?.checks ?? [];
+    expect(checks.find(candidate => candidate.id === "media.dropped_frame_accounting")?.passed).toBe(true);
+    expect(checks.find(candidate => candidate.id === "media.unexpected_dropped_frames")?.passed).toBe(true);
+
+    (trace.events as Record<string, unknown>[]).push({
+      event: { type: "media.socket", dropped: true, discardReason: "network_congested" },
+    });
+    diagnostics.droppedFrames = 3;
+    report = evaluatePhase3Acceptance(manifest, values.traces, values.evidence);
+    checks = report.runs[0]?.checks ?? [];
+    expect(checks.find(candidate => candidate.id === "media.unexpected_dropped_frames")?.passed).toBe(false);
   });
 
   test("sums explicit per-stream RTP deltas across a replacement without cumulative cross-talk", () => {

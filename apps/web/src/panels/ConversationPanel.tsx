@@ -563,7 +563,7 @@ export function ConversationPanel() {
             <button
               type="button"
               onClick={downloadMediaTrace}
-              className="inline-flex shrink-0 items-center gap-1 hover:text-ink-300"
+              className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center gap-1 rounded-lg hover:bg-ink-800 hover:text-ink-300 sm:min-h-0 sm:min-w-0 sm:justify-start sm:rounded-none sm:hover:bg-transparent"
               title="Metadata only; no audio or transcript content"
               aria-label={`media trace · ${t("下载")}`}
             >

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { GatewayApiError } from "./lib/api";
-import { liveKitFallbackReason, mayFallbackFromLiveKit } from "./conversation";
+import { liveKitFallbackReason, mayFallbackFromLiveKit, mediaTraceFilename } from "./conversation";
 
 function failure(
   phase: "bootstrap" | "room connect" | "microphone capture" | "microphone publish",
@@ -24,5 +24,15 @@ describe("LiveKit compatibility fallback", () => {
     expect(liveKitFallbackReason(failure("room connect", new Error("network down")))).toBe("livekit_room_connection_failed");
     expect(liveKitFallbackReason(failure("bootstrap", new GatewayApiError("unavailable", 503)))).toBe("livekit_service_unavailable");
     expect(liveKitFallbackReason(failure("bootstrap", new GatewayApiError("capacity", 429)))).toBeUndefined();
+  });
+});
+
+describe("media trace export", () => {
+  test("keeps the recorded session id after the live store session is reset", () => {
+    expect(mediaTraceFilename({ sessionId: "session-123" })).toBe("voxstudio-media-trace-session-123.json");
+  });
+
+  test("sanitizes an untrusted session id before using it as a filename", () => {
+    expect(mediaTraceFilename({ sessionId: "../../room one" })).toBe("voxstudio-media-trace-room-one.json");
   });
 });

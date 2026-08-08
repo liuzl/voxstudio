@@ -98,6 +98,8 @@ interface TraceDiagnostics {
   mediaFormatChanges?: unknown;
   underruns?: unknown;
   droppedFrames?: unknown;
+  staleDroppedFrames?: unknown;
+  unexpectedDroppedFrames?: unknown;
   maxQueuedAudioMs?: unknown;
   bufferDepthP95Ms?: unknown;
   interruptionStops?: unknown;
@@ -119,6 +121,28 @@ interface TraceExport {
   exportedAtMs?: unknown;
   sessionId?: unknown;
   diagnostics?: TraceDiagnostics;
+  events?: unknown;
+}
+
+function droppedFrameCounts(trace: TraceExport, diagnostics: TraceDiagnostics): {
+  total: number | undefined;
+  stale: number | undefined;
+  unexpected: number | undefined;
+} {
+  const total = finite(diagnostics.droppedFrames) ? diagnostics.droppedFrames : undefined;
+  if (finite(diagnostics.staleDroppedFrames) && finite(diagnostics.unexpectedDroppedFrames)) {
+    return { total, stale: diagnostics.staleDroppedFrames, unexpected: diagnostics.unexpectedDroppedFrames };
+  }
+  const raw = Array.isArray(trace.events) ? trace.events.flatMap(entry => {
+    if (!record(entry) || !record(entry.event)) return [];
+    const event = entry.event;
+    return event.type === "media.socket" && event.dropped === true ? [event] : [];
+  }) : [];
+  if (total !== undefined && raw.length === total) {
+    const stale = raw.filter(event => event.discardReason === "stale_rendition").length;
+    return { total, stale, unexpected: total - stale };
+  }
+  return { total, stale: total === undefined ? undefined : 0, unexpected: total };
 }
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -259,6 +283,7 @@ function evaluateRun(
   const input = document?.value;
   const trace = record(input) ? input as TraceExport : {};
   const diagnostics = record(trace.diagnostics) ? trace.diagnostics : {};
+  const dropped = droppedFrameCounts(trace, diagnostics);
   const durationMs = finite(trace.startedAtMs) && finite(trace.exportedAtMs)
     ? Math.max(0, trace.exportedAtMs - trace.startedAtMs)
     : undefined;
@@ -275,7 +300,10 @@ function evaluateRun(
     numberEquals("media.format_changes", diagnostics.mediaFormatChanges, 0),
     numberAtLeast("media.audio_duration", diagnostics.audioMs, 30_000),
     numberAtLeast("media.frames", diagnostics.frames, 1_500),
-    numberEquals("media.dropped_frames", diagnostics.droppedFrames, 0),
+    check("media.dropped_frame_accounting", finite(dropped.total) && finite(dropped.stale) && finite(dropped.unexpected)
+      && dropped.total === dropped.stale + dropped.unexpected,
+    "total = stale + unexpected", dropped),
+    numberEquals("media.unexpected_dropped_frames", dropped.unexpected, 0),
     numberAtMost("media.max_queued_audio", diagnostics.maxQueuedAudioMs, 1_000),
     numberAtMost("browser.buffer_depth_p95", diagnostics.bufferDepthP95Ms, 600),
     numberAtLeast("browser.render_observed", diagnostics.renderObservations, 1_350),
@@ -383,6 +411,8 @@ function evaluateRun(
       audioMs: diagnostics.audioMs ?? null,
       underruns: diagnostics.underruns ?? null,
       droppedFrames: diagnostics.droppedFrames ?? null,
+      staleDroppedFrames: dropped.stale ?? null,
+      unexpectedDroppedFrames: dropped.unexpected ?? null,
       maxQueuedAudioMs: diagnostics.maxQueuedAudioMs ?? null,
       bufferDepthP95Ms: diagnostics.bufferDepthP95Ms ?? null,
       interruptionStops: diagnostics.interruptionStops ?? null,
