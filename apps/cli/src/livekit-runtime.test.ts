@@ -11,12 +11,14 @@ function emptyStream(): ReadableStream<Uint8Array> {
 }
 
 describe("embedded LiveKit runtime", () => {
-  test("passes generated credentials through config-body environment, never argv, and owns child shutdown", async () => {
+  test("uses a fake child to pass generated credentials outside argv and own shutdown", async () => {
     let command: string[] | undefined;
     let childEnv: Record<string, string> | undefined;
     let resolveExit!: (code: number) => void;
     const exited = new Promise<number>(resolve => { resolveExit = resolve; });
     let kills = 0;
+    // process.execPath only satisfies executable-path validation. This injected spawn
+    // is the entire child process: the test never launches Bun or waits on a real port.
     const spawn: LiveKitSpawn = (seenCommand, options) => {
       command = seenCommand;
       childEnv = options.env;

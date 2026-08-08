@@ -674,6 +674,18 @@ with trace measurements.
 
 ### Phase 3B — Self-hosted LiveKit deployment gate
 
+Status: the embedded supervised runtime is delivered as an additional single-node
+self-hosted topology. It satisfies single-file distribution, content-verified helper
+materialization, process-private credentials, loopback signaling, parent-owned restart
+and shutdown, and URL-only switching for the existing browser and Agent adapter. Those
+implementation checks do not close the Phase 3B gate and do not by themselves qualify a
+manifest as `self_hosted`: packaging changes process ownership, not the network or
+operational boundary. Trusted TLS, public and private route evidence, reachable UDP,
+TCP/TURN fallback, advertised candidates, firewall policy, metrics, upgrades, backup,
+certificate renewal, restart recovery, and the declared concurrency soak remain required.
+The official Linux VM/Docker Compose/Caddy shape remains the reference production node;
+an embedded deployment must pass the same gate before making the same claim.
+
 - deploy one Linux node using the official VM/Docker Compose/Caddy shape;
 - validate trusted TLS, UDP media, TCP fallback, embedded TURN, advertised candidates,
   firewall rules, metrics, upgrades, backup, and restart behavior;
