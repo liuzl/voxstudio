@@ -292,14 +292,18 @@ describe("GatewayClient", () => {
     const socket = sockets[0] as FakeSocket;
     socket.emit("open", {});
     const sending = client.sendText("typed hello");
+    const cancelling = client.cancelAgentRun();
     client.interruptTurn("t-1");
     client.playbackComplete("t-1");
     expect(socket.commands()).toContainEqual(expect.objectContaining({ type: "turn.text", text: "typed hello" }));
     const keys = socket.commands().map(command => command.idempotencyKey);
     expect(new Set(keys).size).toBe(keys.length);
     const textKey = socket.commands().find(command => command.type === "turn.text")?.idempotencyKey;
+    const cancelKey = socket.commands().find(command => command.type === "agent.cancel")?.idempotencyKey;
     socket.serverEvent({ type: "command.accepted", commandType: "turn.text", idempotencyKey: textKey });
+    socket.serverEvent({ type: "command.accepted", commandType: "agent.cancel", idempotencyKey: cancelKey });
     await sending;
+    await cancelling;
     client.close();
   });
 

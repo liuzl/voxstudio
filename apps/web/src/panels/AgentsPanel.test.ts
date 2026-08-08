@@ -6,6 +6,7 @@ import {
   agentExportYaml,
   agentPreviewOptions,
   agentPreviewTraceKey,
+  agentRunIsCancelling,
   agentRecordFromDraft,
   displayTime,
   draftFrom,
@@ -104,12 +105,26 @@ describe("Agent preview connection status", () => {
       agentSource: "published",
       agentVersion: 3,
     });
+    expect(agentPreviewOptions(record, { type: "draft" }, true)).toEqual({
+      agent: "support",
+      agentSource: "draft",
+      agentRevision: 7,
+      agentMode: true,
+    });
   });
 
   test("keys retained media diagnostics to the exact preview source", () => {
     expect(agentPreviewTraceKey({ type: "draft" }, 7)).toBe("draft:7");
     expect(agentPreviewTraceKey({ type: "draft" }, 8)).not.toBe(agentPreviewTraceKey({ type: "draft" }, 7));
     expect(agentPreviewTraceKey({ type: "published", version: 3 }, 99)).toBe("published:3");
+  });
+
+  test("keeps cancellation pending only for the matching running run", () => {
+    const running = { runId: "run-1", state: "running" as const, progress: [], answer: undefined };
+    expect(agentRunIsCancelling(running, "run-1")).toBe(true);
+    expect(agentRunIsCancelling({ ...running, state: "cancelled" }, "run-1")).toBe(false);
+    expect(agentRunIsCancelling(running, "run-2")).toBe(false);
+    expect(agentRunIsCancelling(undefined, "run-1")).toBe(false);
   });
 });
 

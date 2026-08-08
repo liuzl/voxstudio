@@ -59,7 +59,7 @@ import type { ConnectionState } from "../lib/client";
 import { isMicrophonePermissionDenied } from "../lib/audio";
 import { formatMediaTransportDetails, mediaTransportFallbackMessage } from "../lib/media-telemetry";
 import { useMicrophoneDevices } from "../lib/use-microphone";
-import { useStudio } from "../store";
+import { useStudio, type AgentRunView } from "../store";
 import { AgentConversations } from "./AgentConversations";
 
 const templates = [
@@ -699,10 +699,11 @@ export function agentPreviewTraceKey(source: AgentPreviewSource, draftRevision: 
   return source.type === "draft" ? `draft:${draftRevision}` : `published:${source.version}`;
 }
 
-export function agentPreviewOptions(record: AgentRecord, source: AgentPreviewSource) {
+export function agentPreviewOptions(record: AgentRecord, source: AgentPreviewSource, agentMode = false) {
+  const mode = agentMode ? { agentMode: true } : {};
   return source.type === "draft"
-    ? { agent: record.id, agentSource: "draft" as const, agentRevision: record.revision }
-    : { agent: record.id, agentSource: "published" as const, agentVersion: source.version };
+    ? { agent: record.id, agentSource: "draft" as const, agentRevision: record.revision, ...mode }
+    : { agent: record.id, agentSource: "published" as const, agentVersion: source.version, ...mode };
 }
 
 export interface AgentDeploymentSnippets {
@@ -1362,6 +1363,56 @@ export function previewStatusLabel(connection: ConnectionState, sessionState: st
   return previewSessionLabels[sessionState] ?? "聆听中";
 }
 
+export function agentRunStatusLabel(state: AgentRunView["state"]): MessageKey {
+  if (state === "running") return "任务执行中";
+  if (state === "completed") return "任务已完成";
+  if (state === "cancelled") return "任务已取消";
+  return "任务失败";
+}
+
+export function agentRunIsCancelling(run: AgentRunView | undefined, requestedRunId: string | undefined): boolean {
+  return requestedRunId !== undefined && run?.runId === requestedRunId && run.state === "running";
+}
+
+function AgentRunCard({ run, cancelling, onCancel }: {
+  run: AgentRunView | undefined;
+  cancelling: boolean;
+  onCancel(): void;
+}) {
+  const t = useT();
+  if (run === undefined) {
+    return (
+      <div role="status" className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 text-[10px] text-violet-700 dark:border-violet-500/25 dark:bg-violet-500/10 dark:text-violet-300">
+        <span className="flex items-center gap-2 font-medium"><Bot className="size-3.5" />{t("等待首轮输入")}</span>
+        <p className="mt-1 leading-5 opacity-80">{t("首轮输入启动任务，后续输入用于补充或修正。")}</p>
+      </div>
+    );
+  }
+  const latest = run.progress.at(-1)?.summary;
+  const terminal = run.state !== "running";
+  return (
+    <div role="status" className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2.5 text-[10px] text-violet-800 dark:border-violet-500/25 dark:bg-violet-500/10 dark:text-violet-200">
+      <div className="flex items-center gap-2">
+        <Bot className="size-3.5 shrink-0" />
+        <span className="font-medium">{t(agentRunStatusLabel(run.state))}</span>
+        <span className="truncate font-mono text-[9px] opacity-55">{run.runId.slice(0, 8)}</span>
+        {!terminal ? (
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={cancelling}
+            className="ml-auto rounded-full border border-violet-300 px-2 py-1 font-medium hover:bg-violet-100 disabled:opacity-50 dark:border-violet-500/35 dark:hover:bg-violet-500/15"
+          >
+            {t(cancelling ? "正在取消…" : "取消任务")}
+          </button>
+        ) : null}
+      </div>
+      {latest ? <p className="mt-1.5 leading-5">{latest}</p> : !terminal ? <p className="mt-1.5 opacity-70">{t("等待执行进度…")}</p> : null}
+      {run.answer ? <p className="mt-1.5 border-t border-violet-200 pt-1.5 leading-5 dark:border-violet-500/20"><span className="font-medium">{t("执行结果：")}</span>{run.answer}</p> : null}
+    </div>
+  );
+}
+
 function TryItLive({ record, versions, currentPublishedVersion, source, onSourceChange, dirty, onSave, blocked, onClose }: {
   record: AgentRecord;
   versions: AgentPublishedVersion[];
@@ -1383,6 +1434,7 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
   const setMicInputDevice = useStudio(state => state.setMicInputDevice);
   const micLevel = useStudio(state => state.micLevel);
   const media = useStudio(state => state.mediaDiagnostics);
+  const agentRun = useStudio(state => state.agentRun);
   const mediaDetails = formatMediaTransportDetails(media);
   const fallbackMessage = mediaTransportFallbackMessage(media.transportFallbackReason);
   const clearHistory = useStudio(state => state.clearHistory);
@@ -1390,6 +1442,8 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
   const [starting, setStarting] = useState(false);
   const [sendingText, setSendingText] = useState(false);
   const [textInput, setTextInput] = useState("");
+  const [autonomousMode, setAutonomousMode] = useState(false);
+  const [cancellingRunId, setCancellingRunId] = useState<string>();
   const { devices: audioInputs, needsPermission: micNeedsPermission, authorizing: micAuthorizing, authorize: authorizeMicrophone } = useMicrophoneDevices();
   const requestMicrophonePermission = (): void => {
     void authorizeMicrophone().catch(error => {
@@ -1435,7 +1489,13 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
       if (messages) messages.scrollTo({ top: messages.scrollHeight, behavior: "auto" });
     });
     return () => cancelAnimationFrame(frame);
-  }, [turns]);
+  }, [turns, agentRun]);
+
+  useEffect(() => {
+    if (cancellingRunId !== undefined && !agentRunIsCancelling(agentRun, cancellingRunId)) {
+      setCancellingRunId(undefined);
+    }
+  }, [agentRun, cancellingRunId]);
 
   const scrollToLatest = () => {
     followLatest.current = true;
@@ -1468,7 +1528,7 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
       clearHistory();
       followLatest.current = true;
       setHasUnseen(false);
-      await startConversation(agentPreviewOptions(saved, source));
+      await startConversation(agentPreviewOptions(saved, source, autonomousMode));
       if (!current()) return;
       previewOwned.current = true;
       setPreviewTraceKey(agentPreviewTraceKey(source, saved.revision));
@@ -1507,7 +1567,7 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
       clearHistory();
       followLatest.current = true;
       setHasUnseen(false);
-      await startConversation(agentPreviewOptions(saved, source));
+      await startConversation(agentPreviewOptions(saved, source, autonomousMode));
       if (!current()) return;
       previewOwned.current = true;
       setPreviewTraceKey(agentPreviewTraceKey(source, saved.revision));
@@ -1524,8 +1584,10 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
   const isPreview = active && previewOwned.current;
   const previewConnected = isPreview && connection === "connected";
   const sessionCanAcceptText = sessionState !== "off" && sessionState !== "idle" && sessionState !== "closed";
-  const canSubmitText = previewConnected && sessionCanAcceptText && !starting && !sendingText;
   const textWillInterrupt = sessionState !== "listening";
+  const runCanSteer = autonomousMode && agentRun?.state === "running";
+  const cancellingRun = agentRunIsCancelling(agentRun, cancellingRunId);
+  const canSubmitText = previewConnected && sessionCanAcceptText && !starting && !sendingText && !cancellingRun;
   const submitText = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const submitted = textInput.trim();
@@ -1539,6 +1601,21 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
       toast("error", error instanceof Error ? error.message : String(error));
     } finally {
       if (mounted.current) setSendingText(false);
+    }
+  };
+  const cancelRun = async () => {
+    const runId = runCanSteer ? agentRun?.runId : undefined;
+    if (runId === undefined || cancellingRunId === runId) return;
+    setCancellingRunId(runId);
+    try {
+      const controls = conversationControls();
+      if (controls === undefined) throw new Error("conversation is not connected");
+      await controls.cancelAgentRun();
+    } catch (error) {
+      if (mounted.current) {
+        setCancellingRunId(current => current === runId ? undefined : current);
+        toast("error", error instanceof Error ? error.message : String(error));
+      }
     }
   };
   const stateLabel = isPreview ? t(previewStatusLabel(connection, sessionState)) : t("未开始");
@@ -1586,11 +1663,25 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
             </select>
           </div>
           <p className="mt-2 hidden text-[10px] leading-5 text-fg-faint md:block">{sourceDescription}</p>
+          <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-xl border border-edge bg-surface px-3 py-2.5 text-left">
+            <input
+              type="checkbox"
+              checked={autonomousMode}
+              disabled={isPreview || starting}
+              onChange={event => setAutonomousMode(event.target.checked)}
+              className="mt-0.5 size-3.5 accent-violet-600"
+            />
+            <span className="min-w-0">
+              <span className="block text-[10px] font-medium text-fg-secondary">{t("自主执行预览")}</span>
+              <span className="mt-0.5 block text-[9px] leading-4 text-fg-faint">{t("自主执行使用测试执行器，真实执行后端将在下一阶段接入。")}</span>
+            </span>
+          </label>
         </div>
       </header>
 
       <div className="relative flex min-h-0 flex-1 flex-col bg-surface/45">
         <div ref={messagesRef} onScroll={onMessagesScroll} role="log" aria-label={t("对话记录")} aria-live="off" className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:space-y-4 sm:px-5 sm:py-5">
+          {isPreview && autonomousMode ? <AgentRunCard run={agentRun} cancelling={cancellingRun} onCancel={() => { void cancelRun(); }} /> : null}
           {turns.length === 0 ? (
             <div className="flex h-full min-h-[240px] flex-col items-center justify-center text-center"><span className="flex size-12 items-center justify-center rounded-full border border-edge bg-canvas"><Mic className="size-5 text-fg-muted" /></span><p className="mt-4 text-[12px] font-medium">{t("在浏览器中与助手对话")}</p><p className="mt-1 max-w-[270px] text-[10px] leading-5 text-fg-faint">{sourceDescription}</p></div>
           ) : turns.map(turn => (
@@ -1633,15 +1724,15 @@ function TryItLive({ record, versions, currentPublishedVersion, source, onSource
               value={textInput}
               onChange={event => setTextInput(event.target.value)}
               maxLength={8_000}
-              placeholder={t("输入消息")}
-              aria-label={t("输入消息")}
+              placeholder={t(runCanSteer ? "补充或修正任务" : "输入消息")}
+              aria-label={t(runCanSteer ? "补充或修正任务" : "输入消息")}
               className="h-10 min-w-0 flex-1 rounded-full border border-edge bg-surface px-4 text-[11px] text-fg outline-none placeholder:text-fg-faint focus:border-edge-hover focus:bg-canvas"
             />
             <button
               type="submit"
               disabled={!canSubmitText || !textInput.trim()}
-              title={t(textWillInterrupt ? "打断并发送" : "发送消息")}
-              aria-label={t(textWillInterrupt ? "打断并发送" : "发送消息")}
+              title={t(runCanSteer ? "补充或修正任务" : textWillInterrupt ? "打断并发送" : "发送消息")}
+              aria-label={t(runCanSteer ? "补充或修正任务" : textWillInterrupt ? "打断并发送" : "发送消息")}
               className={`flex size-10 shrink-0 items-center justify-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-30 ${textWillInterrupt ? "bg-amber-300 text-amber-950 hover:bg-amber-200" : "bg-ink text-on-ink hover:bg-ink-hover"}`}
             >
               <Send className="size-3.5" />

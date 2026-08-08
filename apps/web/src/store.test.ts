@@ -7,6 +7,7 @@ const base = {
   notices: [],
   sessionState: "listening",
   sessionId: "session",
+  agentRun: undefined,
 };
 
 function event(payload: object, sequence: number): GatewayEvent {
@@ -73,5 +74,61 @@ describe("conversation event reducer", () => {
       text: "typed hello",
     }, 2));
     expect(transcript.turns?.[0]).toMatchObject({ transcript: "typed hello", status: "thinking" });
+  });
+
+  test("tracks one autonomous run from progress through its terminal state", () => {
+    const started = reduceEvent(base, event({ type: "agent.run.started", runId: "run-1" }, 1));
+    const running = { ...base, ...started };
+    const progressed = reduceEvent(running, event({
+      type: "agent.run.progress",
+      runId: "run-1",
+      summary: "正在搜索…",
+    }, 2));
+    const answered = reduceEvent({ ...running, ...progressed }, event({
+      type: "agent.run.answer",
+      runId: "run-1",
+      text: "找到结果",
+    }, 3));
+    const terminal = reduceEvent({ ...running, ...progressed, ...answered }, event({
+      type: "agent.run.terminal",
+      runId: "run-1",
+      state: "completed",
+    }, 4));
+
+    expect(terminal.agentRun).toEqual({
+      runId: "run-1",
+      state: "completed",
+      progress: [{ at: 2, summary: "正在搜索…" }],
+      answer: "找到结果",
+    });
+  });
+
+  test("ignores stale run ids and post-terminal events while preserving a reconnect", () => {
+    const running = {
+      ...base,
+      agentRun: { runId: "run-2", state: "running" as const, progress: [], answer: undefined },
+    };
+    expect(reduceEvent(running, event({
+      type: "agent.run.progress", runId: "old-run", summary: "stale",
+    }, 2))).toEqual({});
+
+    const terminal = reduceEvent(running, event({
+      type: "agent.run.terminal", runId: "run-2", state: "cancelled",
+    }, 3));
+    const ended = { ...running, ...terminal };
+    expect(reduceEvent(ended, event({
+      type: "agent.run.answer", runId: "run-2", text: "too late",
+    }, 4))).toEqual({});
+    const reattached = {
+      ...ended,
+      ...reduceEvent(ended, event({
+        type: "session.state", state: "listening", previous: "thinking",
+      }, 5)),
+    };
+    expect(reattached.agentRun).toEqual(ended.agentRun);
+    expect(reduceEvent(ended, {
+      ...event({ type: "session.state", state: "listening", previous: "thinking" }, 6),
+      sessionId: "new-session",
+    })).toMatchObject({ agentRun: undefined });
   });
 });

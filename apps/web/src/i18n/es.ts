@@ -85,6 +85,21 @@ export const es: Record<MessageKey, string> = {
   "删除素材": "La eliminación de la captura",
   "加载更多（{n} 条未显示）": "Cargar más ({n} sin mostrar)",
 
+  // Autonomous Agent preview
+  "自主执行预览": "Vista previa de ejecución autónoma",
+  "自主执行使用测试执行器，真实执行后端将在下一阶段接入。": "La ejecución autónoma usa el ejecutor de prueba; el backend real llegará en la siguiente fase.",
+  "等待首轮输入": "Esperando la primera entrada",
+  "首轮输入启动任务，后续输入用于补充或修正。": "La primera entrada inicia la tarea; las siguientes la amplían o corrigen.",
+  "任务执行中": "Tarea en ejecución",
+  "任务已完成": "Tarea completada",
+  "任务已取消": "Tarea cancelada",
+  "任务失败": "La tarea falló",
+  "正在取消…": "Cancelando…",
+  "取消任务": "Cancelar tarea",
+  "等待执行进度…": "Esperando el progreso de ejecución…",
+  "执行结果：": "Resultado: ",
+  "补充或修正任务": "Ampliar o corregir la tarea",
+
   // Conversation panel — session states
   "未开始": "Sin iniciar",
   "空闲": "Inactivo",

@@ -230,6 +230,10 @@ export class GatewayClient {
     await this.commandAndWaitForAcceptance({ type: "turn.text", text });
   }
 
+  async cancelAgentRun(reason = "user_cancelled"): Promise<void> {
+    await this.commandAndWaitForAcceptance({ type: "agent.cancel", reason });
+  }
+
   interruptTurn(turnId: string): void {
     this.command({ type: "turn.interrupt", turnId });
   }

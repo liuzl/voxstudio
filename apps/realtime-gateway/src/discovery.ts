@@ -679,6 +679,7 @@ export function openApiDocument(options: DiscoveryOptions): Record<string, unkno
                     agentSource: { type: "string", enum: ["published", "draft"], default: "published" },
                     agentRevision: { type: "integer", minimum: 1, description: "Required exact revision for a draft preview." },
                     agentVersion: { type: "integer", minimum: 1, description: "Optional exact immutable published version." },
+                    agentMode: { type: "boolean", default: false, description: "Explicitly opt this Agent session into the autonomous executor. Selecting an Agent never implies this value." },
                     language: { type: "string", description: "Ordinary Studio conversation language hint." },
                     voice: { type: "string", description: "Ordinary Studio conversation output voice." },
                     asrEngine: { type: "string" },

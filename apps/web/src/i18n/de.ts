@@ -85,6 +85,21 @@ export const de: Record<MessageKey, string> = {
   "删除素材": "Löschen der Aufnahme",
   "加载更多（{n} 条未显示）": "Mehr laden ({n} nicht angezeigt)",
 
+  // Autonomous Agent preview
+  "自主执行预览": "Vorschau der autonomen Ausführung",
+  "自主执行使用测试执行器，真实执行后端将在下一阶段接入。": "Die autonome Ausführung nutzt den Test-Executor; das echte Backend folgt in der nächsten Phase.",
+  "等待首轮输入": "Warten auf die erste Eingabe",
+  "首轮输入启动任务，后续输入用于补充或修正。": "Die erste Eingabe startet die Aufgabe; weitere Eingaben ergänzen oder korrigieren sie.",
+  "任务执行中": "Aufgabe wird ausgeführt",
+  "任务已完成": "Aufgabe abgeschlossen",
+  "任务已取消": "Aufgabe abgebrochen",
+  "任务失败": "Aufgabe fehlgeschlagen",
+  "正在取消…": "Wird abgebrochen…",
+  "取消任务": "Aufgabe abbrechen",
+  "等待执行进度…": "Warten auf Ausführungsfortschritt…",
+  "执行结果：": "Ergebnis: ",
+  "补充或修正任务": "Aufgabe ergänzen oder korrigieren",
+
   // Conversation panel — session states
   "未开始": "Nicht gestartet",
   "空闲": "Inaktiv",

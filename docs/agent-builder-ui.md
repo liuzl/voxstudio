@@ -385,9 +385,10 @@ Here, Agent means the saved voice-Agent configuration object defined in
 The separate autonomous executor in [voice-agent-roadmap.md](./voice-agent-roadmap.md)
 is an orthogonal, default-off session capability: the presence of `agent`,
 `agentSource`, or `agentVersion` must never cause the browser or gateway to infer
-`agentMode: true`. Future autonomous run-state UI requires an explicit activation
-contract and must preserve this saved-Agent preview behavior while the production
-executor is unavailable.
+`agentMode: true`. The delivered autonomous developer preview has an explicit,
+default-off checkbox and identifies the deterministic test executor while the production
+executor is unavailable. It consumes run progress, answer, and terminal events and offers
+cancel plus ordinary typed/voice steering without changing the saved-Agent default.
 
 It uses the existing authenticated realtime WebSocket and session creation path,
 not a privileged preview endpoint. `session.start` names the Agent and explicitly
@@ -483,12 +484,17 @@ stage component does not require sharing the entire page theme.
    saving, publish, runtime-dependency alerts, and advanced Configuration/Speech
    controls are implemented, together with duplicate, YAML export, audit,
    delete, immutable version history, and restore-as-draft.
-3. **Try it live — functional preview delivered through typed input 2026-08-05**: revision-pinned
+3. **Try it live — functional preview delivered through typed input 2026-08-05; autonomous
+   developer controls delivered 2026-08-08**: revision-pinned
    draft or exact published-version start, transcript, connection truth, mute,
    stop reply, restart, and end use existing session events in a desktop drawer
    or mobile full-screen surface. Pre-start microphone selection and native
    typed turns now work over WebSocket and LiveKit through the ordinary conversation
-   pipeline; this saved-Agent preview does not enable autonomous `agentMode`.
+   pipeline; this saved-Agent preview does not enable autonomous `agentMode` unless the
+   developer checks the explicit preview control. The autonomous view retains the current
+   run across transport reconnect, ignores stale/post-terminal events, exposes progress,
+   answer, and terminal state, and sends confirmed cancel/steering commands over both
+   WebSocket and LiveKit. It remains labelled as a test-executor preview until Phase C.
    Response feedback, additional settings, and the complete failure/retry matrix remain.
 4. **Independent Full Preview / VoiceStage — not started**: a separate expanded
    surface with state-driven visual and reduced-motion/fallback paths. This is

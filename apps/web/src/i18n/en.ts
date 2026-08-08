@@ -315,6 +315,21 @@ export const en = {
   "删除素材": "Deleting the capture",
   "加载更多（{n} 条未显示）": "Load more ({n} not shown)",
 
+  // Autonomous Agent preview
+  "自主执行预览": "Autonomous execution preview",
+  "自主执行使用测试执行器，真实执行后端将在下一阶段接入。": "Autonomous mode uses the test executor; the real execution backend arrives in the next phase.",
+  "等待首轮输入": "Waiting for the first input",
+  "首轮输入启动任务，后续输入用于补充或修正。": "The first input starts the task; later inputs add context or redirect it.",
+  "任务执行中": "Task running",
+  "任务已完成": "Task completed",
+  "任务已取消": "Task cancelled",
+  "任务失败": "Task failed",
+  "正在取消…": "Cancelling…",
+  "取消任务": "Cancel task",
+  "等待执行进度…": "Waiting for execution progress…",
+  "执行结果：": "Result: ",
+  "补充或修正任务": "Add context or redirect the task",
+
   // Conversation panel — session states
   "未开始": "Not started",
   "空闲": "Idle",

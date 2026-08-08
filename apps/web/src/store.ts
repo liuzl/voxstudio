@@ -31,6 +31,15 @@ export interface NoticeView {
   text: string;
 }
 
+export interface AgentRunView {
+  runId: string;
+  state: "running" | "completed" | "failed" | "cancelled";
+  /** Bounded executor milestones in arrival order. */
+  progress: { at: number; summary: string }[];
+  /** The executor's final answer before it enters the ordinary speech pipeline. */
+  answer: string | undefined;
+}
+
 /** A transient feedback bubble: info auto-dismisses, errors stay until clicked. */
 export interface ToastView {
   id: number;
@@ -57,6 +66,8 @@ interface StudioState {
   micLevel: number;
   turns: TurnView[];
   notices: NoticeView[];
+  /** The newest autonomous run in this session; absent in ordinary voice mode. */
+  agentRun: AgentRunView | undefined;
   capability: EndpointCapability | undefined;
   /** Metadata-only transport diagnostics for the current or most recent session. */
   mediaDiagnostics: MediaDiagnostics;
@@ -157,13 +168,39 @@ function updateTurn(turns: TurnView[], turnId: string, update: (turn: TurnView) 
  * purpose — this is the part of the panel that must track the session contract exactly,
  * so it lives where the root typecheck and bun tests reach it.
  */
-export function reduceEvent(state: Pick<StudioState, "turns" | "notices" | "sessionState" | "sessionId">, event: GatewayEvent): Partial<StudioState> {
+export function reduceEvent(
+  state: Pick<StudioState, "turns" | "notices" | "sessionState" | "sessionId" | "agentRun">,
+  event: GatewayEvent,
+): Partial<StudioState> {
   const withNotice = (kind: NoticeView["kind"], text: string): Partial<StudioState> => ({
     notices: [...state.notices, { at: event.timestampMs, kind, text }].slice(-maxNotices),
   });
   switch (event.type) {
     case "session.state":
-      return { sessionState: event.state, sessionId: event.sessionId };
+      return {
+        sessionState: event.state,
+        sessionId: event.sessionId,
+        // Reattach keeps the same session id and the browser's run state. A genuinely
+        // new session must not inherit a run from the one whose reconnect grace expired.
+        ...(state.sessionId !== undefined && state.sessionId !== event.sessionId ? { agentRun: undefined } : {}),
+      };
+    case "agent.run.started":
+      if (state.agentRun?.runId === event.runId) return {};
+      return { agentRun: { runId: event.runId, state: "running", progress: [], answer: undefined } };
+    case "agent.run.progress":
+      if (state.agentRun?.runId !== event.runId || state.agentRun.state !== "running") return {};
+      return {
+        agentRun: {
+          ...state.agentRun,
+          progress: [...state.agentRun.progress, { at: event.timestampMs, summary: event.summary }].slice(-20),
+        },
+      };
+    case "agent.run.answer":
+      if (state.agentRun?.runId !== event.runId || state.agentRun.state !== "running") return {};
+      return { agentRun: { ...state.agentRun, answer: event.text } };
+    case "agent.run.terminal":
+      if (state.agentRun?.runId !== event.runId || state.agentRun.state !== "running") return {};
+      return { agentRun: { ...state.agentRun, state: event.state } };
     case "turn.started": {
       const turn: TurnView = {
         id: event.turnId,
@@ -317,6 +354,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   micLevel: 0,
   turns: [],
   notices: [],
+  agentRun: undefined,
   capability: undefined,
   mediaDiagnostics: emptyMediaDiagnostics(),
   voice: "",
@@ -390,7 +428,7 @@ export const useStudio = create<StudioState>((set, get) => ({
   setActive: active => set({ active }),
   setMuted: muted => set({ muted }),
   setMicLevel: micLevel => set({ micLevel }),
-  clearHistory: () => set({ turns: [], notices: [] }),
+  clearHistory: () => set({ turns: [], notices: [], agentRun: undefined }),
   setCapability: capability => set({ capability }),
   setMediaDiagnostics: mediaDiagnostics => set({ mediaDiagnostics }),
   resetMediaDiagnostics: () => set({ mediaDiagnostics: emptyMediaDiagnostics() }),
@@ -404,5 +442,12 @@ export const useStudio = create<StudioState>((set, get) => ({
     set(state => ({ toasts: [...state.toasts, { id: nextToastId++, kind, text }].slice(-maxToasts) })),
   dismissToast: id => set(state => ({ toasts: state.toasts.filter(toast => toast.id !== id) })),
   apply: event => set(reduceEvent(get(), event)),
-  resetSession: () => set({ sessionState: "off", sessionId: undefined, active: false, muted: false, micLevel: 0 }),
+  resetSession: () => set({
+    sessionState: "off",
+    sessionId: undefined,
+    active: false,
+    muted: false,
+    micLevel: 0,
+    agentRun: undefined,
+  }),
 }));

@@ -1263,7 +1263,7 @@ export function startGateway(options: GatewayServerOptions): GatewayServer {
           return problem(400, "bad_request", "expected a JSON session selection");
         }
         const selection = input as Record<string, unknown>;
-        const agentSelectionKeys = new Set(["agent", "agentSource", "agentRevision", "agentVersion"]);
+        const agentSelectionKeys = new Set(["agent", "agentSource", "agentRevision", "agentVersion", "agentMode"]);
         const studioSelectionKeys = new Set([
           "language", "voice", "asrEngine", "llmEngine", "ttsEngine",
           "studioTools", "welcome", "nudgeAfterSeconds", "turnTaking",

@@ -290,7 +290,8 @@ seam, and `stop` clears the queue and interrupts playback — verified end to en
 with the fake executor narrating through the real conversation channel. The
 measured 150 ms audible-stop gate on real playback remains before Phase A is
 complete. Session-level executor integration and protocol events have since
-landed in Phase B; Web UI state remains.
+landed in Phase B, together with the explicit Agent Builder developer preview for
+Web run state, cancellation, and steering.
 
 ### Phase B — executor adapter with a fake backend
 
@@ -316,7 +317,8 @@ default. A session-scoped run starts on the first finalized user turn (audio or
 typed), later turns steer it, `agent.cancel` cancels deterministically, barge-in
 stops only narration, hang-up cancels with bounded cleanup, and run progress is
 surfaced as `agent.run.*` protocol events. Web UI state for run progress and the
-Web cancel/steer controls remain. This autonomous mode is separate from the
+Web cancel/steer controls are delivered in an explicit, default-off developer
+preview over both WebSocket and LiveKit. This autonomous mode is separate from the
 shipped saved voice-Agent runtime: naming a saved Agent resolves its conversation
 configuration but must not implicitly set `agentMode: true`.
 
@@ -426,15 +428,15 @@ Re-evaluate when:
 | Sandbox/tool-broker security baseline | accepted; real isolated runner remains Phase D |
 | Gateway/player composition controller | landed (`agent-run-controller.ts` + `agent-speech-sink.ts`; fake-executor run narrates through the real conversation channel); real-playback 150 ms promotion measurement pending |
 | Vox executor adapter | types, fake executor, fake ToolRunner, and invocation ledger landed |
-| Gateway/session executor integration | landed (session wiring behind `agentMode: false`; `agent.run.*` events, steer, `agent.cancel`, barge-in, hang-up); Web UI run state pending |
+| Gateway/session executor integration | landed (session wiring behind `agentMode: false`; `agent.run.*` events, steer, `agent.cancel`, barge-in, hang-up); explicit Web developer preview consumes run state and offers cancel/steer over WebSocket and LiveKit |
 | pi production dependency | not added |
 | Artifact contract and UI | not started |
 | Dual-channel conversation input | not started |
 | Voiceprint sidecar | separate future project |
 
-The next autonomous-executor implementation change is the Phase B Web support:
-consume `agent.run.*` as run progress and add Web cancel/steer commands under
-deterministic tests. This support remains dormant unless a caller explicitly selects
-autonomous mode; the existing Agent Builder Try it live flow must not infer
-`agentMode: true` from a saved Agent id. pi is not installed, so no ordinary product
-surface should advertise autonomous execution as available yet.
+The next autonomous-executor implementation change is Phase C's minimal pi backend.
+Phase B Web support is delivered but remains dormant unless the Agent Builder developer
+explicitly selects autonomous mode; the ordinary Try it live flow never infers
+`agentMode: true` from a saved Agent id. The control states that it uses the deterministic
+test executor, so the product does not claim production autonomous execution before pi is
+installed.

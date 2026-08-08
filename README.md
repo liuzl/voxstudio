@@ -189,8 +189,10 @@ sessions resolve them into the existing conversation loop. The separate autonomo
 executor boundary, lifecycle state model, invocation ledger, and sandbox/tool-broker
 policy contracts and validator have also landed. Its session-scoped gateway integration
 is available only behind the default-off `agentMode` start option and currently uses a
-deterministic fake backend when no executor is injected. The production pi dependency,
-Web run-state controls, and real isolated runner have not landed. The dashed agent node
+deterministic fake backend when no executor is injected. An explicit Agent Builder
+developer preview now consumes run state and offers cancel/steer controls over WebSocket
+and LiveKit without changing the default saved-Agent flow. The production pi dependency
+and real isolated runner have not landed. The dashed agent node
 in the architecture diagram represents that incomplete autonomous execution path, not
 the shipped saved-Agent runtime. A saved Agent id never implies autonomous mode. See
 [the voice-agent roadmap](./docs/voice-agent-roadmap.md),

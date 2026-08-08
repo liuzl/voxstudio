@@ -73,7 +73,7 @@ describe("POST /v1/realtime/livekit/token", () => {
     const response = await fetch(url, {
       method: "POST",
       headers: { authorization: "Bearer gateway-secret", origin: "https://unrelated.example" },
-      body: JSON.stringify({ agent: "support", agentSource: "published", agentVersion: 1 }),
+      body: JSON.stringify({ agent: "support", agentSource: "published", agentVersion: 1, agentMode: true }),
     });
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
@@ -98,6 +98,7 @@ describe("POST /v1/realtime/livekit/token", () => {
         bargeIn: true,
         playbackAck: true,
         mediaTelemetry: true,
+        agentMode: true,
       },
       agent: { agentId: "support", source: "published", version: 1 },
     });

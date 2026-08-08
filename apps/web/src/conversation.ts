@@ -89,7 +89,7 @@ async function downloadTracePayload(payload: Record<string, unknown>): Promise<v
  * Created on the user's start gesture (browser audio requires one) and torn down on stop.
  */
 export class ConversationController {
-  private client: Pick<GatewayClient, "sendText" | "interruptTurn" | "playbackComplete" | "requestSnapshot" | "stopSession" | "close"> | BrowserLiveKitClient | undefined;
+  private client: Pick<GatewayClient, "sendText" | "cancelAgentRun" | "interruptTurn" | "playbackComplete" | "requestSnapshot" | "stopSession" | "close"> | BrowserLiveKitClient | undefined;
   private livekit: BrowserLiveKitClient | undefined;
   private mic: MicCapture | undefined;
   private speaker: SpeakerOutput | undefined;
@@ -139,6 +139,7 @@ export class ConversationController {
       ...(overrides.agentSource === undefined ? {} : { agentSource: overrides.agentSource }),
       ...(overrides.agentRevision === undefined ? {} : { agentRevision: overrides.agentRevision }),
       ...(overrides.agentVersion === undefined ? {} : { agentVersion: overrides.agentVersion }),
+      ...(overrides.agentMode === undefined ? {} : { agentMode: overrides.agentMode }),
     } : ordinaryBehavior;
     let fallbackReason: MediaTransportFallbackReason | undefined;
     const LiveKitClient = preparedLiveKitClient();
@@ -306,6 +307,11 @@ export class ConversationController {
     return true;
   }
 
+  async cancelAgentRun(): Promise<void> {
+    if (this.client === undefined) throw new Error("conversation is not connected");
+    await this.client.cancelAgentRun();
+  }
+
   /** The escape hatch for a stuck turn: cancel it by id (stale ids are rejected server-side). */
   cancelTurn(turnId: string): void {
     this.client?.interruptTurn(turnId);
@@ -448,7 +454,7 @@ export async function stopConversation(): Promise<void> {
   await active?.stop();
 }
 
-export function conversationControls(): Pick<ConversationController, "setMuted" | "submitText" | "interruptPlayback" | "cancelTurn" | "downloadMediaTrace"> | undefined {
+export function conversationControls(): Pick<ConversationController, "setMuted" | "submitText" | "cancelAgentRun" | "interruptPlayback" | "cancelTurn" | "downloadMediaTrace"> | undefined {
   return current;
 }
 

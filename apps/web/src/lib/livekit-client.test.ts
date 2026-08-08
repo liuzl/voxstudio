@@ -177,7 +177,9 @@ describe("BrowserLiveKitClient", () => {
     await sendingText;
     client.interruptTurn("turn-1");
     await Promise.resolve();
-    expect(room.published).toHaveLength(2);
+    const cancelling = client.cancelAgentRun();
+    await Promise.resolve();
+    expect(room.published).toHaveLength(3);
     expect(room.published[0]?.options).toEqual({ reliable: true, topic: liveKitControlTopic });
     expect(JSON.parse(new TextDecoder().decode(room.published[0]?.data))).toMatchObject({
       v: 1,
@@ -191,6 +193,24 @@ describe("BrowserLiveKitClient", () => {
       turnId: "turn-1",
       idempotencyKey: "command-2",
     });
+    expect(JSON.parse(new TextDecoder().decode(room.published[2]?.data))).toMatchObject({
+      v: 1,
+      type: "agent.cancel",
+      reason: "user_cancelled",
+      idempotencyKey: "command-3",
+    });
+    room.emit(
+      RoomEvent.DataReceived,
+      new TextEncoder().encode(JSON.stringify({
+        ...event("command.accepted"),
+        commandType: "agent.cancel",
+        idempotencyKey: "command-3",
+      })),
+      { identity: "agent-runtime" },
+      undefined,
+      liveKitEventTopic,
+    );
+    await cancelling;
 
     room.emit(RoomEvent.TrackUnsubscribed, remoteTrack);
     expect(detaches).toBe(1);

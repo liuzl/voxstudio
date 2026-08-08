@@ -119,11 +119,12 @@ describe("Agent API", () => {
       agent: "support",
       agentSource: "draft",
       agentRevision: 7,
+      agentMode: true,
     })).resolves.toMatchObject({ room_name: "vox-room" });
     expect(request).toEqual({
       path: "/v1/realtime/livekit/token",
       method: "POST",
-      body: { agent: "support", agentSource: "draft", agentRevision: 7 },
+      body: { agent: "support", agentSource: "draft", agentRevision: 7, agentMode: true },
     });
   });
 
